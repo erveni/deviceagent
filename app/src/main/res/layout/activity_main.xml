@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Service not running"
+        android:textSize="18sp"
+        android:padding="12dp"
+        android:background="#EEE"
+        android:layout_marginBottom="12dp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <Button
+                android:id="@+id/btn_open_accessibility"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="1. Open Accessibility Settings"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_reset_chrome"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="2. Reset Chrome Data"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_dismiss_fre"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="3. Dismiss Chrome FRE"
+                android:textSize="14sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCC"
+                android:layout_marginVertical="8dp" />
+
+            <Button
+                android:id="@+id/btn_nav_gemini"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Navigate to Gemini"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_nav_chatgpt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Navigate to ChatGPT"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_nav_perplexity"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Navigate to Perplexity"
+                android:textSize="14sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCC"
+                android:layout_marginVertical="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Prompt (clipboard will be set):"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/prompt_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_input_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Input Text (paste into field)"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_submit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Submit"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_scroll"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Scroll Response"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_follow_up"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Send Follow-Up"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_backlink"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Click Backlink"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_go_back"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Go Back"
+                android:textSize="14sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCC"
+                android:layout_marginVertical="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Follow-up (optional):"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/followup_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Cool, do they post updates or photos on their profile so I can see the environment?"
+                android:hint="Cool, do they post updates or photos on their profile so I can see the environment?"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Backlink domain (optional):"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/backlink_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="maeschildcare.com"
+                android:hint="maeschildcare.com"
+                android:textSize="13sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCC"
+                android:layout_marginVertical="8dp" />
+
+            <Button
+                android:id="@+id/btn_full_test"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="RUN FULL FLOW (Gemini)"
+                android:textSize="16sp"
+                android:backgroundTint="#4CAF50" />
+
+            <Button
+                android:id="@+id/btn_daily_session"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="RUN DAILY SESSION (Follow-up + Backlink)"
+                android:textSize="16sp"
+                android:backgroundTint="#FF5722" />
+
+            <Button
+                android:id="@+id/btn_perplexity_step"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="PERPLEXITY STEP-BY-STEP (Screenshot each step)"
+                android:textSize="16sp"
+                android:backgroundTint="#9C27B0" />
+
+            <Button
+                android:id="@+id/btn_perplexity_input_only"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="PERPLEXITY: FULL TEST + BACKLINK (maeschildcare)"
+                android:textSize="16sp"
+                android:backgroundTint="#E91E63" />
+
+            <Button
+                android:id="@+id/btn_chatgpt_test"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="CHATGPT: FULL TEST + BACKLINK (maeschildcare)"
+                android:textSize="16sp"
+                android:backgroundTint="#00BCD4" />
+
+            <Button
+                android:id="@+id/btn_gemini_test"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="GEMINI: FULL TEST + BACKLINK (maeschildcare)"
+                android:textSize="16sp"
+                android:backgroundTint="#FF9800" />
+
+            <Button
+                android:id="@+id/btn_all_three"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="RUN ALL 3: GEMINI → CHATGPT → PERPLEXITY"
+                android:textSize="18sp"
+                android:backgroundTint="#FF0000"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btn_screenshot"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Take Screenshot Now"
+                android:textSize="14sp"
+                android:backgroundTint="#607D8B" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <TextView
+        android:id="@+id/log_text"
+        android:layout_width="match_parent"
+        android:layout_height="150dp"
+        android:text="Log:\n"
+        android:textSize="11sp"
+        android:background="#1A1A1A"
+        android:textColor="#0F0"
+        android:padding="8dp"
+        android:scrollbars="vertical"
+        android:gravity="bottom" />
+
+</LinearLayout>

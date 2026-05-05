@@ -1,0 +1,119 @@
+{
+  "generated_at": "2026-05-04T00:00:00Z",
+  "total_jobs": 9,
+  "waves": [
+    [
+      {
+        "client_id": 1,
+        "client_name": "Test Maes Childcare",
+        "campaign_id": 1,
+        "campaign_name": "Maes Childcare - San Francisco",
+        "business_id": 1,
+        "keyword_id": 1,
+        "keyword_text": "bilingual childcare San Francisco",
+        "platform": "ChatGPT",
+        "biz_name": "Maes Childcare, San Francisco",
+        "biz_city": "San Francisco",
+        "biz_state": "CA",
+        "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [
+          {"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}
+        ],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 2,
+        "keyword_text": "infant daycare near Alamo Square", "platform": "Gemini",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 3,
+        "keyword_text": "daycare San Francisco CA", "platform": "Perplexity",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 4,
+        "keyword_text": "childcare near me San Francisco", "platform": "ChatGPT",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 5,
+        "keyword_text": "bilingual daycare infant SF", "platform": "Gemini",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 6,
+        "keyword_text": "Alamo Square daycare", "platform": "Perplexity",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 7,
+        "keyword_text": "infant childcare SF", "platform": "ChatGPT",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 8,
+        "keyword_text": "SF bilingual preschool", "platform": "Gemini",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 9,
+        "keyword_text": "childcare Alamo Square SF", "platform": "Perplexity",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      },
+      {
+        "client_id": 1, "client_name": "Test Maes Childcare", "campaign_id": 1, "campaign_name": "Maes Childcare - San Francisco", "business_id": 1, "keyword_id": 10,
+        "keyword_text": "best daycare near me SF", "platform": "ChatGPT",
+        "biz_name": "Maes Childcare, San Francisco", "biz_city": "San Francisco", "biz_state": "CA", "biz_zip": "94115",
+        "biz_address": "Alamo Square, San Francisco, CA 94115",
+        "backlinks": [{"url": "https://www.maeschildcare.com/", "type": "article", "domain": "maeschildcare.com"}],
+        "prompt": "I heard Maes Childcare in San Francisco near Alamo Square is really solid for bilingual childcare, do they have any openings for infants right now?",
+        "follow_up": "Cool, do they post updates or photos on their profile so I can see the environment?",
+        "backlink_injected": true
+      }
+    ]
+  ]
+}
