@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Daily plan runner — rolling dispatch. Per-job proxy. CSV after every session."""
+"""Daily plan runner — wave-based. Fresh proxy per wave. CSV after every session."""
 
 import json, sys, time, csv, os, subprocess, random, string, threading, math
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import deque
 
 PLAN_PATH = sys.argv[1] if len(sys.argv) > 1 else "/Users/seolocalph/projects/aeo-appium/daily_plan_2026-05-04.json"
 
@@ -60,7 +58,7 @@ def gost_start(specs):
                   f'          - name: d{i}', f'            addr: {PROXY_HOST}:{PROXY_PORT}',
                   f'            connector: {{type: socks5, auth: {{username: "{s["upstream_user"]}", password: "{PROXY_PASS}"}}}}',
                   f'            dialer: {{type: tcp}}']
-    cfg = f"/tmp/gost_{os.getpid()}.yaml"
+    cfg = f"/tmp/gost_{os.getpid()}_{specs[0]['port']}.yaml"
     with open(cfg, "w") as f: f.write("\n".join(lines)+"\n")
     proc = subprocess.Popen([GOST_BIN, "-C", cfg, "-D"], stdout=open(cfg+".log","w"), stderr=subprocess.STDOUT)
     time.sleep(2)
@@ -87,10 +85,10 @@ def socksdroid_disconnect(serial):
     time.sleep(1)
 
 def wait_tunnel(serial):
-    for _ in range(10):
+    for _ in range(20):
         r = run(f"adb -s {serial} shell ifconfig tun0", 5)
         if "UP" in r.stdout and "inet" in r.stdout: return True
-        time.sleep(2)
+        time.sleep(3)
     return False
 
 def mock_location(serial, lat, lng):
@@ -158,24 +156,13 @@ def session(device_idx, job, gost_spec):
         "failure_step": r.get("error",""), "error": r.get("error",""),
     }
 
-MAX_CONCURRENT = 10  # device-agent handles full concurrency without ADB bottleneck
-STAGGER_SEC = 30     # delay between dispatching new jobs to avoid proxy burst
-GOST_PORTS = list(range(11001, 11001 + MAX_CONCURRENT))  # port per concurrent job
-
 def main():
     plan = json.load(open(PLAN_PATH))
     waves = plan["waves"]
+    nd = len(DEVICES)
     total = sum(len(w) for w in waves)
     out = os.path.splitext(PLAN_PATH)[0] + "_results.csv"
-
-    # Flatten all jobs into a single queue with sequence numbers
-    all_jobs = []
-    seq = 0
-    for wave in waves:
-        for job in wave:
-            seq += 1
-            all_jobs.append((seq, job))
-    print(f"Plan: {total} jobs across {len(waves)} waves — rolling dispatch (max {MAX_CONCURRENT} concurrent)")
+    start_wave = plan.get("start_wave", 1)
 
     # Port forwards once
     run("adb forward --remove-all")
@@ -210,135 +197,93 @@ def main():
             with open(out, "w", newline="") as f:
                 w = csv.DictWriter(f, fieldnames=fns); w.writeheader(); w.writerows(results)
 
-    # Rolling dispatch state
-    job_queue = deque(all_jobs)
-    device_pool = deque(range(len(DEVICES)))
-    gost_port_pool = deque(GOST_PORTS)
-    active_campaigns = set()  # campaign_ids currently running
-    dispatch_seq = 0
+    done = 0
+    for wi, wave in enumerate(waves):
+        wn = wi + start_wave; n = len(wave)
+        used = min(n, nd)
 
-    def run_one_job(device_idx, job, seq_num, gost_port):
-        """Run a single job with its own proxy setup/teardown."""
-        _, ser = DEVICES[device_idx]
-        sid = rsid()
-        spec = {"port": gost_port, "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us", "sid": sid}
-        gost_proc = gost_cfg = None
-        try:
-            gost_proc, gost_cfg = gost_start([spec])
-            socksdroid_connect(ser, gost_port)
-            if not wait_tunnel(ser):
-                return error_result(job, device_idx, spec, seq_num, "tunnel failed")
+        # One gost with N ports for this wave
+        specs = []
+        for i in range(used):
+            sid = rsid()
+            specs.append({"port": BASE_GOST + i, "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us", "sid": sid})
+        gost_proc, gost_cfg = gost_start(specs)
 
-            bl, bln = job.get("biz_lat", 0) or 0, job.get("biz_lng", 0) or 0
-            if bl and bln:
-                ml, mln = randomize_location(bl, bln)
-                mock_location(ser, ml, mln)
-            tz = job.get("biz_timezone", "")
-            if tz:
-                set_timezone(ser, tz)
+        # Connect proxy sequentially + mock location per device
+        tunnel_ok = [False] * used
+        for i in range(used):
+            _, ser = DEVICES[i]
+            socksdroid_connect(ser, BASE_GOST + i)
+            time.sleep(3)  # let VPN stabilize before checking
+            tunnel_ok[i] = wait_tunnel(ser)
+            if tunnel_ok[i] and i < n:
+                job = wave[i]
+                bl, bln = job.get("biz_lat", 0) or 0, job.get("biz_lng", 0) or 0
+                if bl and bln:
+                    ml, mln = randomize_location(bl, bln)
+                    mock_location(ser, ml, mln)
+                tz = job.get("biz_timezone", "")
+                if tz: set_timezone(ser, tz)
 
-            result = session(device_idx, job, spec)
-            result["wave_index"] = seq_num
-            return result
-        except Exception as e:
-            return error_result(job, device_idx, spec, seq_num, str(e))
-        finally:
-            try: socksdroid_disconnect(ser)
-            except: pass
-            if gost_proc:
-                try: gost_stop(gost_proc, gost_cfg)
-                except: pass
+        # Run jobs in parallel (only for devices with working tunnel)
+        threads = [None] * used
+        wr = [None] * used
+        def run_one(di, job):
+            wr[di] = session(di, job, specs[di])
+        for i in range(used):
+            if i < n:
+                if tunnel_ok[i]:
+                    t = threading.Thread(target=run_one, args=(i, wave[i]))
+                    t.start(); threads[i] = t
+                else:
+                    # Tunnel failed — create error result immediately
+                    j = wave[i]
+                    wr[i] = {
+                        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        "wave_index": wn,
+                        "client_id": j.get("client_id",""), "client_name": j.get("client_name",""),
+                        "biz_name": j.get("biz_name",""), "search_address": j.get("biz_address",""),
+                        "campaign_id": j.get("campaign_id",""), "campaign_name": j.get("campaign_name",""),
+                        "keyword": j.get("keyword_text",""), "keyword_variant": j.get("keyword_variant", j.get("keyword_text","")),
+                        "prompt": j.get("prompt",""), "follow_up": j.get("follow_up","") or "", "has_follow_up": bool(j.get("follow_up","")),
+                        "device_id": DEVICES[i][0], "platform": j.get("platform","chatgpt").lower(),
+                        "status": "error", "duration_s": 0, "proxy_status": "FAILED",
+                        "proxy_username": "", "proxy_host": MAC_IP, "proxy_port": BASE_GOST + i,
+                        "base_latitude": j.get("biz_lat",0) or 0, "base_longitude": j.get("biz_lng",0) or 0,
+                        "mocked_latitude": 0, "mocked_longitude": 0, "mocked_timezone": j.get("biz_timezone",""),
+                        "backlinks_expected": len(j.get("backlinks",[])),
+                        "backlink_injected": j.get("backlink_injected", False),
+                        "backlink_found": False, "backlink_url": "",
+                        "failure_step": "tunnel_failed", "error": "tunnel failed",
+                    }
 
-    def error_result(job, device_idx, spec, seq_num, error_msg):
-        """Return an error result row when proxy setup fails."""
-        dur = round(time.time() - t0, 1)
-        return {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "wave_index": seq_num,
-            "client_id": job.get("client_id", ""), "client_name": job.get("client_name", ""),
-            "biz_name": job.get("biz_name", ""), "search_address": job.get("biz_address", ""),
-            "campaign_id": job.get("campaign_id", ""), "campaign_name": job.get("campaign_name", ""),
-            "keyword": job.get("keyword_text", ""), "keyword_variant": job.get("keyword_variant", job.get("keyword_text","")),
-            "prompt": job.get("prompt", ""), "follow_up": job.get("follow_up", "") or "", "has_follow_up": bool(job.get("follow_up", "")),
-            "device_id": DEVICES[device_idx][0], "platform": job.get("platform", "chatgpt").lower(),
-            "status": "error", "duration_s": dur, "proxy_status": "FAILED",
-            "proxy_username": f"{PROXY_USER}-session-{spec['sid']}-sessionduration-{DURATION}-country-us",
-            "proxy_host": MAC_IP, "proxy_port": spec["port"],
-            "base_latitude": job.get("biz_lat", 0) or 0, "base_longitude": job.get("biz_lng", 0) or 0,
-            "mocked_latitude": 0, "mocked_longitude": 0, "mocked_timezone": job.get("biz_timezone", ""),
-            "backlinks_expected": len(job.get("backlinks", [])),
-            "backlink_injected": job.get("backlink_injected", False),
-            "backlink_found": False, "backlink_url": "",
-            "failure_step": "proxy_setup", "error": error_msg,
-        }
-
-    def can_dispatch(job):
-        cid = job.get("campaign_id", "")
-        return not cid or cid not in active_campaigns
-
-    def dispatch_next():
-        nonlocal dispatch_seq
-        if not job_queue or not device_pool or not gost_port_pool:
-            return False
-        for _ in range(len(job_queue)):
-            seq_num, job = job_queue[0]
-            if can_dispatch(job):
-                job_queue.popleft()
-                di = device_pool.popleft()
-                gport = gost_port_pool.popleft()
-                cid = job.get("campaign_id", "")
-                if cid:
-                    active_campaigns.add(cid)
-                dispatch_seq += 1
-                fut = executor.submit(run_one_job, di, job, seq_num, gport)
-                futures[fut] = (di, cid, seq_num, gport)
-                return True
-            else:
-                job_queue.rotate(-1)
-        return False
-
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as executor:
-        futures = {}
-
-        # Initial fill
-        for _ in range(MAX_CONCURRENT):
-            if not dispatch_next():
-                break
-
-        # Rolling: as each job completes, immediately dispatch next
-        for fut in as_completed(futures):
-            di, cid, seq_num, gport = futures.pop(fut)
-            try:
-                result = fut.result()
-            except Exception as e:
-                result = {"status": "error", "error": str(e), "device_id": DEVICES[di][0],
-                          "platform": "?", "duration_s": 0, "backlink_found": False,
-                          "failure_step": "executor", "wave_index": seq_num}
-
-            # Return resources to pools
-            device_pool.append(di)
-            gost_port_pool.append(gport)
-            if cid:
-                active_campaigns.discard(cid)
-
-            # Save immediately
-            if result:
-                results.append(result)
-                is_ok = 1 if result["status"] == "success" else 0
-                is_bk = 1 if result.get("backlink_found") else 0
-                ok_cnt += is_ok
-                bk_cnt += is_bk
+        # Wait and save per session
+        for i, t in enumerate(threads):
+            if t:
+                t.join()
+            r = wr[i]
+            if r:
+                r["wave_index"] = wn
+                results.append(r)
+                is_ok = 1 if r["status"] == "success" else 0
+                is_bk = 1 if r.get("backlink_found") else 0
+                ok_cnt += is_ok; bk_cnt += is_bk
                 save_csv()
                 elapsed = time.time() - t0
                 rate = len(results) / elapsed if elapsed > 0 else 0
                 eta = int((grand_total - len(results)) / rate / 60) if rate > 0 else 0
-                print(f"[{len(results)}/{grand_total}] {result['device_id']} {result['platform']} {result['status']} bk={result['backlink_found']} | ok={ok_cnt} fail={len(results)-ok_cnt} bk_total={bk_cnt} | {result['duration_s']}s | ETA ~{eta}min")
+                print(f"[{len(results)}/{grand_total}] {r['device_id']} {r['platform']} {r['status']} bk={r['backlink_found']} | ok={ok_cnt} fail={len(results)-ok_cnt} bk_total={bk_cnt} | {r['duration_s']}s | ETA ~{eta}min")
 
-            # Stagger then dispatch next
-            if job_queue:
-                time.sleep(STAGGER_SEC)
-                dispatch_next()
+        done += n
+
+        # Disconnect proxies
+        for i in range(used):
+            socksdroid_disconnect(DEVICES[i][1])
+        gost_stop(gost_proc, gost_cfg)
+
+        wave_ok = sum(1 for r in wr if r and r['status'] == 'success')
+        print(f"Wave {wn}: {wave_ok}/{n} ok | {done}/{total} done")
 
     elapsed = time.time() - t0
     print(f"\nDone. {len(results)} jobs | OK:{ok_cnt} Fail:{len(results)-ok_cnt} Bk:{bk_cnt} | {elapsed/60:.0f}min | {out}")
