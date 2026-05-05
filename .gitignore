@@ -2,6 +2,7 @@
 .gradle/
 build/
 *.apk
+!device-agent.apk
 *.aab
 local.properties
 .idea/
