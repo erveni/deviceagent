@@ -72,34 +72,34 @@ def gost_stop(proc, cfg):
         except: pass
 
 def socksdroid_connect(serial, port):
-    run(f"adb -s {serial} shell am force-stop net.typeblog.socks", 5)
+    run(f"adb -s \"{serial}\" shell am force-stop net.typeblog.socks", 5)
     time.sleep(0.5)
-    run(f"adb -s {serial} shell appops set net.typeblog.socks ACTIVATE_VPN allow", 5)
-    run(f"adb -s {serial} shell am start -n net.typeblog.socks/.AdbStartActivity "
+    run(f"adb -s \"{serial}\" shell appops set net.typeblog.socks ACTIVATE_VPN allow", 5)
+    run(f"adb -s \"{serial}\" shell am start -n net.typeblog.socks/.AdbStartActivity "
         f"-a net.typeblog.socks.ACTION_START_VPN --es SOCKSSERV \"{MAC_IP}\" --ei SOCKSPORT {port} "
         f"--es SOCKSUNAME \"anon\" --es SOCKSPASSWD \"anon\" --es SOCKSDNS \"8.8.8.8\" --es SOCKSROUTE \"all\"", 10)
     time.sleep(2)
 
 def socksdroid_disconnect(serial):
-    run(f"adb -s {serial} shell pm clear net.typeblog.socks", 10)
+    run(f"adb -s \"{serial}\" shell pm clear net.typeblog.socks", 10)
     time.sleep(1)
 
 def wait_tunnel(serial):
     for _ in range(20):
-        r = run(f"adb -s {serial} shell ifconfig tun0", 5)
+        r = run(f"adb -s \"{serial}\" shell ifconfig tun0", 5)
         if "UP" in r.stdout and "inet" in r.stdout: return True
         time.sleep(3)
     return False
 
 def mock_location(serial, lat, lng):
     if lat and lng:
-        run(f"adb -s {serial} shell am start-foreground-service "
+        run(f"adb -s \"{serial}\" shell am start-foreground-service "
             f"-a com.blogspot.newapphorizons.fakegps.START "
             f"-e latitude {lat} -e longitude {lng}", 5)
 
 def set_timezone(serial, tz):
     if tz:
-        run(f"adb -s {serial} shell service call alarm 3 s16 \"{tz}\"", 5)
+        run(f"adb -s \"{serial}\" shell service call alarm 3 s16 \"{tz}\"", 5)
 
 def http_post(port, path, body=None):
     import urllib.request
@@ -167,7 +167,7 @@ def main():
     # Port forwards once
     run("adb forward --remove-all")
     for i, (_, ser) in enumerate(DEVICES):
-        run(f"adb -s {ser} forward tcp:{8765+i} tcp:8765")
+        run(f"adb -s \"{ser}\" forward tcp:{8765+i} tcp:8765")
 
     # Load existing results if resuming
     results = []
@@ -279,7 +279,7 @@ def main():
 
         # Disconnect proxies
         for i in range(used):
-            socksdroid_disconnect(DEVICES[i][1])
+            socksdroid_disconnect(DEVICES[i][1])  # serial is quoted inside socksdroid_disconnect
         gost_stop(gost_proc, gost_cfg)
 
         wave_ok = sum(1 for r in wr if r and r['status'] == 'success')
