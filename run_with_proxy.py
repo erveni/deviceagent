@@ -20,13 +20,13 @@ DEVICES = [
     ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
-    ("device-104", "adb-149145555W002563-yWaJau (2)._adb-tls-connect._tcp"),
-    ("device-105", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
-    ("device-106", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
-    ("device-107", "adb-149145555W006477-JjonPV (2)._adb-tls-connect._tcp"),
-    ("device-108", "adb-149145555W006589-2W7yzb._adb-tls-connect._tcp"),
-    ("device-109", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
-    ("device-110", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
+    ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
+    ("device-105", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
+    ("device-106", "adb-149145555W006477-JjonPV._adb-tls-connect._tcp"),
+    ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
+    ("device-108", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
+    ("device-109", "adb-149145555W002563-yWaJau (2)._adb-tls-connect._tcp"),
+    ("device-110", "adb-149145555W006589-2W7yzb (2)._adb-tls-connect._tcp"),
 ]
 
 def run(cmd, timeout=30):
@@ -81,13 +81,25 @@ def socksdroid_connect(serial, port):
     time.sleep(2)
 
 def socksdroid_disconnect(serial):
-    run(f"adb -s \"{serial}\" shell pm clear net.typeblog.socks", 10)
+    try:
+        run(f"adb -s \"{serial}\" shell pm clear net.typeblog.socks", 30)
+    except Exception as e:
+        print(f"  [cleanup] pm clear net.typeblog.socks slow/failed on {serial}: {e} — continuing")
     time.sleep(1)
 
 def wait_tunnel(serial):
+    # Phase 1: tun0 must be UP locally (fast sanity check).
+    # Phase 2: TCP must actually flow through it (proves the full chain
+    # socksdroid → gost → Decodo → upstream is carrying traffic — not just
+    # that tun0 has an IP). The old local-only check missed cases where
+    # gost was still handshaking with Decodo. Probes 1.1.1.1:53 via `nc`
+    # because curl is not installed on these Android builds.
     for _ in range(20):
         r = run(f"adb -s \"{serial}\" shell ifconfig tun0", 5)
-        if "UP" in r.stdout and "inet" in r.stdout: return True
+        if "UP" in r.stdout and "inet" in r.stdout:
+            r2 = run(f"adb -s \"{serial}\" shell \"nc -z -w 3 1.1.1.1 53 && echo OK\"", 6)
+            if "OK" in r2.stdout:
+                return True
         time.sleep(3)
     return False
 

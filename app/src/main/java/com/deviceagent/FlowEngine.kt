@@ -99,8 +99,75 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return true
     }
 
+    // ── preflight ──
+
+    /**
+     * Verify the proxy can reach the kind of sites we actually audit.
+     * Loads google.com (same parent as Gemini, same TLS/Cloudflare profile
+     * as ChatGPT/Perplexity) and looks for the search input. This is a
+     * far better signal than ifconfig.me, which uses a different route
+     * and frequently works even when the platforms fail.
+     *
+     * Returns "google_ok" on success, null on failure. The IP can no longer
+     * be captured this way (no plain-IP endpoint), but the platform
+     * reachability signal is far more valuable.
+     */
+    fun preflightConnectivity(): String? {
+        s.log("── PREFLIGHT: checking proxy via google.com ──")
+        s.navigateToUrl("https://www.google.com")
+        Thread.sleep(3000)
+        // Look for the Google search box. It's an EditText below the URL bar.
+        // findInputField filters out the URL bar (top > 200) so any returned
+        // node is real page content.
+        if (s.findInputField(timeoutMs = 6000) != null) {
+            s.log("PREFLIGHT OK — google.com loaded with search box visible")
+            return "google_ok"
+        }
+        // Try a reload once — slow proxies sometimes need it
+        s.log("PREFLIGHT: no search box on first try — reloading")
+        s.navigateToUrl("https://www.google.com")
+        Thread.sleep(4000)
+        if (s.findInputField(timeoutMs = 8000) != null) {
+            s.log("PREFLIGHT OK — google.com loaded after reload")
+            return "google_ok"
+        }
+        // Failed. Dump deeper tree + screenshot so logs show truth.
+        val tree = s.dumpTree(20)
+        s.log("PREFLIGHT FAILED — google.com unreachable through this proxy")
+        s.log("PREFLIGHT tree-depth20 (first 1000 chars): ${tree.take(1000)}")
+        try {
+            val shot = s.saveScreenshot("preflight_fail_${System.currentTimeMillis()}")
+            if (shot != null) s.log("PREFLIGHT screenshot: $shot")
+        } catch (e: Exception) {
+            // screenshot is best-effort
+        }
+        return null
+    }
+
+    private fun isPrivateOrLoopback(ip: String): Boolean {
+        val parts = ip.split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4) return true
+        val (a, b) = parts[0] to parts[1]
+        return a == 10 ||
+            a == 127 ||
+            (a == 172 && b in 16..31) ||
+            (a == 192 && b == 168) ||
+            (a == 169 && b == 254) ||
+            a == 0
+    }
+
     // ── navigate ──
 
+    /**
+     * Open the platform's URL in Chrome and wait until the page is interactive
+     * — defined as "an EditText (the prompt input) is present below the URL bar".
+     *
+     * This is a stronger signal than text-matching "site can't be reached":
+     * Chrome's WebView error page is not always exposed via accessibility,
+     * and a blank/half-loaded page also lacks the input field. Either case
+     * means we can't run a session — fail fast and let the dispatcher rotate
+     * the Decodo session.
+     */
     fun navigateTo(platform: String): Boolean {
         s.log("── NAVIGATE TO $platform ──")
         val url = when (platform.lowercase()) {
@@ -118,7 +185,6 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             val tree = s.dumpTree(8).lowercase()
             if ("site can" in tree || "err_" in tree || "net::err" in tree) {
                 s.log("Page load error detected — reloading (retry $retry/2)...")
-                // Tap Reload button or re-navigate
                 val reload = s.findNode(text = "Reload", timeoutMs = 2000)
                 if (reload != null) {
                     s.clickNode(reload)
@@ -127,7 +193,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                 }
                 Thread.sleep(waitMs)
             } else {
-                break // page loaded OK
+                break
             }
         }
         return true
@@ -891,6 +957,12 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     fun dismissPlatformPopups(platform: String) {
         s.log("── DISMISS ${platform.uppercase()} POPUPS ──")
+
+        // Perplexity shows its first interstitial ad/modal 1–4s after navigate
+        // returns. Wait for it to render so the first dismiss round actually
+        // finds the close button instead of bailing on an empty screen.
+        if (platform.lowercase() == "perplexity") Thread.sleep(2500)
+
         val popups = when (platform.lowercase()) {
             "gemini" -> listOf("No thanks", "Try it", "Close banner")
             "chatgpt" -> listOf(
@@ -918,7 +990,9 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                     Thread.sleep(600)
                 }
             }
-            if (!dismissed) break
+            // For perplexity keep polling all rounds — an ad/modal can appear
+            // between rounds. For other platforms break early to save time.
+            if (!dismissed && platform.lowercase() != "perplexity") break
             Thread.sleep(400)
         }
     }
@@ -946,7 +1020,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
     }
 
-    fun waitForGeneration(timeoutSec: Int = 120): Boolean {
+    fun waitForGeneration(timeoutSec: Int = 180): Boolean {
         s.log("── WAIT FOR GENERATION ──")
         val start = System.currentTimeMillis()
         val timeout = timeoutSec * 1000L
@@ -1004,6 +1078,36 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
     }
 
+    // ── screenshot passthrough ──
+
+    fun saveScreenshot(name: String): String? = s.saveScreenshot(name)
+
+    // ── helpers for per-platform audit checks ──
+
+    /** Return true if any of these texts is currently visible (via accessibility tree). */
+    fun findAnyText(texts: List<String>): Boolean {
+        for (t in texts) {
+            val n = s.findNode(text = t, timeoutMs = 400)
+            if (n != null) { n.recycle(); return true }
+        }
+        return false
+    }
+
+    /** Try to click a node by visible text. Returns true if clicked. */
+    fun tryClickText(text: String): Boolean {
+        val n = s.findNode(text = text, timeoutMs = 400) ?: return false
+        val ok = s.clickNode(n)
+        n.recycle()
+        return ok
+    }
+
+    /** Return true if a node with this resource-id is present. */
+    fun hasNodeByResourceId(resourceId: String): Boolean {
+        val n = s.findNode(resourceId = resourceId, timeoutMs = 400) ?: return false
+        n.recycle()
+        return true
+    }
+
     // ── ranking extraction ──
 
     fun extractRanking(): Pair<Int?, String?> {
@@ -1014,21 +1118,23 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             return Pair(null, null)
         }
 
-        // Reverse-scan for [RANK: X/Y] pattern
-        val lines = text.lines()
+        // Whole-text scan: accessibility tree often concatenates markdown without
+        // proper newlines, so a per-line regex would miss [RANK: X/Y] embedded in
+        // a long blob. Take the LAST non-instruction match (model output > prompt echo).
         val rankPattern = Regex("""\[RANK:\s*(\d+)\s*/\s*(\d+\+?)\]""", RegexOption.IGNORE_CASE)
+        val matches = rankPattern.findAll(text).toList()
+        val chosen = matches.lastOrNull { m ->
+            val start = maxOf(0, m.range.first - 60)
+            val end = minOf(text.length, m.range.last + 60)
+            val ctx = text.substring(start, end).lowercase()
+            !("e.g." in ctx || "where x" in ctx || "for example" in ctx)
+        } ?: matches.lastOrNull()
 
-        for (line in lines.reversed()) {
-            val trimmed = line.trim()
-            if (trimmed.lowercase().let { "e.g." in it || "example" in it || "where x" in it })
-                continue
-            val m = rankPattern.find(trimmed)
-            if (m != null) {
-                val position = m.groupValues[1].toIntOrNull()
-                val total = m.groupValues[2]
-                s.log("RANK FOUND: $position / $total from \"$trimmed\"")
-                return Pair(position, total)
-            }
+        if (chosen != null) {
+            val position = chosen.groupValues[1].toIntOrNull()
+            val total = chosen.groupValues[2]
+            s.log("RANK FOUND: $position / $total from \"${chosen.value}\"")
+            return Pair(position, total)
         }
 
         s.log("No [RANK: X/Y] pattern found in response")
