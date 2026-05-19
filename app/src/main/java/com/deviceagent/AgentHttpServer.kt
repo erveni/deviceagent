@@ -119,21 +119,34 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 listOf(platformsFilter.lowercase())
             }
 
+            // No preflight. Audit must mirror daily exactly — daily has near-100%
+            // success without any preflight call. Adding a navigateToUrl before
+            // resetChrome caused subsequent jobs on the same phone to fail
+            // (Chrome state mismatch after the extra nav). The audit flow body
+            // below is now structurally identical to executeSessionStatic
+            // (the daily flow), one platform at a time.
+
             for (platform in platformsOrder) {
                 val pr = PlatformResult(status = "running")
                 result.platforms[platform] = pr
 
+                val stepBase = System.currentTimeMillis()
                 fun step(name: String, block: () -> Boolean): Boolean {
-                    result.steps.add("[$platform] $name...")
+                    val t0 = System.currentTimeMillis()
                     val ok = try { block() } catch (e: Exception) {
-                        result.steps.add("[$platform] $name: ERROR - ${e.message}")
+                        result.steps.add("[$platform] $name FAILED ${(System.currentTimeMillis()-t0)/1000}s - ${e.message}")
                         false
                     }
-                    result.steps.add("[$platform] $name: ${if (ok) "OK" else "FAILED"}")
+                    val dt = (System.currentTimeMillis() - t0) / 1000
+                    val total = (System.currentTimeMillis() - stepBase) / 1000
+                    result.steps.add("[$platform] $name ${if (ok) "OK" else "FAILED"} ${dt}s (total ${total}s)")
                     return ok
                 }
 
                 try {
+                    // Audit flow MATCHES daily exactly. Steps below are identical to
+                    // executeSessionStatic — no audit-only guards, no platform-specific
+                    // branches. If daily reliability holds, audit reliability holds.
                     if (!step("reset_chrome") { flowEngine.resetChrome() }) {
                         pr.status = "error"; pr.error = "reset_chrome failed"; continue
                     }
@@ -153,14 +166,24 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
                         pr.status = "error"; pr.error = "generation timeout"; continue
                     }
-                    // Scroll a few times so the model finishes rendering
-                    step("scroll") { flowEngine.scrollResponse(5) }
+                    // 200-word capped response — 6 scrolls covers the full response
+                    // and lands on the [RANK: X/Y] line near the end. Saves ~17s vs 12.
+                    step("scroll") { flowEngine.scrollResponse(6) }
                     Thread.sleep(1000)
-                    val (pos, total) = flowEngine.extractRanking()
+                    // Capture full LLM response text once; reuse for rank scan + audit log.
+                    val responseText = flowEngine.getResponseText()
+                    val (pos, total) = flowEngine.extractRankingFromText(responseText)
                     pr.rankingPosition = pos
                     pr.rankingTotal = total
+                    pr.responseText = responseText
+
+                    // Capture screenshot — phone-side path; dispatcher pulls it via adb
+                    val ssName = "audit_${platform}_${System.currentTimeMillis()}"
+                    val ssPath = try { flowEngine.saveScreenshot(ssName) } catch (e: Exception) { null }
+                    pr.screenshotPath = ssPath
+
                     pr.status = "completed"
-                    result.steps.add("[$platform] ranking: $pos / $total")
+                    result.steps.add("[$platform] ranking: $pos / $total  ss=$ssPath")
                 } catch (e: Exception) {
                     pr.status = "error"
                     pr.error = e.message
@@ -191,6 +214,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         var status: String = "idle",
         var rankingPosition: Int? = null,
         var rankingTotal: String? = null,
+        var screenshotPath: String? = null,
+        var responseText: String? = null,
         var error: String? = null
     )
 
@@ -205,6 +230,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         var type: String = "daily",
         var rankingPosition: Int? = null,
         var rankingTotal: String? = null,
+        var proxyIp: String? = null,
         val platforms: MutableMap<String, PlatformResult> = mutableMapOf()
     )
 
@@ -354,8 +380,11 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             put("backlink_domain", result.backlinkDomain ?: "")
             put("error", result.error ?: "")
             put("steps", result.steps.size)
+            put("step_log", org.json.JSONArray(result.steps))
         }
-        respond(writer, if (result.status == "error") 500 else 200, response.toString())
+        // Always 200 — caller inspects per-platform status in the JSON body.
+        // Returning 500 made urllib.urlopen raise and discard the body.
+        respond(writer, 200, response.toString())
     }
 
     private fun handleAuditSession(writer: OutputStreamWriter, json: JSONObject) {
@@ -389,20 +418,26 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             put("ranking_position", result.rankingPosition ?: 0)
             put("ranking_total", result.rankingTotal ?: "")
             put("error", result.error ?: "")
+            put("proxy_ip", result.proxyIp ?: "")
             put("steps", result.steps.size)
+            put("step_log", org.json.JSONArray(result.steps))
             val platformsJson = JSONObject()
             for ((name, pr) in result.platforms) {
                 val pj = JSONObject().apply {
                     put("status", pr.status)
                     put("ranking_position", pr.rankingPosition ?: 0)
                     put("ranking_total", pr.rankingTotal ?: "")
+                    put("screenshot_path", pr.screenshotPath ?: "")
+                    put("response_text", pr.responseText ?: "")
                     put("error", pr.error ?: "")
                 }
                 platformsJson.put(name, pj)
             }
             put("platforms", platformsJson)
         }
-        respond(writer, if (result.status == "error") 500 else 200, response.toString())
+        // Always 200 — caller inspects per-platform status in the JSON body.
+        // Returning 500 made urllib.urlopen raise and discard the body.
+        respond(writer, 200, response.toString())
     }
 
     fun executeSession(
@@ -508,9 +543,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             500 -> "500 Internal Server Error"
             else -> "$code"
         }
+        val bodyBytes = body.toByteArray(Charsets.UTF_8)
         writer.write("HTTP/1.1 $status\r\n")
-        writer.write("Content-Type: application/json\r\n")
-        writer.write("Content-Length: ${body.length}\r\n")
+        writer.write("Content-Type: application/json; charset=utf-8\r\n")
+        writer.write("Content-Length: ${bodyBytes.size}\r\n")
         writer.write("Connection: close\r\n")
         writer.write("\r\n")
         writer.write(body)

@@ -1110,9 +1110,10 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     // ── ranking extraction ──
 
-    fun extractRanking(): Pair<Int?, String?> {
+    fun extractRanking(): Pair<Int?, String?> = extractRankingFromText(getResponseText())
+
+    fun extractRankingFromText(text: String): Pair<Int?, String?> {
         s.log("── EXTRACT RANKING ──")
-        val text = getResponseText()
         if (text.isBlank()) {
             s.log("No response text found")
             return Pair(null, null)

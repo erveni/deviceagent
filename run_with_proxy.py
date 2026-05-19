@@ -7,11 +7,11 @@ from urllib.parse import urlparse
 
 PLAN_PATH = sys.argv[1] if len(sys.argv) > 1 else "/Users/seolocalph/projects/aeo-appium/daily_plan_2026-05-04.json"
 
-GOST_BIN = "/opt/homebrew/bin/gost"
-PROXY_HOST = "gate.decodo.com"
-PROXY_PORT = 10001
-PROXY_USER = "user-spmqebjuzf"
-PROXY_PASS = "Klf0oAnRcz96Da=6fv"
+GOST_BIN = os.environ.get("GOST_BIN", "/opt/homebrew/bin/gost")
+PROXY_HOST = os.environ.get("PROXY_HOST", "gate.decodo.com")
+PROXY_PORT = int(os.environ.get("PROXY_PORT", "10001"))
+PROXY_USER = os.environ.get("PROXY_USER", "")
+PROXY_PASS = os.environ.get("PROXY_PASS", "")
 DURATION = 30
 BASE_GOST = 11001
 MAC_IP = "192.168.0.102"
@@ -22,7 +22,7 @@ DEVICES = [
     ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
-    ("device-106", "adb-149145555W006477-JjonPV._adb-tls-connect._tcp"),
+    ("device-106", "adb-149145555W006477-JjonPV (2)._adb-tls-connect._tcp"),
     ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
     ("device-108", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
     ("device-109", "adb-149145555W002563-yWaJau (2)._adb-tls-connect._tcp"),
@@ -31,6 +31,24 @@ DEVICES = [
 
 def run(cmd, timeout=30):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+
+def get_online_serials():
+    """Return set of currently-adb-reachable serials (state == 'device').
+
+    Used to skip offline phones before each wave so we don't waste 60s in
+    wait_tunnel on a phone that's no longer connected. The slot's job is
+    deferred to a later wave instead of being failed with tunnel_failed.
+    """
+    try:
+        r = run("adb devices", 5)
+        out = set()
+        for ln in r.stdout.strip().split("\n")[1:]:
+            ln = ln.rstrip()
+            if ln.endswith("\tdevice"):
+                out.add(ln[:-len("\tdevice")])
+        return out
+    except Exception:
+        return set()
 
 def rsid(n=10):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
@@ -210,20 +228,46 @@ def main():
                 w = csv.DictWriter(f, fieldnames=fns); w.writeheader(); w.writerows(results)
 
     done = 0
-    for wi, wave in enumerate(waves):
+    wave_queue = list(waves)
+    deferred = []
+    deferred_rounds = 0
+    MAX_DEFERRED_ROUNDS = 3
+    WAVE_SLOTS = nd
+    wi = 0
+    while wi < len(wave_queue):
+        wave = wave_queue[wi]
         wn = wi + start_wave; n = len(wave)
         used = min(n, nd)
 
-        # One gost with N ports for this wave
+        # Live phone check: skip offline slots, defer their jobs
+        online_set = get_online_serials()
+        slot_online = [DEVICES[i][1] in online_set for i in range(used)]
+        offline_slots = [i for i in range(used) if not slot_online[i]]
+        if offline_slots:
+            names = [DEVICES[i][0] for i in offline_slots]
+            for i in offline_slots:
+                if i < n:
+                    deferred.append(wave[i])
+            print(f"[wave {wn}] OFFLINE phones: {names} — deferring {len(offline_slots)} jobs to extra wave")
+
+        # If ALL phones offline, skip wave entirely
+        if all(not s for s in slot_online):
+            print(f"Wave {wn}: all phones offline, skipping (jobs deferred)")
+            wi += 1
+            continue
+
+        # One gost with N ports for this wave (allocate for all slots; unused ports are harmless)
         specs = []
         for i in range(used):
             sid = rsid()
             specs.append({"port": BASE_GOST + i, "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us", "sid": sid})
         gost_proc, gost_cfg = gost_start(specs)
 
-        # Connect proxy sequentially + mock location per device
+        # Connect proxy sequentially + mock location per device (ONLINE slots only)
         tunnel_ok = [False] * used
         for i in range(used):
+            if not slot_online[i]:
+                continue  # don't waste 60s wait_tunnel on offline phone
             _, ser = DEVICES[i]
             socksdroid_connect(ser, BASE_GOST + i)
             time.sleep(3)  # let VPN stabilize before checking
@@ -237,18 +281,20 @@ def main():
                 tz = job.get("biz_timezone", "")
                 if tz: set_timezone(ser, tz)
 
-        # Run jobs in parallel (only for devices with working tunnel)
+        # Run jobs in parallel (only for ONLINE devices with working tunnel)
         threads = [None] * used
         wr = [None] * used
         def run_one(di, job):
             wr[di] = session(di, job, specs[di])
         for i in range(used):
             if i < n:
+                if not slot_online[i]:
+                    continue  # already deferred above
                 if tunnel_ok[i]:
                     t = threading.Thread(target=run_one, args=(i, wave[i]))
                     t.start(); threads[i] = t
                 else:
-                    # Tunnel failed — create error result immediately
+                    # Tunnel failed even though phone is online — create error result
                     j = wave[i]
                     wr[i] = {
                         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -287,15 +333,73 @@ def main():
                 eta = int((grand_total - len(results)) / rate / 60) if rate > 0 else 0
                 print(f"[{len(results)}/{grand_total}] {r['device_id']} {r['platform']} {r['status']} bk={r['backlink_found']} | ok={ok_cnt} fail={len(results)-ok_cnt} bk_total={bk_cnt} | {r['duration_s']}s | ETA ~{eta}min")
 
-        done += n
+        # done counts only slots we actually attempted (online slots);
+        # deferred jobs will be counted when their repack-wave runs
+        attempted = sum(1 for s in slot_online if s)
+        done += attempted
 
-        # Disconnect proxies
+        # Disconnect proxies (only for slots we touched)
         for i in range(used):
-            socksdroid_disconnect(DEVICES[i][1])  # serial is quoted inside socksdroid_disconnect
+            if slot_online[i]:
+                socksdroid_disconnect(DEVICES[i][1])
         gost_stop(gost_proc, gost_cfg)
 
         wave_ok = sum(1 for r in wr if r and r['status'] == 'success')
-        print(f"Wave {wn}: {wave_ok}/{n} ok | {done}/{total} done")
+        print(f"Wave {wn}: {wave_ok}/{attempted} ok | {done}/{total} done"
+              + (f" | {len(deferred)} deferred" if deferred else ""))
+
+        wi += 1
+
+        # After preplanned waves done, if any deferred jobs, repack into extra waves
+        if wi >= len(wave_queue) and deferred:
+            deferred_rounds += 1
+            if deferred_rounds > MAX_DEFERRED_ROUNDS:
+                print(f"\n[deferred] {len(deferred)} jobs still pending after {MAX_DEFERRED_ROUNDS} retry rounds — giving up")
+                for j in deferred:
+                    results.append({
+                        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        "wave_index": 0,
+                        "client_id": j.get("client_id",""), "client_name": j.get("client_name",""),
+                        "biz_name": j.get("biz_name",""), "search_address": j.get("biz_address",""),
+                        "campaign_id": j.get("campaign_id",""), "campaign_name": j.get("campaign_name",""),
+                        "keyword": j.get("keyword_text",""), "keyword_variant": j.get("keyword_variant", j.get("keyword_text","")),
+                        "prompt": j.get("prompt",""), "follow_up": j.get("follow_up","") or "", "has_follow_up": bool(j.get("follow_up","")),
+                        "device_id": "", "platform": j.get("platform","chatgpt").lower(),
+                        "status": "error", "duration_s": 0, "proxy_status": "SKIPPED",
+                        "proxy_username": "", "proxy_host": "", "proxy_port": 0,
+                        "base_latitude": j.get("biz_lat",0) or 0, "base_longitude": j.get("biz_lng",0) or 0,
+                        "mocked_latitude": 0, "mocked_longitude": 0, "mocked_timezone": j.get("biz_timezone",""),
+                        "backlinks_expected": len(j.get("backlinks",[])),
+                        "backlink_injected": j.get("backlink_injected", False),
+                        "backlink_found": False, "backlink_url": "",
+                        "failure_step": "phone_offline_persistent",
+                        "error": "phone offline for all retry rounds",
+                    })
+                save_csv()
+                deferred = []
+            else:
+                print(f"\n[deferred round {deferred_rounds}/{MAX_DEFERRED_ROUNDS}] {len(deferred)} jobs from offline phones — repacking into extra waves")
+                random.shuffle(deferred)
+                extra_waves = []
+                rem = list(deferred)
+                deferred = []
+                while rem:
+                    w_pack = []
+                    used_c, used_camp = set(), set()
+                    leftover = []
+                    for j in rem:
+                        if len(w_pack) >= WAVE_SLOTS: leftover.append(j); continue
+                        if j["client_id"] in used_c or j["campaign_id"] in used_camp:
+                            leftover.append(j); continue
+                        w_pack.append(j); used_c.add(j["client_id"]); used_camp.add(j["campaign_id"])
+                    if not w_pack:
+                        w_pack = leftover[:WAVE_SLOTS]; leftover = leftover[WAVE_SLOTS:]
+                    extra_waves.append(w_pack); rem = leftover
+                wave_queue.extend(extra_waves)
+                total += sum(len(w) for w in extra_waves)
+                grand_total += sum(len(w) for w in extra_waves)
+                print(f"[deferred] appended {len(extra_waves)} extra waves ({sum(len(w) for w in extra_waves)} jobs)")
 
     elapsed = time.time() - t0
     print(f"\nDone. {len(results)} jobs | OK:{ok_cnt} Fail:{len(results)-ok_cnt} Bk:{bk_cnt} | {elapsed/60:.0f}min | {out}")

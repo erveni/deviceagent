@@ -18,6 +18,7 @@ from run_with_proxy import (
     run, rsid, extract_domain, randomize_location,
     gost_start, gost_stop, socksdroid_connect, socksdroid_disconnect,
     wait_tunnel, mock_location, set_timezone, http_post,
+    get_online_serials,
 )
 
 PLAN_PATH = sys.argv[1]
@@ -169,16 +170,47 @@ def _result_row(slot, job, spec, r, dur, setup_s, mlat=0, mlng=0, tz=""):
         "setup_s": setup_s,
     }
 
+deferred_lock = threading.Lock()
+deferred_jobs = []  # jobs from offline phones, picked up by surviving workers at end
+
 def phone_worker(slot, jobs):
-    name = ACTIVE[slot][0]
+    name, ser = ACTIVE[slot]
     print(f"[{name}] starting, {len(jobs)} jobs queued")
-    counter_base = sum(1 for s in range(slot) for _ in assignments[s])  # rough numbering
     for j_idx, job in enumerate(jobs):
-        gidx = (j_idx * len(ACTIVE)) + slot + 1  # global job index (round-robin reversed)
+        # Live-check phone before each job
+        if ser not in get_online_serials():
+            print(f"[{name}] OFFLINE — sleeping 30s before re-check")
+            time.sleep(30)
+            if ser not in get_online_serials():
+                print(f"[{name}] STILL OFFLINE — deferring remaining {len(jobs)-j_idx} jobs")
+                with deferred_lock:
+                    deferred_jobs.extend(jobs[j_idx:])
+                return
+        gidx = (j_idx * len(ACTIVE)) + slot + 1
         row = run_job_on_phone(slot, job, gidx, len(all_jobs))
         with csv_lock: results.append(row)
         save_csv()
     print(f"[{name}] done")
+
+def drain_deferred():
+    """After all workers finish their assigned queues, surviving online phones
+    pick up deferred jobs (from offline phones) one at a time."""
+    while True:
+        with deferred_lock:
+            if not deferred_jobs:
+                return
+            job = deferred_jobs.pop(0)
+        # Find first online phone in ACTIVE
+        online = get_online_serials()
+        slot = next((i for i, (_, s) in enumerate(ACTIVE) if s in online), None)
+        if slot is None:
+            print(f"[deferred] no online phones, abandoning {1 + len(deferred_jobs)} jobs")
+            with deferred_lock:
+                deferred_jobs.insert(0, job)  # put it back
+            return
+        row = run_job_on_phone(slot, job, 0, len(all_jobs))
+        with csv_lock: results.append(row)
+        save_csv()
 
 t_start = time.time()
 threads = []
@@ -187,6 +219,11 @@ for slot, jobs in assignments.items():
     t.start()
     threads.append(t)
 for t in threads: t.join()
+
+# After main workers done, drain any deferred jobs on surviving phones
+if deferred_jobs:
+    print(f"\n[deferred] draining {len(deferred_jobs)} jobs from offline phones")
+    drain_deferred()
 
 elapsed = round((time.time() - t_start) / 60, 1)
 ok = sum(1 for r in results if r["status"]=="success")
