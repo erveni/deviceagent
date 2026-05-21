@@ -32,6 +32,8 @@ import subprocess
 import sys
 import threading
 import time
+import base64
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
@@ -191,8 +193,60 @@ def _write_response_text(text: str, platform: str, keyword_id: int) -> str:
         return ""
 
 
+_PHONE_WIFI_IP: dict[str, str] = {}
+
+
+def _phone_wifi_ip(serial: str) -> str | None:
+    """Look up cached WiFi IP for a serial; on first miss hit /health via adb-forward.
+
+    Phase 1 of the device-agent-native migration. Once the Mac-side roster comes
+    from MQTT heartbeats (Phase 4) this cache is replaced by that subscriber.
+    """
+    if serial in _PHONE_WIFI_IP:
+        return _PHONE_WIFI_IP[serial]
+    # First-time lookup: use the existing adb-forward HTTP tunnel to learn the IP.
+    local_port = _http_port_for_serial(serial)
+    try:
+        with urllib.request.urlopen(f"http://localhost:{local_port}/health", timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        ip = (data.get("wifiIp") or "").strip()
+        if ip:
+            _PHONE_WIFI_IP[serial] = ip
+            return ip
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_screenshot_via_wifi(serial: str, remote_path: str, local_path: str) -> bool:
+    """HTTP GET /screenshot?path=<encoded> directly from the phone over WiFi.
+
+    Replacement for `adb pull` when USE_DIRECT_WIFI=1. Falls through to caller's
+    adb-pull retry on failure so the migration is reversible.
+    """
+    ip = _phone_wifi_ip(serial)
+    if not ip:
+        return False
+    encoded = urllib.parse.quote(remote_path, safe="")
+    url = f"http://{ip}:8765/screenshot?path={encoded}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            if resp.status != 200:
+                return False
+            with open(local_path, "wb") as f:
+                f.write(resp.read())
+        return os.path.exists(local_path) and os.path.getsize(local_path) > 0
+    except Exception:
+        return False
+
+
 def _pull_screenshot(serial: str, remote_path: str, platform: str, keyword_id: int) -> str:
-    """ADB-pull a phone-side screenshot to local audit_results/<Platform>/.
+    """Fetch a phone-side screenshot to local audit_results/<Platform>/.
+
+    Default path: `adb pull`. When USE_DIRECT_WIFI=1 in the env, first tries
+    HTTP GET /screenshot via the phone's WiFi IP (Phase 1 of the device-agent-
+    native migration), then falls back to adb on failure so the migration is
+    safely reversible per-job.
     Returns the local path written, or empty string on failure."""
     if not remote_path:
         return ""
@@ -202,6 +256,12 @@ def _pull_screenshot(serial: str, remote_path: str, platform: str, keyword_id: i
     os.makedirs(local_dir, exist_ok=True)
     fname = f"kw{keyword_id}_{platform.lower()}_{int(datetime.now(timezone.utc).timestamp())}.png"
     local_path = os.path.join(local_dir, fname)
+
+    if os.environ.get("USE_DIRECT_WIFI") == "1":
+        if _fetch_screenshot_via_wifi(serial, remote_path, local_path):
+            return local_path
+        # fall through to adb on miss — no log spam, just retry the proven path
+
     try:
         r = subprocess.run(
             ["adb", "-s", serial, "pull", remote_path, local_path],
@@ -309,14 +369,15 @@ def _post_audit(local_port: int, body: dict) -> dict:
             return {"status": "error", "error": f"HTTP {e.code} (no body)"}
 
 
-def _classify(response: dict, platform: str) -> tuple[str, str, str, str, str]:
-    """Map HTTP response → (status, rank_position, rank_total, rank_context, screenshot_path).
+def _classify(response: dict, platform: str) -> tuple[str, str, str, str, str, str]:
+    """Map HTTP response → (status, rank_position, rank_total, rank_context, screenshot_path, screenshot_b64).
 
     Statuses align with audit.py's classifier:
       - success     — got rank_position > 0
       - no_rank     — completed but no rank line in response
       - flow_failed — generation timeout / popup miss
       - error       — exception during flow
+    The b64 field is empty for pre-0.7.1 APKs; caller falls back to adb pull.
     """
     plats = response.get("platforms", {})
     pr = plats.get(platform.lower()) or plats.get(platform) or {}
@@ -325,14 +386,38 @@ def _classify(response: dict, platform: str) -> tuple[str, str, str, str, str]:
     pr_status = pr.get("status") or response.get("status", "")
     pr_err = pr.get("error") or response.get("error") or ""
     ss_path = pr.get("screenshot_path", "")
+    ss_b64 = pr.get("screenshot_b64", "")
 
     if pr_status == "completed" and pos and int(pos) > 0:
-        return ("success", str(pos), str(total), f"[RANK: {pos}/{total}]", ss_path)
+        return ("success", str(pos), str(total), f"[RANK: {pos}/{total}]", ss_path, ss_b64)
     if pr_status == "completed":
-        return ("no_rank", "", "", "", ss_path)
+        return ("no_rank", "", "", "", ss_path, ss_b64)
     if "generation timeout" in pr_err.lower() or "wait_generation" in pr_err.lower():
-        return ("flow_failed", "", "", "", ss_path)
-    return ("error", "", "", "", ss_path)
+        return ("flow_failed", "", "", "", ss_path, ss_b64)
+    return ("error", "", "", "", ss_path, ss_b64)
+
+
+def _write_b64_screenshot(b64: str, platform: str, keyword_id: int) -> str:
+    """Decode an inline base64 PNG into audit_results/<Platform>/kw{kid}_{platform}_{ts}.png.
+
+    Returns the local path on success, empty string on any failure.
+    """
+    if not b64:
+        return ""
+    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
+    plat_dir = plat_dir_map.get(platform.lower(), platform)
+    local_dir = os.path.join(AUDIT_RESULTS_DIR, plat_dir)
+    os.makedirs(local_dir, exist_ok=True)
+    fname = f"kw{keyword_id}_{platform.lower()}_{int(datetime.now(timezone.utc).timestamp())}.png"
+    local_path = os.path.join(local_dir, fname)
+    try:
+        with open(local_path, "wb") as f:
+            f.write(base64.b64decode(b64))
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            return local_path
+    except Exception:
+        pass
+    return ""
 
 
 # ── job spec ──
@@ -553,8 +638,12 @@ def dispatch_audit_job(
 
         # 4. Classify + build row
         duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
-        status, rank_pos, rank_total, rank_ctx, ss_remote = _classify(response, platform)
-        ss_local = _pull_screenshot(serial, ss_remote, platform, int(keyword_id))
+        status, rank_pos, rank_total, rank_ctx, ss_remote, ss_b64 = _classify(response, platform)
+        # Prefer inline base64 (zero-adb data plane). Fall back to adb pull when
+        # the phone's APK is older than 0.7.1-b64 or the b64 read failed on-device.
+        ss_local = _write_b64_screenshot(ss_b64, platform, int(keyword_id))
+        if not ss_local:
+            ss_local = _pull_screenshot(serial, ss_remote, platform, int(keyword_id))
         # Persist full LLM response text to a .txt file alongside the screenshot
         # for archival, BUT the DB column gets the actual text blob (not the path).
         resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
