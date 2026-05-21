@@ -15,16 +15,82 @@ with shell scripts/aliases; the broker switched to RabbitMQ on 2026-05-18
 """
 from __future__ import annotations
 
+import collections
 import itertools
 import json
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+
+
+class CircuitBreaker:
+    """Trip when recent dispatch outcomes look broken — avoid burning Decodo on a
+    consistently failing setup (bad proxy account, account-wide app regression, etc.).
+
+    Trips on EITHER:
+      - rolling window: last N outcomes have >= fail_threshold failure rate
+      - streak:         M consecutive failures
+    When tripped, callers should publish FAILED without dispatching.
+    Auto-resets after cooldown_s and re-arms with a fresh window.
+    """
+
+    def __init__(self, window_size: int = 20, fail_threshold: float = 0.5,
+                 streak_size: int = 5, cooldown_s: int = 300) -> None:
+        self._window: collections.deque[bool] = collections.deque(maxlen=window_size)
+        self._streak = 0
+        self._lock = threading.Lock()
+        self._tripped_at: float | None = None
+        self._trip_reason = ""
+        self.window_size = window_size
+        self.fail_threshold = fail_threshold
+        self.streak_size = streak_size
+        self.cooldown_s = cooldown_s
+
+    def record(self, ok: bool) -> None:
+        with self._lock:
+            self._window.append(ok)
+            self._streak = 0 if ok else self._streak + 1
+            if self._tripped_at is not None:
+                return
+            if self._streak >= self.streak_size:
+                self._trip(f"{self._streak} consecutive failures")
+                return
+            if len(self._window) >= self.window_size:
+                fail_rate = 1.0 - (sum(self._window) / len(self._window))
+                if fail_rate >= self.fail_threshold:
+                    self._trip(f"{int(fail_rate*100)}% errors in last {self.window_size}")
+
+    def _trip(self, reason: str) -> None:
+        self._tripped_at = time.time()
+        self._trip_reason = reason
+        print(f"  [BREAKER TRIPPED] {reason} — halting dispatch for {self.cooldown_s}s", flush=True)
+
+    def is_tripped(self) -> bool:
+        with self._lock:
+            if self._tripped_at is None:
+                return False
+            if time.time() - self._tripped_at >= self.cooldown_s:
+                print(f"  [BREAKER RESET] cooldown elapsed, re-arming (was: {self._trip_reason})", flush=True)
+                self._tripped_at = None
+                self._trip_reason = ""
+                self._window.clear()
+                self._streak = 0
+                return False
+            return True
+
+
+BREAKER = CircuitBreaker(
+    window_size=int(os.environ.get("BREAKER_WINDOW", "20")),
+    fail_threshold=float(os.environ.get("BREAKER_FAIL_RATE", "0.5")),
+    streak_size=int(os.environ.get("BREAKER_STREAK", "5")),
+    cooldown_s=int(os.environ.get("BREAKER_COOLDOWN_S", "300")),
+)
 
 
 def get_online_serials() -> set[str]:
@@ -108,9 +174,16 @@ if DISPATCH_ENABLED:
             build_audit_dispatch_job as _build_audit_dispatch_job,
             dispatch_audit_job as _dispatch_audit_job,
         )
-    _dispatch_pool = ThreadPoolExecutor(
-        max_workers=int(os.environ.get("DISPATCH_MAX_WORKERS", len(_DEVICES)))
-    )
+    _DISPATCH_MAX_WORKERS = int(os.environ.get("DISPATCH_MAX_WORKERS", len(_DEVICES)))
+    _dispatch_pool = ThreadPoolExecutor(max_workers=_DISPATCH_MAX_WORKERS)
+    # Fair-share gate: bounds how many messages we can hold unack'd at once.
+    # Runner acquires this BEFORE acking the broker — so when all phones are
+    # busy, RabbitMQ holds the next message back and (with multiple Macs
+    # subscribed) routes it to whichever Mac has free capacity.
+    _PHONE_SLOTS: threading.BoundedSemaphore | None = threading.BoundedSemaphore(_DISPATCH_MAX_WORKERS)
+else:
+    _DISPATCH_MAX_WORKERS = 1
+    _PHONE_SLOTS = None
 
 _publisher_params = pika.ConnectionParameters(
     host=RABBITMQ_HOST,
@@ -145,18 +218,31 @@ def _log_enriched(enriched: dict) -> None:
     print(f"  biz: {enriched.get('bizName')} ({enriched.get('city')}, {enriched.get('state')})", flush=True)
 
 
-def _submit_daily_dispatch(job_record: dict, enriched: dict) -> None:
+def _submit_daily_dispatch(job_record: dict, enriched: dict, ack_callback) -> None:
     if _dispatch_pool is None or _build_dispatch_job is None or _dispatch_one_job is None:
+        ack_callback()
+        return
+    if BREAKER.is_tripped():
+        print(f"  [skip daily] circuit breaker tripped — publishing FAILED without burning Decodo", flush=True)
+        publish_result(job_record, "FAILED")
+        ack_callback()
         return
     # Capacity check: bail if no phones are reachable. The orchestrator will
     # retry the job later; better than hanging the dispatcher on a dead phone.
     if not get_online_serials():
         print(f"  [skip daily] no phones online — NACKing job back to orchestrator", flush=True)
         publish_result(job_record, "FAILED")
+        ack_callback()
         return
     dispatch_job = _build_dispatch_job(job_record, enriched)
 
     def runner():
+        # Fair-share: block until a phone slot is free, then ack the broker.
+        # Until the ack fires the broker keeps this message marked "in flight" for
+        # this Mac and refuses to deliver beyond prefetch — so a second Mac on
+        # the same queue picks up the slack instead of sitting idle.
+        _PHONE_SLOTS.acquire()
+        ack_callback()
         final_status = "FAILED"
         conversation_happened = False
         backlink_clicked = False
@@ -171,8 +257,10 @@ def _submit_daily_dispatch(job_record: dict, enriched: dict) -> None:
             final_status = "COMPLETED" if row.get("status") == "success" else "FAILED"
             conversation_happened = row.get("status") == "success"
             backlink_clicked = bool(row.get("backlink_found"))
+            BREAKER.record(final_status == "COMPLETED")
         except Exception as e:
             print(f"  [err] dispatch crashed: {type(e).__name__}: {e}", flush=True)
+            BREAKER.record(False)
 
         # Update nested status fields so orchestrator persists the full outcome
         if isinstance(job_record.get("conversation"), dict):
@@ -201,21 +289,33 @@ def _submit_daily_dispatch(job_record: dict, enriched: dict) -> None:
             except (TypeError, ValueError):
                 pass
 
-        publish_result(job_record, final_status)
+        try:
+            publish_result(job_record, final_status)
+        finally:
+            _PHONE_SLOTS.release()
 
     _dispatch_pool.submit(runner)
 
 
-def _submit_audit_dispatch(job_record: dict, platform: str) -> None:
+def _submit_audit_dispatch(job_record: dict, platform: str, ack_callback) -> None:
     if _dispatch_pool is None or _build_audit_dispatch_job is None or _dispatch_audit_job is None:
+        ack_callback()
+        return
+    if BREAKER.is_tripped():
+        print(f"  [skip audit] circuit breaker tripped — publishing FAILED without burning Decodo", flush=True)
+        publish_result(job_record, "FAILED")
+        ack_callback()
         return
     if not get_online_serials():
         print(f"  [skip audit] no phones online — NACKing job back to orchestrator", flush=True)
         publish_result(job_record, "FAILED")
+        ack_callback()
         return
     audit_job = _build_audit_dispatch_job(job_record)
 
     def runner():
+        _PHONE_SLOTS.acquire()
+        ack_callback()
         final_status = "FAILED"
         audit_succeeded = False
         row = None
@@ -228,8 +328,10 @@ def _submit_audit_dispatch(job_record: dict, platform: str) -> None:
             )
             final_status = "COMPLETED" if row.get("status") == "success" else "FAILED"
             audit_succeeded = row.get("status") == "success"
+            BREAKER.record(final_status == "COMPLETED")
         except Exception as e:
             print(f"  [err] audit dispatch crashed: {type(e).__name__}: {e}", flush=True)
+            BREAKER.record(False)
 
         # For audits, conversation.status reflects whether ranking was captured.
         if isinstance(job_record.get("conversation"), dict):
@@ -254,6 +356,7 @@ def _submit_audit_dispatch(job_record: dict, platform: str) -> None:
             kw_obj = job_record.get("detail", {}).get("keyword") or {}
             ranking_record = {
                 "keywordId": kw_obj.get("id"),
+                "platform": platform.upper(),
                 "position": int(row.get("rank_position") or 0),
                 "total": int(row.get("rank_total") or 0),
                 "conversation": row.get("response_text") or row.get("rank_context") or "",
@@ -267,7 +370,10 @@ def _submit_audit_dispatch(job_record: dict, platform: str) -> None:
             except (TypeError, ValueError):
                 pass
 
-        publish_result(job_record, final_status)
+        try:
+            publish_result(job_record, final_status)
+        finally:
+            _PHONE_SLOTS.release()
 
     _dispatch_pool.submit(runner)
 
@@ -303,11 +409,12 @@ def publish_result(job_record: dict, status: str) -> None:
         print(f"  [err] result publish failed: {type(e).__name__}: {e}", flush=True)
 
 
-def enrich_and_handle(payload: str) -> None:
+def enrich_and_handle(payload: str, *, ack_callback) -> None:
     try:
         job = json.loads(payload)
     except json.JSONDecodeError as e:
         print(f"  [warn] payload is not JSON: {e}; raw={payload[:200]!r}", flush=True)
+        ack_callback()
         return
 
     job_id = job.get("id")
@@ -330,7 +437,7 @@ def enrich_and_handle(payload: str) -> None:
     print(f"  job_id={job_id} type={job_type} kid={keyword_id} kw='{keyword_name}' campaign={campaign_id} platform={platform}", flush=True)
 
     if job_type in AUDIT_TYPES:
-        _handle_audit(job, platform)
+        _handle_audit(job, platform, ack_callback)
         return
 
     if job_type not in DAILY_TYPES:
@@ -339,9 +446,10 @@ def enrich_and_handle(payload: str) -> None:
     if keyword_id is None:
         print(f"  [warn] daily job {job_id} missing keyword.id — publishing FAILED", flush=True)
         publish_result(job, "FAILED")
+        ack_callback()
         return
 
-    _handle_daily(job, keyword_id, platform)
+    _handle_daily(job, keyword_id, platform, ack_callback)
 
 
 def _build_enriched_from_job(job: dict, keyword_id: int, platform: str) -> dict:
@@ -377,7 +485,7 @@ def _build_enriched_from_job(job: dict, keyword_id: int, platform: str) -> dict:
     }
 
 
-def _handle_daily(job: dict, keyword_id: int, platform: str) -> None:
+def _handle_daily(job: dict, keyword_id: int, platform: str, ack_callback) -> None:
     # Orchestrator-hydrated payloads carry prompts at conversation.prompts[*].prompt
     # (PromptRecord = {id, prompt}). Lift them to top-level prompt/followUp so the
     # rest of this function keeps working unchanged.
@@ -406,9 +514,10 @@ def _handle_daily(job: dict, keyword_id: int, platform: str) -> None:
         enriched = _build_enriched_from_job(job, keyword_id, platform)
         _log_enriched(enriched)
         if DISPATCH_ENABLED:
-            _submit_daily_dispatch(job, enriched)
+            _submit_daily_dispatch(job, enriched, ack_callback)
         else:
             publish_result(job, "COMPLETED")
+            ack_callback()
         return
 
     try:
@@ -417,21 +526,24 @@ def _handle_daily(job: dict, keyword_id: int, platform: str) -> None:
         body = e.read().decode("utf-8", errors="replace")[:300]
         print(f"  [err] build-session HTTP {e.code}: {body}", flush=True)
         publish_result(job, "FAILED")
+        ack_callback()
         return
     except Exception as e:
         print(f"  [err] build-session call failed: {e}", flush=True)
         publish_result(job, "FAILED")
+        ack_callback()
         return
 
     _log_enriched(enriched)
 
     if DISPATCH_ENABLED:
-        _submit_daily_dispatch(job, enriched)
+        _submit_daily_dispatch(job, enriched, ack_callback)
     else:
         publish_result(job, "COMPLETED")
+        ack_callback()
 
 
-def _handle_audit(job: dict, platform: str) -> None:
+def _handle_audit(job: dict, platform: str, ack_callback) -> None:
     campaign = job.get("campaign") or {}
     business = campaign.get("business") or {}
     address = campaign.get("address") or {}
@@ -456,28 +568,48 @@ def _handle_audit(job: dict, platform: str) -> None:
         print(f"  [warn] audit missing required fields (bizName/bizUrl/city/state) — phone will reject", flush=True)
         if not DISPATCH_ENABLED:
             publish_result(job, "FAILED")
+            ack_callback()
             return
 
     if DISPATCH_ENABLED:
-        _submit_audit_dispatch(job, platform)
+        _submit_audit_dispatch(job, platform, ack_callback)
     else:
         publish_result(job, "COMPLETED")
+        ack_callback()
 
 
 def _on_amqp_message(channel, method, properties, body: bytes) -> None:
     routing_key = method.routing_key
     print(f"[recv] routing_key={routing_key} bytes={len(body)}", flush=True)
+    delivery_tag = method.delivery_tag
+    connection = channel.connection
+
+    # Ack is fired from a worker thread once a phone slot is acquired (fair-share),
+    # so it must be marshalled back to the pika I/O thread — direct basic_ack from
+    # a worker corrupts the BlockingConnection channel state.
+    acked = threading.Event()
+    def _ack():
+        if acked.is_set():
+            return
+        acked.set()
+        try:
+            connection.add_callback_threadsafe(
+                lambda: channel.basic_ack(delivery_tag=delivery_tag)
+            )
+        except Exception as e:
+            print(f"  [err] ack schedule failed: {type(e).__name__}: {e}", flush=True)
+
     if not body:
         print("  [warn] empty body", flush=True)
-        channel.basic_ack(delivery_tag=method.delivery_tag)
+        _ack()
         return
     try:
-        enrich_and_handle(body.decode("utf-8"))
-    finally:
-        # Always ack: dispatch is fire-and-forget via the thread pool; the
-        # consumer's job is to hand the payload off, not wait for execution.
-        # Result lands later via publish_result() on the .results exchange.
-        channel.basic_ack(delivery_tag=method.delivery_tag)
+        enrich_and_handle(body.decode("utf-8"), ack_callback=_ack)
+    except Exception as e:
+        # If enrich_and_handle blew up before any handler could schedule the ack,
+        # ack here so RabbitMQ doesn't redeliver indefinitely.
+        print(f"  [err] enrich_and_handle crashed: {type(e).__name__}: {e}", flush=True)
+        _ack()
 
 
 def main() -> None:
@@ -487,9 +619,11 @@ def main() -> None:
     print(f"connected to amqp://{RABBITMQ_HOST}:{RABBITMQ_PORT}{RABBITMQ_VHOST}", flush=True)
 
     channel = conn.channel()
-    # Process one message at a time so dispatcher thread pool stays the
-    # backpressure point (matches old Solace receive_async semantics).
-    channel.basic_qos(prefetch_count=1)
+    # Prefetch matches phone capacity so the broker can hold up to N unack'd in
+    # flight per Mac (fair-share). Combined with ack-after-acquire in the dispatch
+    # runner, this means a saturated Mac stops pulling and another Mac on the same
+    # queue picks up the slack instead of sitting idle.
+    channel.basic_qos(prefetch_count=_DISPATCH_MAX_WORKERS)
     channel.basic_consume(queue=QUEUE_NAME, on_message_callback=_on_amqp_message, auto_ack=False)
     print(f"subscribed to queue: {QUEUE_NAME}", flush=True)
     print(f"publisher topic (results exchange): {RESULTS_TOPIC}", flush=True)
