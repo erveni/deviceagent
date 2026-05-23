@@ -252,7 +252,8 @@ def _pull_screenshot(serial: str, remote_path: str, platform: str, keyword_id: i
         return ""
     plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
     plat_dir = plat_dir_map.get(platform.lower(), platform)
-    local_dir = os.path.join(AUDIT_RESULTS_DIR, plat_dir)
+    date_dir = datetime.now().strftime("%Y-%m-%d")
+    local_dir = os.path.join(AUDIT_RESULTS_DIR, date_dir, plat_dir)
     os.makedirs(local_dir, exist_ok=True)
     fname = f"kw{keyword_id}_{platform.lower()}_{int(datetime.now(timezone.utc).timestamp())}.png"
     local_path = os.path.join(local_dir, fname)
@@ -406,7 +407,8 @@ def _write_b64_screenshot(b64: str, platform: str, keyword_id: int) -> str:
         return ""
     plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
     plat_dir = plat_dir_map.get(platform.lower(), platform)
-    local_dir = os.path.join(AUDIT_RESULTS_DIR, plat_dir)
+    date_dir = datetime.now().strftime("%Y-%m-%d")
+    local_dir = os.path.join(AUDIT_RESULTS_DIR, date_dir, plat_dir)
     os.makedirs(local_dir, exist_ok=True)
     fname = f"kw{keyword_id}_{platform.lower()}_{int(datetime.now(timezone.utc).timestamp())}.png"
     local_path = os.path.join(local_dir, fname)
@@ -752,9 +754,19 @@ _csv_lock = threading.Lock()
 
 
 def append_row(csv_path: str, row: dict) -> None:
-    write_header = not os.path.exists(csv_path)
+    # Per-date split: insert <DATE> into the basename so each day lands in its
+    # own CSV. Date comes from the row's timestamp (so retimed/historical
+    # rows go to the right file) — falls back to today's local date.
+    ts = (row.get("timestamp") or "")[:10]
+    if not ts or len(ts) != 10:
+        ts = datetime.now().strftime("%Y-%m-%d")
+    dirname, basename = os.path.split(csv_path)
+    name, ext = os.path.splitext(basename)
+    dated_path = os.path.join(dirname, f"{name}_{ts}{ext}")
+
+    write_header = not os.path.exists(dated_path)
     with _csv_lock:
-        with open(csv_path, "a", newline="") as f:
+        with open(dated_path, "a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
             if write_header:
                 w.writeheader()

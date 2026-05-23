@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -93,6 +94,33 @@ BREAKER = CircuitBreaker(
 )
 
 
+# Heartbeat: visibility-only counters + periodic stdout line. Grep '[heartbeat]'
+# in the consumer log to track live throughput / detect a stalled drain.
+HEARTBEAT_INTERVAL_S = int(os.environ.get("HEARTBEAT_INTERVAL_S", "60"))
+_STATS_LOCK = threading.Lock()
+_STATS = {"received": 0, "success": 0, "error": 0, "crashed": 0, "last_completed_at": None}
+
+def _stat_inc(field: str) -> None:
+    with _STATS_LOCK:
+        _STATS[field] = _STATS.get(field, 0) + 1
+        if field in ("success", "error"):
+            _STATS["last_completed_at"] = datetime.now(timezone.utc).isoformat()
+
+def _heartbeat_loop() -> None:
+    while True:
+        time.sleep(HEARTBEAT_INTERVAL_S)
+        with _STATS_LOCK:
+            s = dict(_STATS)
+        in_flight = s["received"] - s["success"] - s["error"] - s["crashed"]
+        print(
+            f"[heartbeat] ts={datetime.now(timezone.utc).isoformat()} "
+            f"in_flight={in_flight} received={s['received']} "
+            f"success={s['success']} error={s['error']} crashed={s['crashed']} "
+            f"last_completed={s['last_completed_at']}",
+            flush=True,
+        )
+
+
 def get_online_serials() -> set[str]:
     """Return set of currently-adb-reachable phone serials (state == 'device').
 
@@ -144,7 +172,7 @@ DISPATCH_CSV = os.environ.get(
 )
 AUDIT_CSV = os.environ.get(
     "AUDIT_CSV",
-    "/Users/seolocalph/projects/device-agent/solace_pilot_audit_results.csv",
+    "/Users/seolocalph/projects/device-agent/rabbitmq_audit_results.csv",
 )
 
 DAILY_TYPES = {"DAILY"}
@@ -258,9 +286,11 @@ def _submit_daily_dispatch(job_record: dict, enriched: dict, ack_callback) -> No
             conversation_happened = row.get("status") == "success"
             backlink_clicked = bool(row.get("backlink_found"))
             BREAKER.record(final_status == "COMPLETED")
+            _stat_inc("success" if final_status == "COMPLETED" else "error")
         except Exception as e:
             print(f"  [err] dispatch crashed: {type(e).__name__}: {e}", flush=True)
             BREAKER.record(False)
+            _stat_inc("crashed")
 
         # Update nested status fields so orchestrator persists the full outcome
         if isinstance(job_record.get("conversation"), dict):
@@ -329,9 +359,11 @@ def _submit_audit_dispatch(job_record: dict, platform: str, ack_callback) -> Non
             final_status = "COMPLETED" if row.get("status") == "success" else "FAILED"
             audit_succeeded = row.get("status") == "success"
             BREAKER.record(final_status == "COMPLETED")
+            _stat_inc("success" if final_status == "COMPLETED" else "error")
         except Exception as e:
             print(f"  [err] audit dispatch crashed: {type(e).__name__}: {e}", flush=True)
             BREAKER.record(False)
+            _stat_inc("crashed")
 
         # For audits, conversation.status reflects whether ranking was captured.
         if isinstance(job_record.get("conversation"), dict):
@@ -581,6 +613,7 @@ def _handle_audit(job: dict, platform: str, ack_callback) -> None:
 def _on_amqp_message(channel, method, properties, body: bytes) -> None:
     routing_key = method.routing_key
     print(f"[recv] routing_key={routing_key} bytes={len(body)}", flush=True)
+    _stat_inc("received")
     delivery_tag = method.delivery_tag
     connection = channel.connection
 
@@ -609,15 +642,20 @@ def _on_amqp_message(channel, method, properties, body: bytes) -> None:
         # If enrich_and_handle blew up before any handler could schedule the ack,
         # ack here so RabbitMQ doesn't redeliver indefinitely.
         print(f"  [err] enrich_and_handle crashed: {type(e).__name__}: {e}", flush=True)
+        _stat_inc("crashed")
         _ack()
 
 
-def main() -> None:
-    print(f"DISPATCH_ENABLED={DISPATCH_ENABLED} CSV={DISPATCH_CSV if DISPATCH_ENABLED else '<n/a>'}", flush=True)
+# Connection state shared across reconnects so SIGINT/SIGTERM can close the live
+# channel even after a reconnect has swapped it out.
+_conn_state: dict = {"conn": None, "channel": None, "shutdown_requested": False}
 
+
+def _consume_once() -> None:
+    """One subscribe-and-consume cycle. Returns normally on broker disconnect
+    (so the outer loop can reconnect); raises on shutdown."""
     conn = pika.BlockingConnection(_publisher_params)
     print(f"connected to amqp://{RABBITMQ_HOST}:{RABBITMQ_PORT}{RABBITMQ_VHOST}", flush=True)
-
     channel = conn.channel()
     # Prefetch matches phone capacity so the broker can hold up to N unack'd in
     # flight per Mac (fair-share). Combined with ack-after-acquire in the dispatch
@@ -626,19 +664,36 @@ def main() -> None:
     channel.basic_qos(prefetch_count=_DISPATCH_MAX_WORKERS)
     channel.basic_consume(queue=QUEUE_NAME, on_message_callback=_on_amqp_message, auto_ack=False)
     print(f"subscribed to queue: {QUEUE_NAME}", flush=True)
-    print(f"publisher topic (results exchange): {RESULTS_TOPIC}", flush=True)
-    print(f"build-session URL: {BUILD_SESSION_URL}", flush=True)
-
-    def shutdown(*_):
-        print("shutting down...", flush=True)
-        try:
-            channel.stop_consuming()
-        except Exception:
-            pass
+    _conn_state["conn"] = conn
+    _conn_state["channel"] = channel
+    try:
+        channel.start_consuming()
+    finally:
         try:
             conn.close()
         except Exception:
             pass
+
+
+def main() -> None:
+    print(f"DISPATCH_ENABLED={DISPATCH_ENABLED} CSV={DISPATCH_CSV if DISPATCH_ENABLED else '<n/a>'}", flush=True)
+    print(f"publisher topic (results exchange): {RESULTS_TOPIC}", flush=True)
+    print(f"build-session URL: {BUILD_SESSION_URL}", flush=True)
+
+    threading.Thread(target=_heartbeat_loop, name="heartbeat", daemon=True).start()
+    print(f"heartbeat: every {HEARTBEAT_INTERVAL_S}s — grep '[heartbeat]' in log", flush=True)
+
+    def shutdown(*_):
+        print("shutting down...", flush=True)
+        _conn_state["shutdown_requested"] = True
+        ch = _conn_state.get("channel")
+        cn = _conn_state.get("conn")
+        if ch is not None:
+            try: ch.stop_consuming()
+            except Exception: pass
+        if cn is not None:
+            try: cn.close()
+            except Exception: pass
         if _dispatch_pool is not None:
             _dispatch_pool.shutdown(wait=False, cancel_futures=True)
         sys.exit(0)
@@ -646,7 +701,31 @@ def main() -> None:
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    channel.start_consuming()
+    # Auto-reconnect loop. AWS MQ kills idle TCP after ~60s; pika BlockingConnection
+    # can't send AMQP heartbeats while build-session is mid-call, so the broker
+    # closes the socket and start_consuming raises StreamLostError. Without this
+    # loop the process dies and the wave stalls. See PID 99381 + 81776 crashes
+    # on 2026-05-23 — both StreamLostError ConnectionResetError(54).
+    backoff = 2
+    while not _conn_state["shutdown_requested"]:
+        try:
+            _consume_once()
+            # _consume_once returned cleanly (no exception) — broker probably told
+            # us to stop; bail out so we don't hot-loop.
+            break
+        except (pika.exceptions.StreamLostError,
+                pika.exceptions.AMQPConnectionError,
+                pika.exceptions.ConnectionClosed,
+                pika.exceptions.ChannelClosed) as e:
+            print(f"  [reconnect] broker connection lost: {type(e).__name__}: {e}; sleeping {backoff}s", flush=True)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+        except Exception as e:
+            print(f"  [reconnect] unexpected error: {type(e).__name__}: {e}; sleeping {backoff}s", flush=True)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+        else:
+            backoff = 2  # reset on clean cycle
 
 
 if __name__ == "__main__":
