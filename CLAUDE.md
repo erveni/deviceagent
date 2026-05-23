@@ -107,6 +107,24 @@ done
 #  enabled_accessibility_services` after force-stop).
 ```
 
+## JobRecord shape — dual-compat (2026-05-24)
+
+The orchestrator team updated the JobRecord schema. Our consumer + publisher
+now accept BOTH shapes (old and new) with fallbacks. Key differences:
+
+| Field | OLD (pre-2026-05-24) | NEW (2026-05-24+) |
+|---|---|---|
+| Business name | `business.businessName` | `business.name` |
+| Client info | `business.clientId`, `business.clientName` | `business.client.{clientName, accountId}` |
+| Backlink URL | `detail.backlink.url` (string) | `detail.backlink.url` ({id, name, type} object) |
+| Address detail | basic `addressLine1/city/state` | adds `addressLine2/3, zipCode, timezone, location{lat,lng}` |
+| New top-level fields | — | `subscriptionId, business.category, business.website, detail.id, conversation.id, device{}, result.rankingRecord` |
+
+Consumer reads with `biz.get("businessName") or biz.get("name")` style fallbacks
+in `_handle_audit` and `_build_enriched_from_job`. Publisher's `_emit_business`
+and `_emit_address` helpers emit both shapes side-by-side. Anything new the
+orchestrator adds that we don't read yet is harmless extra data.
+
 ## Catalog file lives in aeo-appium
 
 `audit_dispatch_http.py` reads `/Users/seolocalph/projects/aeo-appium/clients_audit_targets.json` for per-business audit config (`proxy.zip`, `biz_url`, city/state). See `aeo-appium/CLAUDE.md` for the entry shape + how to add a new business. Without an entry the dispatcher falls back to NY zip 10001 and the AI platform rejects the audit on geo-mismatch.

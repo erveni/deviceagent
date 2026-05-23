@@ -83,11 +83,49 @@ KEYWORDS = ["best plumber near me", "emergency child care", "auto body repair"]
 PLATFORMS = ("chatgpt", "gemini", "perplexity")
 
 
+def _emit_business(biz: dict) -> dict:
+    """Render a business object that satisfies BOTH the old shape
+    (businessName, clientId) and the new orchestrator shape (name, client{}).
+    Consumer's fallbacks read either, so adding both is forward+back compatible.
+    """
+    return {
+        # NEW shape
+        "name": biz["businessName"],
+        "category": biz.get("category", ""),
+        "client": {
+            "clientName": biz.get("clientName", ""),
+            "accountId": biz.get("clientId", ""),
+        },
+        "website": biz.get("website") or {"id": 0, "name": "", "type": "WEBSITE"},
+        "gmb": biz.get("gmb", {"id": 0, "name": "", "type": "GMB"}),
+        # OLD shape — kept for backwards compat
+        "businessName": biz["businessName"],
+        "clientName": biz.get("clientName", ""),
+        "clientId": biz.get("clientId", ""),
+    }
+
+
+def _emit_address(biz: dict) -> dict:
+    """Render an address object satisfying both shapes."""
+    return {
+        "addressLine1": biz["addressLine1"],
+        "addressLine2": biz.get("addressLine2"),
+        "addressLine3": biz.get("addressLine3"),
+        "city": biz["city"],
+        "state": biz["state"],
+        "stateCode": biz["stateCode"],
+        "zipCode": biz.get("zipCode", ""),
+        "timezone": biz.get("timezone", ""),
+        "location": biz.get("location") or {"id": 0, "latitude": 0.0, "longitude": 0.0},
+    }
+
+
 def build_daily_job(job_id: int, biz: dict, keyword: str, platform: str) -> dict:
     """Synthesize the orchestrator-hydrated DAILY JobRecord shape.
 
     Mirrors what the real orchestrator emits — see
     `solace_consumer.py:enrich_and_handle` for the parsing logic.
+    Emits BOTH old and new shape fields for forward+back compatibility.
     """
     now = datetime.now(timezone.utc).isoformat()
     return {
@@ -102,19 +140,21 @@ def build_daily_job(job_id: int, biz: dict, keyword: str, platform: str) -> dict
             "subscriptionId": None,
             "openingTime": "08:00:00",
             "closingTime": "23:59:59",
-            "business": biz,
-            "address": {
-                "addressLine1": biz["addressLine1"],
-                "city": biz["city"],
-                "state": biz["state"],
-                "stateCode": biz["stateCode"],
-            },
+            "business": _emit_business(biz),
+            "address": _emit_address(biz),
         },
         "detail": {
+            "id": 90_000_000 + job_id,
             "keyword": {"id": 99_000_000 + job_id, "name": keyword},
-            "backlink": {"status": False, "url": ""},
+            # New shape: backlink.url is a UrlRecord {id,name,type}; old was a string.
+            "backlink": {
+                "id": 0,
+                "url": {"id": 0, "name": "", "type": "BACKLINK"},
+                "status": False,
+            },
         },
         "conversation": {
+            "id": 90_000_000 + job_id,
             "platform": platform.lower(),
             "status": False,
             "prompts": [
@@ -135,7 +175,7 @@ def build_daily_job(job_id: int, biz: dict, keyword: str, platform: str) -> dict
 
 
 def build_audit_job(job_id: int, biz: dict, keyword: str, platform: str | None = None) -> dict:
-    """Synthesize the RANKING (audit) JobRecord shape."""
+    """Synthesize the RANKING (audit) JobRecord shape (both old + new compat)."""
     now = datetime.now(timezone.utc).isoformat()
     return {
         "id": job_id,
@@ -148,23 +188,20 @@ def build_audit_job(job_id: int, biz: dict, keyword: str, platform: str | None =
             "id": 90_000_000 + job_id,
             "openingTime": "08:00:00",
             "closingTime": "23:59:59",
-            "business": biz,
-            "address": {
-                "addressLine1": biz["addressLine1"],
-                "city": biz["city"],
-                "state": biz["state"],
-                "stateCode": biz["stateCode"],
-            },
+            "business": _emit_business(biz),
+            "address": _emit_address(biz),
         },
         "detail": {
+            "id": 90_000_000 + job_id,
             "keyword": {"id": 99_000_000 + job_id, "name": keyword},
         },
-        # Audit-specific top-level fields the consumer's _handle_audit reads
+        # Audit-specific top-level fields some legacy consumer paths read.
+        # NOTE: 'keyword' was previously a bare string here — that crashes
+        # enrich_and_handle's keyword.get("id"). Removed.
         "bizName": biz["businessName"],
         "bizUrl": biz["gmb"]["name"],
         "city": biz["city"],
         "state": biz["stateCode"],
-        "keyword": keyword,
     }
 
 

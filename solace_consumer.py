@@ -486,14 +486,25 @@ def enrich_and_handle(payload: str, *, ack_callback) -> None:
 
 def _build_enriched_from_job(job: dict, keyword_id: int, platform: str) -> dict:
     """For dummy/test JobRecords that already carry the prompt — synthesize the
-    enriched dict the dispatch path expects, skipping AEOAdmin."""
+    enriched dict the dispatch path expects, skipping AEOAdmin.
+
+    Accepts both shapes:
+      - OLD (pre-2026-05-24): business.businessName, business.clientId
+      - NEW (2026-05-24+):    business.name, business.client.{clientName, accountId}
+    """
     campaign = job.get("campaign") or {}
     biz = campaign.get("business") or {}
     client = biz.get("client") or {}
     addr = campaign.get("address") or {}
-    # Real orchestrator payloads have keyword under detail.keyword; dummies have
-    # it at top-level. Support both.
     kw_obj = job.get("keyword") or (job.get("detail") or {}).get("keyword") or {}
+    # New shape: backlink is {id, url:{id,name,type}, status}; old: {url, status}
+    detail = job.get("detail") or {}
+    backlink_obj = detail.get("backlink") or {}
+    backlink_url_obj = backlink_obj.get("url")
+    if isinstance(backlink_url_obj, dict):
+        backlink_url = backlink_url_obj.get("name", "")
+    else:
+        backlink_url = backlink_obj.get("url") or job.get("backlinkUrl", "")
     return {
         "keywordId": keyword_id,
         "keywordText": kw_obj.get("name", ""),
@@ -504,12 +515,12 @@ def _build_enriched_from_job(job: dict, keyword_id: int, platform: str) -> dict:
         "prompt": job.get("prompt", ""),
         "followUp": job.get("followUp", ""),
         "hasFollowUp": bool(job.get("followUp")),
-        "backlinkInjected": bool(job.get("backlinkInjected")),
-        "backlinkUrl": job.get("backlinkUrl", ""),
+        "backlinkInjected": bool(job.get("backlinkInjected") or backlink_obj.get("status")),
+        "backlinkUrl": backlink_url,
         "backlinkType": "",
-        "clientId": client.get("clientId") or client.get("clientName", ""),
+        "clientId": client.get("clientId") or client.get("accountId") or biz.get("clientId") or client.get("clientName", ""),
         "clientName": client.get("clientName", ""),
-        "bizName": biz.get("businessName", ""),
+        "bizName": biz.get("businessName") or biz.get("name", ""),
         "searchAddress": ", ".join(filter(None, [addr.get("addressLine1"), addr.get("city"), addr.get("state") or addr.get("stateCode")])),
         "campaignId": campaign.get("id", ""),
         "city": addr.get("city", ""),
@@ -579,7 +590,8 @@ def _handle_audit(job: dict, platform: str, ack_callback) -> None:
     campaign = job.get("campaign") or {}
     business = campaign.get("business") or {}
     address = campaign.get("address") or {}
-    biz_name = business.get("businessName", "?")
+    # New orchestrator (2026-05-24+) uses business.name; old shape used businessName.
+    biz_name = business.get("businessName") or business.get("name") or "?"
     # New orchestrator: business.gmb is a UrlRecord {id, name, type}. Old dummies put the URL string at gmbUrl/bizUrl.
     gmb_obj = business.get("gmb")
     biz_url = (
