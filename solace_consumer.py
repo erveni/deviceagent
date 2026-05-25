@@ -223,7 +223,7 @@ _publisher_params = pika.ConnectionParameters(
     port=RABBITMQ_PORT,
     virtual_host=RABBITMQ_VHOST,
     credentials=pika.PlainCredentials(RABBITMQ_USERNAME, RABBITMQ_PASSWORD),
-    heartbeat=30,
+    heartbeat=600,
     blocked_connection_timeout=10,
 )
 
