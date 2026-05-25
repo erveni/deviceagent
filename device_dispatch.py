@@ -232,6 +232,12 @@ def dispatch_one_job(
                     socksdroid_disconnect(serial)
                 except Exception:
                     pass
+                # Wait for OS to release the TCP port before rebinding. Without
+                # this, the rebind races TIME_WAIT and gost dies with
+                # "bind: address already in use" → dispatch_exception. The
+                # audit dispatcher (GostManager.start(wait_seconds=2.0)) does
+                # the same wait; cc78963 / b758d1b missed it.
+                time.sleep(2)
                 sid = rsid()
                 upstream_user = (
                     f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}"
