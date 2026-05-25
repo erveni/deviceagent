@@ -10,10 +10,24 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+
+# Match ", XX 12345" or ", XX 12345-6789" near the end of a US address.
+_STATE_RE = re.compile(r',\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?')
+
+
+def _parse_state(addr: str) -> str | None:
+    """Extract 2-letter US state code from a biz_address like
+    '1010 South Gilbert Road, Chandler, AZ 85286-5169, USA'. Returns None if
+    the address lacks a parseable 'STATE ZIP' tail."""
+    if not addr:
+        return None
+    m = _STATE_RE.search(addr)
+    return m.group(1) if m else None
 
 from run_with_proxy import (
     DEVICES,
@@ -194,12 +208,22 @@ def dispatch_one_job(
             # path: tear down current gost+socksdroid, rotate session_id (rsid),
             # restart, re-run. Most input-failed bursts clear on second IP per
             # the audit author's empirical claim.
+            #
+            # Zip-aware: on retry, target the state's known-good Decodo zip
+            # instead of repeating country-only US (which gave us the burned IP
+            # in the first place). State parsed from biz_address; falls back to
+            # _FALLBACK_GOOD_ZIP if address lacks a 'STATE ZIP' tail.
             err = (row.get("error") or "").lower()
             if row.get("status") == "error" and any(t in err for t in RETRY_TRIGGERS):
                 reason = next(t for t in RETRY_TRIGGERS if t in err).replace(" ", "_")
+                # Lazy import — audit_dispatch_http imports POOL from this
+                # module, so a top-level import would be circular.
+                from audit_dispatch_http import _STATE_GOOD_ZIP, _FALLBACK_GOOD_ZIP
+                state = _parse_state(job.get("biz_address", ""))
+                retry_zip = _STATE_GOOD_ZIP.get(state.upper(), _FALLBACK_GOOD_ZIP) if state else _FALLBACK_GOOD_ZIP
                 print(
                     f"  [retry] {reason} on device={device_id} — "
-                    f"rotating Decodo session",
+                    f"rotating Decodo session, state={state or '?'} zip={retry_zip}",
                     flush=True,
                 )
                 gost_stop(gost_proc, gost_cfg)
@@ -209,9 +233,13 @@ def dispatch_one_job(
                 except Exception:
                     pass
                 sid = rsid()
+                upstream_user = (
+                    f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}"
+                    f"-country-us-zip-{retry_zip}"
+                )
                 spec = {
                     "port": BASE_GOST + device_idx,
-                    "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us",
+                    "upstream_user": upstream_user,
                     "sid": sid,
                 }
                 gost_proc, gost_cfg = gost_start([spec])
