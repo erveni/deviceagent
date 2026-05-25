@@ -445,8 +445,11 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
         "client_id": client.get("clientId", "") or client.get("id", ""),
         "keyword_id": keyword.get("id"),
         "campaign_id": campaign.get("id", ""),
-        "campaign_name": business.get("businessName", ""),
-        "biz_name": business.get("businessName", ""),
+        # New orchestrator (2026-05-24+) uses business.name; old shape used businessName.
+        # solace_consumer.py:_handle_audit already does this fallback; mirroring here so the
+        # synthesized entry doesn't ship empty bizName to the phone (→ phone returns 400).
+        "campaign_name": business.get("businessName") or business.get("name") or "",
+        "biz_name": business.get("businessName") or business.get("name") or "",
         "biz_url": biz_url,
         "city": address.get("city", ""),
         "state": address.get("stateCode") or address.get("state") or "",

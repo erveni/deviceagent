@@ -442,27 +442,44 @@ def publish_result(job_record: dict, status: str) -> None:
     JobRepository.update(). Each call opens a one-shot connection so any
     background dispatch thread can publish safely (pika channels are not
     thread-safe; jobs complete ~1/min so the connection overhead is fine).
+
+    Retries on transient errors. AWS MQ drops idle TCP sockets every ~60s
+    and the one-shot connect occasionally races that drop, raising
+    AMQPConnectionError. Without retry the result is lost and the
+    orchestrator's DB diverges from reality (measured on Mac-2 2026-05-25:
+    142/402 publishes silently failed ≈ 35% loss rate).
     """
     out = dict(job_record)
     out["status"] = status
-    try:
-        conn = pika.BlockingConnection(_publisher_params)
+    body = json.dumps(out).encode("utf-8")
+    last_err: Exception | None = None
+    for attempt in range(5):
+        if attempt > 0:
+            time.sleep(2 ** (attempt - 1))  # 1, 2, 4, 8s
         try:
-            ch = conn.channel()
-            ch.basic_publish(
-                exchange=RESULTS_TOPIC,
-                routing_key=RESULTS_TOPIC,
-                body=json.dumps(out).encode("utf-8"),
-                properties=pika.BasicProperties(
-                    content_type="application/json",
-                    delivery_mode=2,  # persistent
-                ),
-            )
-        finally:
-            conn.close()
-        print(f"  [result] job_id={out.get('id')} -> {status} on {RESULTS_TOPIC}", flush=True)
-    except Exception as e:
-        print(f"  [err] result publish failed: {type(e).__name__}: {e}", flush=True)
+            conn = pika.BlockingConnection(_publisher_params)
+            try:
+                ch = conn.channel()
+                ch.basic_publish(
+                    exchange=RESULTS_TOPIC,
+                    routing_key=RESULTS_TOPIC,
+                    body=body,
+                    properties=pika.BasicProperties(
+                        content_type="application/json",
+                        delivery_mode=2,  # persistent
+                    ),
+                )
+            finally:
+                conn.close()
+            suffix = f" (recovered after {attempt} retries)" if attempt > 0 else ""
+            print(f"  [result] job_id={out.get('id')} -> {status} on {RESULTS_TOPIC}{suffix}", flush=True)
+            return
+        except Exception as e:
+            last_err = e
+            if attempt < 4:
+                print(f"  [warn] result publish attempt {attempt+1}/5 failed for job_id={out.get('id')}: {type(e).__name__}: {e}", flush=True)
+    # All retries exhausted — grep '[LOST]' to find these.
+    print(f"  [LOST] result publish FAILED after 5 attempts for job_id={out.get('id')} status={status}: {type(last_err).__name__}: {last_err}", flush=True)
 
 
 def enrich_and_handle(payload: str, *, ack_callback) -> None:

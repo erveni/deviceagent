@@ -115,7 +115,10 @@ def wait_tunnel(serial):
     for _ in range(20):
         r = run(f"adb -s \"{serial}\" shell ifconfig tun0", 5)
         if "UP" in r.stdout and "inet" in r.stdout:
-            r2 = run(f"adb -s \"{serial}\" shell \"nc -z -w 3 1.1.1.1 53 && echo OK\"", 6)
+            # `-z` rejected by BusyBox nc (TECNO KL4 ships BusyBox; Infinix/Samsung ship toybox).
+            # `</dev/null >/dev/null` mirrors open-and-close semantics on both BusyBox AND toybox —
+            # strictly more compatible than the original `-z`.
+            r2 = run(f"adb -s \"{serial}\" shell \"nc -w 3 1.1.1.1 53 </dev/null >/dev/null && echo OK\"", 6)
             if "OK" in r2.stdout:
                 return True
         time.sleep(3)
