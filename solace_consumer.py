@@ -214,9 +214,16 @@ else:
     _PHONE_SLOTS = None
 
 # Per-session warmup AFTER slot acquired, BEFORE dispatch.
-# 60s matches wave-mode's IP-settle gap — closes most of the 99% vs 55% success gap.
+# 30s default — halved from the original 60s. The retry path added in
+# cc78963 / b758d1b catches most "not-yet-settled Decodo session" failures
+# (input failed / generation timeout) by tearing down and re-rolling on a
+# fresh session_id, so the up-front wait that affc6de's "60s closes 99% vs
+# 55%" experiment found is no longer load-bearing. Saves ~30s per dispatched
+# job ≈ 10% throughput on a 5-min wave.
+# If retry rate climbs back above ~20% after this change, raise to 60 via
+# DISPATCH_WARMUP_S=60 env var (no code change needed).
 # Set to 0 to disable (e.g. for smoke tests). Tune via DISPATCH_WARMUP_S env var.
-_WARMUP_SECONDS = int(os.environ.get("DISPATCH_WARMUP_S", "60"))
+_WARMUP_SECONDS = int(os.environ.get("DISPATCH_WARMUP_S", "30"))
 
 _publisher_params = pika.ConnectionParameters(
     host=RABBITMQ_HOST,
