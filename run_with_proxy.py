@@ -19,14 +19,14 @@ MAC_IP = "192.168.0.102"
 DEVICES = [
     ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
-    ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
+    ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
     ("device-106", "adb-149145555W006477-JjonPV (2)._adb-tls-connect._tcp"),
-    ("device-107", "adb-149145555W006788-Vb9M0e._adb-tls-connect._tcp"),
+    ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
     ("device-108", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
     ("device-109", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
-    ("device-110", "adb-149145555W006589-2W7yzb._adb-tls-connect._tcp"),
+    ("device-110", "adb-149145555W006589-2W7yzb (2)._adb-tls-connect._tcp"),
 ]
 
 def run(cmd, timeout=30):

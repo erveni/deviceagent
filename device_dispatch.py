@@ -143,6 +143,7 @@ def build_dispatch_job(job_record: dict[str, Any], enriched: dict[str, Any]) -> 
         "biz_timezone": "",
         "campaign_id": enriched.get("campaignId", ""),
         "campaign_name": business.get("businessName", ""),
+        "targetDate": job_record.get("targetDate", ""),
     }
 
 
@@ -245,7 +246,7 @@ def _run_session(
 
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "date": (str(job.get("targetDate") or "")[:10]) or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "wave_index": wave_index,
         "client_id": job.get("client_id", ""),
         "client_name": job.get("client_name", ""),
@@ -293,7 +294,7 @@ def _err_row(
 ) -> dict[str, Any]:
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "date": (str(job.get("targetDate") or "")[:10]) or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "wave_index": wave_index,
         "client_id": job.get("client_id", ""),
         "client_name": job.get("client_name", ""),
@@ -328,10 +329,15 @@ def _err_row(
 
 
 def append_row(csv_path: str, row: dict[str, Any]) -> None:
-    """Append one row to CSV, writing header if file doesn't exist yet."""
-    write_header = not os.path.exists(csv_path)
+    """Append one row to CSV. File is date-stamped from row's `date` field
+    so a wave that crosses UTC midnight splits cleanly per day.
+    e.g. solace_pilot_results.csv -> solace_pilot_results_2026-05-22.csv."""
+    base, ext = os.path.splitext(csv_path)
+    date = row.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    dated_path = f"{base}_{date}{ext}"
+    write_header = not os.path.exists(dated_path)
     with _csv_lock:
-        with open(csv_path, "a", newline="") as f:
+        with open(dated_path, "a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             if write_header:
                 w.writeheader()

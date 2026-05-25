@@ -452,6 +452,7 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
         "state": address.get("stateCode") or address.get("state") or "",
         "keyword": keyword.get("name", ""),
         "mode": (job_record.get("type") or "RANKING").lower(),
+        "targetDate": job_record.get("targetDate", ""),
     }
 
 

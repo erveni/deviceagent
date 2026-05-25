@@ -213,6 +213,11 @@ else:
     _DISPATCH_MAX_WORKERS = 1
     _PHONE_SLOTS = None
 
+# Per-session warmup AFTER slot acquired, BEFORE dispatch.
+# 60s matches wave-mode's IP-settle gap — closes most of the 99% vs 55% success gap.
+# Set to 0 to disable (e.g. for smoke tests). Tune via DISPATCH_WARMUP_S env var.
+_WARMUP_SECONDS = int(os.environ.get("DISPATCH_WARMUP_S", "60"))
+
 _publisher_params = pika.ConnectionParameters(
     host=RABBITMQ_HOST,
     port=RABBITMQ_PORT,
@@ -234,8 +239,21 @@ def call_build_session(keyword_id: int, platform: str) -> dict:
             "X-Executor-Token": EXECUTOR_TOKEN,
         },
     )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    # Retry transient URLError (DNS/connection blips from router overload).
+    # HTTPError = real admin failure, re-raise immediately.
+    backoffs = [2, 4, 8]
+    for attempt in range(len(backoffs) + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except urllib.error.URLError as e:
+            if attempt == len(backoffs):
+                raise
+            print(f"  [retry] build-session URLError ({e.reason}); sleeping {backoffs[attempt]}s (attempt {attempt+1}/{len(backoffs)+1})", flush=True)
+            time.sleep(backoffs[attempt])
+    raise AssertionError("unreachable")
 
 
 def _log_enriched(enriched: dict) -> None:
@@ -271,6 +289,11 @@ def _submit_daily_dispatch(job_record: dict, enriched: dict, ack_callback) -> No
         # the same queue picks up the slack instead of sitting idle.
         _PHONE_SLOTS.acquire()
         ack_callback()
+        # Warmup: let Decodo sticky session settle before dispatching the AI
+        # session. Bypasses the bot-detection-on-fresh-conns pattern that drops
+        # the per-job-parallel consumer to ~55% vs wave-mode's 99%
+        # (per project_rolling_warmup_patch.md + project_rolling_stability_fix.md).
+        time.sleep(_WARMUP_SECONDS)
         final_status = "FAILED"
         conversation_happened = False
         backlink_clicked = False
@@ -346,6 +369,7 @@ def _submit_audit_dispatch(job_record: dict, platform: str, ack_callback) -> Non
     def runner():
         _PHONE_SLOTS.acquire()
         ack_callback()
+        time.sleep(_WARMUP_SECONDS)
         final_status = "FAILED"
         audit_succeeded = False
         row = None
