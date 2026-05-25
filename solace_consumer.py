@@ -283,67 +283,70 @@ def _submit_daily_dispatch(job_record: dict, enriched: dict, ack_callback) -> No
     dispatch_job = _build_dispatch_job(job_record, enriched)
 
     def runner():
-        # Fair-share: block until a phone slot is free, then ack the broker.
-        # Until the ack fires the broker keeps this message marked "in flight" for
-        # this Mac and refuses to deliver beyond prefetch — so a second Mac on
-        # the same queue picks up the slack instead of sitting idle.
+        # ACK-AFTER-COMPLETION: hold the broker message unacked through the
+        # entire dispatch. If consumer/gost crashes or is killed mid-session,
+        # broker redelivers on next consumer start instead of silently losing
+        # the job (the old ack-on-acquire design lost 200+ jobs to gost-died
+        # stalls on 2026-05-25/26). Fair-share still works: prefetch=phone-count
+        # + _PHONE_SLOTS semaphore bound concurrency; second Mac on same queue
+        # gets the messages this Mac can't pull (RabbitMQ does the balancing).
         _PHONE_SLOTS.acquire()
-        ack_callback()
-        # Warmup: let Decodo sticky session settle before dispatching the AI
-        # session. Bypasses the bot-detection-on-fresh-conns pattern that drops
-        # the per-job-parallel consumer to ~55% vs wave-mode's 99%
-        # (per project_rolling_warmup_patch.md + project_rolling_stability_fix.md).
-        time.sleep(_WARMUP_SECONDS)
-        final_status = "FAILED"
-        conversation_happened = False
-        backlink_clicked = False
-        row = None
         try:
-            row = _dispatch_one_job(dispatch_job, csv_path=DISPATCH_CSV)
-            print(
-                f"  [done daily] device={row['device_id']} platform={row['platform']} "
-                f"status={row['status']} dur={row['duration_s']}s bk={row['backlink_found']}",
-                flush=True,
-            )
-            final_status = "COMPLETED" if row.get("status") == "success" else "FAILED"
-            conversation_happened = row.get("status") == "success"
-            backlink_clicked = bool(row.get("backlink_found"))
-            BREAKER.record(final_status == "COMPLETED")
-            _stat_inc("success" if final_status == "COMPLETED" else "error")
-        except Exception as e:
-            print(f"  [err] dispatch crashed: {type(e).__name__}: {e}", flush=True)
-            BREAKER.record(False)
-            _stat_inc("crashed")
-
-        # Update nested status fields so orchestrator persists the full outcome
-        if isinstance(job_record.get("conversation"), dict):
-            job_record["conversation"]["status"] = conversation_happened
-        detail = job_record.get("detail") or {}
-        if isinstance(detail.get("backlink"), dict):
-            detail["backlink"]["status"] = backlink_clicked
-
-        # Update proxy + mock location from the actual run row (if dispatch ran)
-        if row is not None:
-            device = job_record.get("device") or {}
-            if isinstance(device.get("proxy"), dict):
-                device["proxy"]["host"] = row.get("proxy_host", "") or ""
-                device["proxy"]["port"] = int(row.get("proxy_port") or 0)
-                device["proxy"]["username"] = row.get("proxy_username", "") or ""
-            if isinstance(device.get("location"), dict):
-                device["location"]["latitude"] = float(row.get("mocked_latitude") or 0)
-                device["location"]["longitude"] = float(row.get("mocked_longitude") or 0)
-            # Echo the actual phone serial used (helps trace which phone ran what)
-            if "serialNo" in device:
-                device["serialNo"] = row.get("device_id") or device.get("serialNo")
-            # We consumed one retry attempt — decrement so orchestrator knows
-            # how many tries remain (only when we actually dispatched).
+            # Warmup: let Decodo sticky session settle before dispatching the AI
+            # session (per project_rolling_warmup_patch.md).
+            time.sleep(_WARMUP_SECONDS)
+            final_status = "FAILED"
+            conversation_happened = False
+            backlink_clicked = False
+            row = None
             try:
-                job_record["retryAttempts"] = max(0, int(job_record.get("retryAttempts", 0)) - 1)
-            except (TypeError, ValueError):
-                pass
+                row = _dispatch_one_job(dispatch_job, csv_path=DISPATCH_CSV)
+                print(
+                    f"  [done daily] device={row['device_id']} platform={row['platform']} "
+                    f"status={row['status']} dur={row['duration_s']}s bk={row['backlink_found']}",
+                    flush=True,
+                )
+                final_status = "COMPLETED" if row.get("status") == "success" else "FAILED"
+                conversation_happened = row.get("status") == "success"
+                backlink_clicked = bool(row.get("backlink_found"))
+                BREAKER.record(final_status == "COMPLETED")
+                _stat_inc("success" if final_status == "COMPLETED" else "error")
+            except Exception as e:
+                print(f"  [err] dispatch crashed: {type(e).__name__}: {e}", flush=True)
+                BREAKER.record(False)
+                _stat_inc("crashed")
 
-        try:
+            # Update nested status fields so orchestrator persists the full outcome
+            if isinstance(job_record.get("conversation"), dict):
+                job_record["conversation"]["status"] = conversation_happened
+            detail = job_record.get("detail") or {}
+            if isinstance(detail.get("backlink"), dict):
+                detail["backlink"]["status"] = backlink_clicked
+
+            # Update proxy + mock location from the actual run row (if dispatch ran)
+            if row is not None:
+                device = job_record.get("device") or {}
+                if isinstance(device.get("proxy"), dict):
+                    device["proxy"]["host"] = row.get("proxy_host", "") or ""
+                    device["proxy"]["port"] = int(row.get("proxy_port") or 0)
+                    device["proxy"]["username"] = row.get("proxy_username", "") or ""
+                if isinstance(device.get("location"), dict):
+                    device["location"]["latitude"] = float(row.get("mocked_latitude") or 0)
+                    device["location"]["longitude"] = float(row.get("mocked_longitude") or 0)
+                # Echo the actual phone serial used (helps trace which phone ran what)
+                if "serialNo" in device:
+                    device["serialNo"] = row.get("device_id") or device.get("serialNo")
+                # We consumed one retry attempt — decrement so orchestrator knows
+                # how many tries remain (only when we actually dispatched).
+                try:
+                    job_record["retryAttempts"] = max(0, int(job_record.get("retryAttempts", 0)) - 1)
+                except (TypeError, ValueError):
+                    pass
+
             publish_result(job_record, final_status)
+            # Only ack AFTER publish_result completes — if anything above crashes
+            # or the worker is killed, the broker redelivers the message.
+            ack_callback()
         finally:
             _PHONE_SLOTS.release()
 
@@ -367,67 +370,68 @@ def _submit_audit_dispatch(job_record: dict, platform: str, ack_callback) -> Non
     audit_job = _build_audit_dispatch_job(job_record)
 
     def runner():
+        # ACK-AFTER-COMPLETION: see _submit_daily_dispatch.runner for the rationale.
         _PHONE_SLOTS.acquire()
-        ack_callback()
-        time.sleep(_WARMUP_SECONDS)
-        final_status = "FAILED"
-        audit_succeeded = False
-        row = None
         try:
-            row = _dispatch_audit_job(audit_job, platform=platform, csv_path=AUDIT_CSV)
-            print(
-                f"  [done audit] device={row['device']} platform={row['platform']} "
-                f"status={row['status']} dur={row['duration_s']}s rank={row['rank_position']}/{row['rank_total']}",
-                flush=True,
-            )
-            final_status = "COMPLETED" if row.get("status") == "success" else "FAILED"
-            audit_succeeded = row.get("status") == "success"
-            BREAKER.record(final_status == "COMPLETED")
-            _stat_inc("success" if final_status == "COMPLETED" else "error")
-        except Exception as e:
-            print(f"  [err] audit dispatch crashed: {type(e).__name__}: {e}", flush=True)
-            BREAKER.record(False)
-            _stat_inc("crashed")
-
-        # For audits, conversation.status reflects whether ranking was captured.
-        if isinstance(job_record.get("conversation"), dict):
-            job_record["conversation"]["status"] = audit_succeeded
-
-        if row is not None:
-            # Mirror daily-path updates: proxy details, mock location used, serial.
-            device = job_record.get("device") or {}
-            if isinstance(device.get("proxy"), dict):
-                device["proxy"]["host"] = row.get("proxy_host", "") or ""
-                device["proxy"]["port"] = int(row.get("proxy_port") or 0)
-                device["proxy"]["username"] = row.get("proxy_username", "") or ""
-            if isinstance(device.get("location"), dict):
-                device["location"]["latitude"] = float(row.get("mocked_latitude") or 0)
-                device["location"]["longitude"] = float(row.get("mocked_longitude") or 0)
-            if "serialNo" in device:
-                device["serialNo"] = row.get("device") or device.get("serialNo")
-
-            # Ranking result goes into result.rankingRecord per JobRecord DTO.
-            # row["response_text"] now holds a .txt file path (audit_results/<Platform>/kw*_<platform>_<TS>.txt)
-            # containing the full LLM response — same pattern as row["screenshot"].
-            kw_obj = job_record.get("detail", {}).get("keyword") or {}
-            ranking_record = {
-                "keywordId": kw_obj.get("id"),
-                "platform": platform.upper(),
-                "position": int(row.get("rank_position") or 0),
-                "total": int(row.get("rank_total") or 0),
-                "conversation": row.get("response_text") or row.get("rank_context") or "",
-                "screenshot": row.get("screenshot") or row.get("screenshot_path") or "",
-            }
-            job_record["result"] = {"rankingRecord": ranking_record}
-
-            # Consumed one retry — decrement so orchestrator can stop retrying after N.
+            time.sleep(_WARMUP_SECONDS)
+            final_status = "FAILED"
+            audit_succeeded = False
+            row = None
             try:
-                job_record["retryAttempts"] = max(0, int(job_record.get("retryAttempts", 0)) - 1)
-            except (TypeError, ValueError):
-                pass
+                row = _dispatch_audit_job(audit_job, platform=platform, csv_path=AUDIT_CSV)
+                print(
+                    f"  [done audit] device={row['device']} platform={row['platform']} "
+                    f"status={row['status']} dur={row['duration_s']}s rank={row['rank_position']}/{row['rank_total']}",
+                    flush=True,
+                )
+                final_status = "COMPLETED" if row.get("status") == "success" else "FAILED"
+                audit_succeeded = row.get("status") == "success"
+                BREAKER.record(final_status == "COMPLETED")
+                _stat_inc("success" if final_status == "COMPLETED" else "error")
+            except Exception as e:
+                print(f"  [err] audit dispatch crashed: {type(e).__name__}: {e}", flush=True)
+                BREAKER.record(False)
+                _stat_inc("crashed")
 
-        try:
+            # For audits, conversation.status reflects whether ranking was captured.
+            if isinstance(job_record.get("conversation"), dict):
+                job_record["conversation"]["status"] = audit_succeeded
+
+            if row is not None:
+                # Mirror daily-path updates: proxy details, mock location used, serial.
+                device = job_record.get("device") or {}
+                if isinstance(device.get("proxy"), dict):
+                    device["proxy"]["host"] = row.get("proxy_host", "") or ""
+                    device["proxy"]["port"] = int(row.get("proxy_port") or 0)
+                    device["proxy"]["username"] = row.get("proxy_username", "") or ""
+                if isinstance(device.get("location"), dict):
+                    device["location"]["latitude"] = float(row.get("mocked_latitude") or 0)
+                    device["location"]["longitude"] = float(row.get("mocked_longitude") or 0)
+                if "serialNo" in device:
+                    device["serialNo"] = row.get("device") or device.get("serialNo")
+
+                # Ranking result goes into result.rankingRecord per JobRecord DTO.
+                # row["response_text"] now holds a .txt file path (audit_results/<Platform>/kw*_<platform>_<TS>.txt)
+                # containing the full LLM response — same pattern as row["screenshot"].
+                kw_obj = job_record.get("detail", {}).get("keyword") or {}
+                ranking_record = {
+                    "keywordId": kw_obj.get("id"),
+                    "platform": platform.upper(),
+                    "position": int(row.get("rank_position") or 0),
+                    "total": int(row.get("rank_total") or 0),
+                    "conversation": row.get("response_text") or row.get("rank_context") or "",
+                    "screenshot": row.get("screenshot") or row.get("screenshot_path") or "",
+                }
+                job_record["result"] = {"rankingRecord": ranking_record}
+
+                # Consumed one retry — decrement so orchestrator can stop retrying after N.
+                try:
+                    job_record["retryAttempts"] = max(0, int(job_record.get("retryAttempts", 0)) - 1)
+                except (TypeError, ValueError):
+                    pass
+
             publish_result(job_record, final_status)
+            ack_callback()
         finally:
             _PHONE_SLOTS.release()
 
