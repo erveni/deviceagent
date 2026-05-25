@@ -56,6 +56,12 @@ STATUS_POLL_INTERVAL_S = 8
 STATUS_POLL_MAX_TICKS = 50
 TUNNEL_SETTLE_S = 3
 
+# Retry-once-with-fresh-Decodo-session triggers — empirically known to recover
+# on a second IP per audit_dispatch_http.py:591-598. Ported here because the
+# daily path was missing the same recovery and was tripping the consumer's
+# circuit breaker on input-failed bursts that a fresh Decodo session clears.
+RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout")
+
 
 class DevicePool:
     """Thread-safe device pool — acquire an idle device index, run, release."""
@@ -183,6 +189,39 @@ def dispatch_one_job(
             row = _err_row(job, device_id, spec, wave_index, "tunnel_failed", "tunnel failed")
         else:
             row = _run_session(job, device_idx, device_id, serial, spec, wave_index)
+            # Retry once with a fresh Decodo session on known-transient errors.
+            # Mirrors audit_dispatch_http.py:587-643. Same triggers, same recovery
+            # path: tear down current gost+socksdroid, rotate session_id (rsid),
+            # restart, re-run. Most input-failed bursts clear on second IP per
+            # the audit author's empirical claim.
+            err = (row.get("error") or "").lower()
+            if row.get("status") == "error" and any(t in err for t in RETRY_TRIGGERS):
+                reason = next(t for t in RETRY_TRIGGERS if t in err).replace(" ", "_")
+                print(
+                    f"  [retry] {reason} on device={device_id} — "
+                    f"rotating Decodo session",
+                    flush=True,
+                )
+                gost_stop(gost_proc, gost_cfg)
+                gost_proc, gost_cfg = None, None
+                try:
+                    socksdroid_disconnect(serial)
+                except Exception:
+                    pass
+                sid = rsid()
+                spec = {
+                    "port": BASE_GOST + device_idx,
+                    "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us",
+                    "sid": sid,
+                }
+                gost_proc, gost_cfg = gost_start([spec])
+                socksdroid_connect(serial, spec["port"])
+                time.sleep(TUNNEL_SETTLE_S)
+                if not wait_tunnel(serial):
+                    row = _err_row(job, device_id, spec, wave_index,
+                                   "tunnel_failed_retry", "tunnel failed on retry")
+                else:
+                    row = _run_session(job, device_idx, device_id, serial, spec, wave_index)
     except Exception as e:
         row = _err_row(job, device_id, spec, wave_index, "dispatch_exception", f"{type(e).__name__}: {e}")
     finally:
