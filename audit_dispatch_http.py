@@ -63,6 +63,13 @@ if _ZIP_CACHE_PATH.exists():
 # zip gets hammered.
 _STATE_GOOD_ZIP: dict[str, str] = {
     "AZ": "85006", "CA": "90210", "CO": "80202", "FL": "33445", "GA": "30338",
+    # ID added 2026-05-26: Lapwai 83540 (Nez Perce Traditions Gift Shop) has zero
+    # Decodo coverage (0/3 SOCKS5 'network unreachable'). Lewiston 83501 probes 3/3
+    # with residential exits (96.19.x, 152.37.x, 74.118.x) and is ~30 mi from
+    # Lapwai — close enough that MaxMind city-geo for the ID zip pool resolves to
+    # the same regional cluster the LLM will see. Without this, ID businesses
+    # fell through to the NYC fallback and got audited from a New York IP.
+    "ID": "83501",
     "IL": "60601", "IN": "46202", "KY": "40422", "MD": "21701", "MS": "38103",
     "NC": "28303", "NJ": "08736", "NY": "10001", "OH": "34200", "PA": "19102",
     "RI": "02904", "TN": "37402", "TX": "76016", "UT": "84041", "VA": "24502",
