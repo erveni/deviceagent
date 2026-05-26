@@ -70,6 +70,11 @@ _STATE_GOOD_ZIP: dict[str, str] = {
     # the same regional cluster the LLM will see. Without this, ID businesses
     # fell through to the NYC fallback and got audited from a New York IP.
     "ID": "83501",
+    # HI added 2026-05-26 PM: Learn Cpr Save Lives (Honolulu) just landed 12/19
+    # rows in the main-19 ranking run, ALL routed HI/10001 (NYC) — same NYC
+    # fallback bug class as ID. Honolulu 96813 probes 3/3 with local residential
+    # exits (66.162.x Hawaiian Telcom, 72.235.x Spectrum, 141.239.x).
+    "HI": "96813",
     "IL": "60601", "IN": "46202", "KY": "40422", "MD": "21701", "MS": "38103",
     "NC": "28303", "NJ": "08736", "NY": "10001", "OH": "34200", "PA": "19102",
     "RI": "02904", "TN": "37402", "TX": "76016", "UT": "84041", "VA": "24502",
