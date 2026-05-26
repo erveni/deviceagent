@@ -89,6 +89,29 @@ def gost_stop(proc, cfg):
         try: os.unlink(p)
         except: pass
 
+def resolve_proxy_ip(port):
+    """Capture the Decodo exit IP for this gost listener.
+
+    Goes Mac -> gost -> Decodo -> ifconfig.me, so it does NOT depend on the
+    phone tunnel being up. Listener requires anon:anon SOCKS5 auth (gost
+    YAML), which the historical preflight in audit_dispatch_http.py omitted —
+    that's why proxy_ip was "none" on every audit row. 15s budget covers
+    cold-tunnel handshakes."""
+    try:
+        cp = subprocess.run(
+            ["curl", "-sS", "--max-time", "15", "--socks5",
+             f"anon:anon@127.0.0.1:{port}", "https://ifconfig.me"],
+            capture_output=True, text=True, timeout=18,
+        )
+        ip = cp.stdout.strip()
+        if ip and len(ip) < 64 and ip.count(".") == 3:
+            return ip
+        print(f"  [preflight-ip] port={port} rc={cp.returncode} "
+              f"stderr={cp.stderr.strip()[:120]!r} stdout={ip[:120]!r}", flush=True)
+    except Exception as e:
+        print(f"  [preflight-ip] port={port} curl raised {type(e).__name__}: {e}", flush=True)
+    return ""
+
 def socksdroid_connect(serial, port):
     run(f"adb -s \"{serial}\" shell am force-stop net.typeblog.socks", 5)
     time.sleep(0.5)
@@ -144,7 +167,7 @@ def http_post(port, path, body=None):
         with urllib.request.urlopen(req, timeout=10) as r: return json.loads(r.read())
     except: return {"status":"error","error":"http fail"}
 
-def session(device_idx, job, gost_spec):
+def session(device_idx, job, gost_spec, proxy_ip):
     port = 8765 + device_idx
     platform = job.get("platform","chatgpt").lower()
     prompt = job.get("prompt","")
@@ -180,7 +203,7 @@ def session(device_idx, job, gost_spec):
         "status": "success" if r.get("status")=="completed" and not r.get("error") else "error",
         "duration_s": dur, "proxy_status": "CONNECTED",
         "proxy_username": f"{PROXY_USER}-session-{gost_spec['sid']}-sessionduration-{DURATION}-country-us",
-        "proxy_host": MAC_IP, "proxy_port": gost_spec["port"],
+        "proxy_host": MAC_IP, "proxy_port": gost_spec["port"], "proxy_ip": proxy_ip or "none",
         "base_latitude": base_lat, "base_longitude": base_lng,
         "mocked_latitude": mlat, "mocked_longitude": mlng, "mocked_timezone": tz,
         "backlinks_expected": len(backlinks),
@@ -220,7 +243,7 @@ def main():
     fns = ["timestamp","date","wave_index","client_id","client_name","biz_name",
            "search_address","campaign_id","campaign_name","keyword","keyword_variant","prompt",
            "follow_up","has_follow_up","device_id","platform","status","duration_s",
-           "proxy_status","proxy_username","proxy_host","proxy_port",
+           "proxy_status","proxy_username","proxy_host","proxy_port","proxy_ip",
            "base_latitude","base_longitude","mocked_latitude","mocked_longitude",
            "mocked_timezone","backlinks_expected","backlink_injected",
            "backlink_found","backlink_url","failure_step","error"]
@@ -266,6 +289,11 @@ def main():
             specs.append({"port": BASE_GOST + i, "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us", "sid": sid})
         gost_proc, gost_cfg = gost_start(specs)
 
+        # Resolve per-port Decodo exit IPs via Mac-side curl through the gost
+        # SOCKS5 listener. One curl per port; ~1-2s each. Cheap, parallel with
+        # zero phone involvement. Stored for session() / tunnel_failed rows.
+        proxy_ips = [resolve_proxy_ip(BASE_GOST + i) for i in range(used)]
+
         # Connect proxy sequentially + mock location per device (ONLINE slots only)
         tunnel_ok = [False] * used
         for i in range(used):
@@ -288,7 +316,7 @@ def main():
         threads = [None] * used
         wr = [None] * used
         def run_one(di, job):
-            wr[di] = session(di, job, specs[di])
+            wr[di] = session(di, job, specs[di], proxy_ips[di])
         for i in range(used):
             if i < n:
                 if not slot_online[i]:
@@ -311,6 +339,7 @@ def main():
                         "device_id": DEVICES[i][0], "platform": j.get("platform","chatgpt").lower(),
                         "status": "error", "duration_s": 0, "proxy_status": "FAILED",
                         "proxy_username": "", "proxy_host": MAC_IP, "proxy_port": BASE_GOST + i,
+                        "proxy_ip": proxy_ips[i] or "none",
                         "base_latitude": j.get("biz_lat",0) or 0, "base_longitude": j.get("biz_lng",0) or 0,
                         "mocked_latitude": 0, "mocked_longitude": 0, "mocked_timezone": j.get("biz_timezone",""),
                         "backlinks_expected": len(j.get("backlinks",[])),

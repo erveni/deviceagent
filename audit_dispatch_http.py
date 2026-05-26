@@ -545,15 +545,24 @@ def dispatch_audit_job(
         # listener. Lightweight (~1-2s); does NOT touch the phone/Chrome CDP path
         # so it can't trigger the parallel-CDP hang that AEO_SKIP_PREFLIGHT guards
         # against. Best-effort — failure here doesn't block the audit.
+        # gost listener requires SOCKS5 auth (anon:anon by default in GostManager).
+        # The original code omitted credentials, so every preflight silently
+        # returned rc=97 "User was rejected by the SOCKS5 server" — that's why
+        # proxy_ip was "none" on every row.
         try:
-            resolved_ip = subprocess.run(
-                ["curl", "-s", "--max-time", "5", "--socks5", f"127.0.0.1:{gost_port}", "https://ifconfig.me"],
-                capture_output=True, text=True, timeout=8,
-            ).stdout.strip()
+            cp = subprocess.run(
+                ["curl", "-sS", "--max-time", "15", "--socks5",
+                 f"anon:anon@127.0.0.1:{gost_port}", "https://ifconfig.me"],
+                capture_output=True, text=True, timeout=18,
+            )
+            resolved_ip = cp.stdout.strip()
             if resolved_ip and len(resolved_ip) < 64:
                 _resolved_proxy_ip[serial] = resolved_ip
-        except Exception:
-            pass
+            else:
+                print(f"  [preflight-ip] {serial} gost:{gost_port} rc={cp.returncode} "
+                      f"stderr={cp.stderr.strip()[:120]!r} stdout={resolved_ip[:120]!r}", flush=True)
+        except Exception as e:
+            print(f"  [preflight-ip] {serial} gost:{gost_port} curl raised {type(e).__name__}: {e}", flush=True)
         # IP warmup — mimic wave's implicit settle time without curl probes.
         # Cold Decodo IPs benefit from a pure-sleep pause before HTTPS fires;
         # ports the rolling fix (run_rolling_test.py 2026-05-16) to audit. Zero
