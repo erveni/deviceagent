@@ -337,6 +337,9 @@ def _submit_daily_dispatch(job_record: dict, enriched: dict, ack_callback) -> No
                     device["proxy"]["host"] = row.get("proxy_host", "") or ""
                     device["proxy"]["port"] = int(row.get("proxy_port") or 0)
                     device["proxy"]["username"] = row.get("proxy_username", "") or ""
+                    # Decodo exit IP captured by the patched preflight; was being
+                    # silently dropped from the published payload before this fix.
+                    device["proxy"]["ip"] = row.get("proxy_ip", "") or ""
                 if isinstance(device.get("location"), dict):
                     device["location"]["latitude"] = float(row.get("mocked_latitude") or 0)
                     device["location"]["longitude"] = float(row.get("mocked_longitude") or 0)
@@ -411,6 +414,9 @@ def _submit_audit_dispatch(job_record: dict, platform: str, ack_callback) -> Non
                     device["proxy"]["host"] = row.get("proxy_host", "") or ""
                     device["proxy"]["port"] = int(row.get("proxy_port") or 0)
                     device["proxy"]["username"] = row.get("proxy_username", "") or ""
+                    # Decodo exit IP captured by the patched preflight; was being
+                    # silently dropped from the published payload before this fix.
+                    device["proxy"]["ip"] = row.get("proxy_ip", "") or ""
                 if isinstance(device.get("location"), dict):
                     device["location"]["latitude"] = float(row.get("mocked_latitude") or 0)
                     device["location"]["longitude"] = float(row.get("mocked_longitude") or 0)
