@@ -9,28 +9,46 @@ PLAN_PATH = sys.argv[1] if len(sys.argv) > 1 else "/Users/seolocalph/projects/ae
 
 GOST_BIN = os.environ.get("GOST_BIN", "/opt/homebrew/bin/gost")
 PROXY_HOST = os.environ.get("PROXY_HOST", "gate.decodo.com")
-PROXY_PORT = int(os.environ.get("PROXY_PORT", "10001"))
+PROXY_PORT = int(os.environ.get("PROXY_PORT", "7000"))   # Decodo mobile gateway (was 10001 for residential)
 PROXY_USER = os.environ.get("PROXY_USER", "")
 PROXY_PASS = os.environ.get("PROXY_PASS", "")
-DURATION = 30
+DURATION = int(os.environ.get("PROXY_DURATION", "60"))
+PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")  # e.g. asn-21928 (T-Mobile), asn-20057 (AT&T)
+WAVE_STAGGER_S = int(os.environ.get("WAVE_STAGGER_S", "0"))  # seconds between starting each phone's session; 0 = fire all at once (residential)
 BASE_GOST = 11001
 MAC_IP = "192.168.0.102"
 
 DEVICES = [
     ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
-    ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
+    ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
     ("device-106", "adb-149145555W006477-JjonPV (2)._adb-tls-connect._tcp"),
-    ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
-    ("device-108", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
+    ("device-107", "adb-149145555W006788-Vb9M0e._adb-tls-connect._tcp"),
+    ("device-108", "adb-1490455613010287-g9bnc8._adb-tls-connect._tcp"),
     ("device-109", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
-    ("device-110", "adb-149145555W006589-2W7yzb (2)._adb-tls-connect._tcp"),
+    ("device-110", "adb-149145555W006589-2W7yzb._adb-tls-connect._tcp"),
 ]
 
 def run(cmd, timeout=30):
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    """Subprocess wrapper that NEVER raises — a hung adb call must not kill the
+    whole wave. Returns a CompletedProcess-like object with returncode=124 on
+    timeout (matches GNU timeout's convention) so callers can detect failure."""
+    try:
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        print(f"  [run-timeout {timeout}s] {cmd[:120]}", flush=True)
+        class _R:
+            returncode = 124
+            stdout = e.stdout.decode("utf-8", "replace") if e.stdout else ""
+            stderr = e.stderr.decode("utf-8", "replace") if e.stderr else ""
+        return _R()
+    except Exception as e:
+        print(f"  [run-error] {type(e).__name__}: {e} cmd={cmd[:120]}", flush=True)
+        class _R:
+            returncode = 1; stdout = ""; stderr = str(e)
+        return _R()
 
 def get_online_serials():
     """Return set of currently-adb-reachable serials (state == 'device').
@@ -99,7 +117,7 @@ def resolve_proxy_ip(port):
     cold-tunnel handshakes."""
     try:
         cp = subprocess.run(
-            ["curl", "-sS", "--max-time", "15", "--socks5",
+            ["curl", "-sS", "--max-time", "15", "--socks5-hostname",
              f"anon:anon@127.0.0.1:{port}", "https://ifconfig.me"],
             capture_output=True, text=True, timeout=18,
         )
@@ -202,7 +220,7 @@ def session(device_idx, job, gost_spec, proxy_ip):
         "device_id": DEVICES[device_idx][0], "platform": platform,
         "status": "success" if r.get("status")=="completed" and not r.get("error") else "error",
         "duration_s": dur, "proxy_status": "CONNECTED",
-        "proxy_username": f"{PROXY_USER}-session-{gost_spec['sid']}-sessionduration-{DURATION}-country-us",
+        "proxy_username": gost_spec.get("upstream_user", ""),
         "proxy_host": MAC_IP, "proxy_port": gost_spec["port"], "proxy_ip": proxy_ip or "none",
         "base_latitude": base_lat, "base_longitude": base_lng,
         "mocked_latitude": mlat, "mocked_longitude": mlng, "mocked_timezone": tz,
@@ -219,6 +237,18 @@ def main():
     total = sum(len(w) for w in waves)
     out = os.path.splitext(PLAN_PATH)[0] + "_results.csv"
     start_wave = plan.get("start_wave", 1)
+
+    # Startup banner — what's actually being run. Makes the log auditable.
+    print("=" * 70, flush=True)
+    print(f"  plan:           {PLAN_PATH}", flush=True)
+    print(f"  total jobs:     {total}  ({len(waves)} waves, {nd} devices)", flush=True)
+    print(f"  proxy host:     {PROXY_HOST}:{PROXY_PORT}", flush=True)
+    print(f"  proxy user:     {PROXY_USER}", flush=True)
+    print(f"  proxy target:   {PROXY_TARGET}", flush=True)
+    print(f"  session dur:    {DURATION} min", flush=True)
+    print(f"  wave stagger:   {WAVE_STAGGER_S}s between phones", flush=True)
+    print(f"  output csv:     {out}", flush=True)
+    print("=" * 70, flush=True)
 
     # Port forwards once
     run("adb forward --remove-all")
@@ -285,8 +315,8 @@ def main():
         # One gost with N ports for this wave (allocate for all slots; unused ports are harmless)
         specs = []
         for i in range(used):
-            sid = rsid()
-            specs.append({"port": BASE_GOST + i, "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us", "sid": sid})
+            sid = f"phone{i:02d}"
+            specs.append({"port": BASE_GOST + i, "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-{PROXY_TARGET}", "sid": sid})
         gost_proc, gost_cfg = gost_start(specs)
 
         # Resolve per-port Decodo exit IPs via Mac-side curl through the gost
@@ -294,36 +324,77 @@ def main():
         # zero phone involvement. Stored for session() / tunnel_failed rows.
         proxy_ips = [resolve_proxy_ip(BASE_GOST + i) for i in range(used)]
 
-        # Connect proxy sequentially + mock location per device (ONLINE slots only)
+        # Connect proxy + mock location PER DEVICE IN PARALLEL.
+        # Sequential 10x ~5-8s = 50-80s of dead time per wave; parallel is ~10s.
+        # All ADB calls are wrapped by run() so timeouts never escape this loop.
         tunnel_ok = [False] * used
-        for i in range(used):
+
+        def _setup_one(i):
             if not slot_online[i]:
-                continue  # don't waste 60s wait_tunnel on offline phone
+                return  # skip offline phone
             _, ser = DEVICES[i]
-            socksdroid_connect(ser, BASE_GOST + i)
+            try:
+                socksdroid_connect(ser, BASE_GOST + i)
+            except Exception as e:
+                print(f"  [setup-err i={i}] socksdroid_connect: {e}", flush=True)
+                return
             time.sleep(3)  # let VPN stabilize before checking
-            tunnel_ok[i] = wait_tunnel(ser)
+            try:
+                tunnel_ok[i] = wait_tunnel(ser)
+            except Exception as e:
+                print(f"  [setup-err i={i}] wait_tunnel: {e}", flush=True)
+                tunnel_ok[i] = False
+                return
             if tunnel_ok[i] and i < n:
                 job = wave[i]
                 bl, bln = job.get("biz_lat", 0) or 0, job.get("biz_lng", 0) or 0
                 if bl and bln:
                     ml, mln = randomize_location(bl, bln)
-                    mock_location(ser, ml, mln)
+                    try: mock_location(ser, ml, mln)
+                    except Exception as e: print(f"  [setup-warn i={i}] mock_location: {e}", flush=True)
                 tz = job.get("biz_timezone", "")
-                if tz: set_timezone(ser, tz)
+                if tz:
+                    try: set_timezone(ser, tz)
+                    except Exception as e: print(f"  [setup-warn i={i}] set_timezone: {e}", flush=True)
+
+        setup_threads = [threading.Thread(target=_setup_one, args=(i,)) for i in range(used)]
+        for t in setup_threads: t.start()
+        for t in setup_threads: t.join()
+
+        # IP warmup. Parallelization saves ~45s of setup time per wave but also
+        # eliminates the implicit IP-warmup window the sequential setup gave (the
+        # first phone got 50s of idle time while other phones set up; with parallel
+        # setup, the first phone fires its job ~5s after socksdroid_connect, which
+        # is too early — Decodo IP isn't fully stabilised, page load is slow, and
+        # input automation fires before the page is ready → "input failed" race).
+        # 45s replicates the original sequential timing within ~10s.
+        time.sleep(45)
 
         # Run jobs in parallel (only for ONLINE devices with working tunnel)
         threads = [None] * used
         wr = [None] * used
+        print_lock = threading.Lock()
         def run_one(di, job):
             wr[di] = session(di, job, specs[di], proxy_ips[di])
+            # Live per-thread print so we see results IN ORDER OF COMPLETION,
+            # not blocked behind a slow earlier-indexed thread.
+            r = wr[di]
+            if r:
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                fail = r.get("failure_step") or ""
+                with print_lock:
+                    print(f"  [{ts}] wave={wn} {r['device_id']} {r['platform']:11s} {r['status']:8s} dur={r['duration_s']}s ip={r.get('proxy_ip','-')[:18]:18s} step={fail[:25]}", flush=True)
+        first_started = False
         for i in range(used):
             if i < n:
                 if not slot_online[i]:
                     continue  # already deferred above
                 if tunnel_ok[i]:
+                    if first_started and WAVE_STAGGER_S > 0:
+                        time.sleep(WAVE_STAGGER_S)
                     t = threading.Thread(target=run_one, args=(i, wave[i]))
                     t.start(); threads[i] = t
+                    first_started = True
                 else:
                     # Tunnel failed even though phone is online — create error result
                     j = wave[i]
@@ -363,7 +434,7 @@ def main():
                 elapsed = time.time() - t0
                 rate = len(results) / elapsed if elapsed > 0 else 0
                 eta = int((grand_total - len(results)) / rate / 60) if rate > 0 else 0
-                print(f"[{len(results)}/{grand_total}] {r['device_id']} {r['platform']} {r['status']} bk={r['backlink_found']} | ok={ok_cnt} fail={len(results)-ok_cnt} bk_total={bk_cnt} | {r['duration_s']}s | ETA ~{eta}min")
+                print(f"[{len(results)}/{grand_total}] {r['device_id']} {r['platform']} {r['status']} bk={r['backlink_found']} | ok={ok_cnt} fail={len(results)-ok_cnt} bk_total={bk_cnt} | {r['duration_s']}s | ETA ~{eta}min", flush=True)
 
         # done counts only slots we actually attempted (online slots);
         # deferred jobs will be counted when their repack-wave runs
