@@ -15,6 +15,11 @@ PROXY_PASS = os.environ.get("PROXY_PASS", "")
 DURATION = int(os.environ.get("PROXY_DURATION", "60"))
 PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")  # e.g. asn-21928 (T-Mobile), asn-20057 (AT&T)
 WAVE_STAGGER_S = int(os.environ.get("WAVE_STAGGER_S", "0"))  # seconds between starting each phone's session; 0 = fire all at once (residential)
+# Auto-retry transient errors with a fresh Decodo session — mirrors
+# audit_dispatch_http.py:587-643 + device_dispatch.py:217. Most 'input failed'
+# bursts clear on a second IP per the audit author's empirical claim.
+RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout")
+RETRY_MAX_ROUNDS = int(os.environ.get("RETRY_MAX_ROUNDS", "1"))
 BASE_GOST = 11001
 MAC_IP = "192.168.0.102"
 
@@ -247,6 +252,7 @@ def main():
     print(f"  proxy target:   {PROXY_TARGET}", flush=True)
     print(f"  session dur:    {DURATION} min", flush=True)
     print(f"  wave stagger:   {WAVE_STAGGER_S}s between phones", flush=True)
+    print(f"  retry rounds:   {RETRY_MAX_ROUNDS}  (triggers: {', '.join(RETRY_TRIGGERS)})", flush=True)
     print(f"  output csv:     {out}", flush=True)
     print("=" * 70, flush=True)
 
@@ -288,6 +294,8 @@ def main():
     deferred = []
     deferred_rounds = 0
     MAX_DEFERRED_ROUNDS = 3
+    retry_jobs = []        # transient errors queued for retry with fresh Decodo session
+    retry_rounds = 0
     WAVE_SLOTS = nd
     wi = 0
     while wi < len(wave_queue):
@@ -435,6 +443,16 @@ def main():
                 rate = len(results) / elapsed if elapsed > 0 else 0
                 eta = int((grand_total - len(results)) / rate / 60) if rate > 0 else 0
                 print(f"[{len(results)}/{grand_total}] {r['device_id']} {r['platform']} {r['status']} bk={r['backlink_found']} | ok={ok_cnt} fail={len(results)-ok_cnt} bk_total={bk_cnt} | {r['duration_s']}s | ETA ~{eta}min", flush=True)
+                # Queue transient errors for retry with a fresh Decodo session
+                # (mirrors device_dispatch.py:217 retry trigger logic).
+                if r.get("status") == "error":
+                    err = (r.get("failure_step") or r.get("error") or "").lower()
+                    j = wave[i]
+                    cur_round = int(j.get("_retry_round", 0))
+                    if cur_round < RETRY_MAX_ROUNDS and any(t in err for t in RETRY_TRIGGERS):
+                        retry_j = dict(j); retry_j["_retry_round"] = cur_round + 1
+                        retry_jobs.append(retry_j)
+                        print(f"  [retry-queue] {r['device_id']} {r['platform']} err='{err[:40]}' → retry round {cur_round+1}", flush=True)
 
         # done counts only slots we actually attempted (online slots);
         # deferred jobs will be counted when their repack-wave runs
@@ -503,6 +521,32 @@ def main():
                 total += sum(len(w) for w in extra_waves)
                 grand_total += sum(len(w) for w in extra_waves)
                 print(f"[deferred] appended {len(extra_waves)} extra waves ({sum(len(w) for w in extra_waves)} jobs)")
+
+        # Retry repack — same shape as deferred. Triggers only after preplanned
+        # + deferred waves are exhausted, and only up to RETRY_MAX_ROUNDS times.
+        if wi >= len(wave_queue) and retry_jobs and retry_rounds < RETRY_MAX_ROUNDS:
+            retry_rounds += 1
+            print(f"\n[retry round {retry_rounds}/{RETRY_MAX_ROUNDS}] {len(retry_jobs)} jobs from transient errors — repacking into extra waves", flush=True)
+            random.shuffle(retry_jobs)
+            extra_waves = []
+            rem = list(retry_jobs)
+            retry_jobs = []
+            while rem:
+                w_pack = []
+                used_c, used_camp = set(), set()
+                leftover = []
+                for j in rem:
+                    if len(w_pack) >= WAVE_SLOTS: leftover.append(j); continue
+                    if j["client_id"] in used_c or j["campaign_id"] in used_camp:
+                        leftover.append(j); continue
+                    w_pack.append(j); used_c.add(j["client_id"]); used_camp.add(j["campaign_id"])
+                if not w_pack:
+                    w_pack = leftover[:WAVE_SLOTS]; leftover = leftover[WAVE_SLOTS:]
+                extra_waves.append(w_pack); rem = leftover
+            wave_queue.extend(extra_waves)
+            total += sum(len(w) for w in extra_waves)
+            grand_total += sum(len(w) for w in extra_waves)
+            print(f"[retry] appended {len(extra_waves)} retry waves ({sum(len(w) for w in extra_waves)} jobs)", flush=True)
 
     elapsed = time.time() - t0
     print(f"\nDone. {len(results)} jobs | OK:{ok_cnt} Fail:{len(results)-ok_cnt} Bk:{bk_cnt} | {elapsed/60:.0f}min | {out}")
