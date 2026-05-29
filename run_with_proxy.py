@@ -22,12 +22,23 @@ RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation t
 RETRY_MAX_ROUNDS = int(os.environ.get("RETRY_MAX_ROUNDS", "1"))
 BASE_GOST = 11001
 MAC_IP = "192.168.0.102"
+# SNI-rewriting relay (sni_relay.py). SocksDroid (tun2socks) can only IP-CONNECT,
+# which mobile Decodo rejects. The relay sits in front of gost, recovers the
+# hostname from the TLS SNI, and re-dials gost->Decodo by hostname. The phone
+# still connects to BASE_GOST+i (now the RELAY); gost is shifted up by
+# GOST_PORT_OFFSET and only the relay talks to it. See sni_relay.py.
+USE_SNI_RELAY = os.environ.get("USE_SNI_RELAY", "1") == "1"
+GOST_PORT_OFFSET = int(os.environ.get("GOST_PORT_OFFSET", "100"))
+RELAY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sni_relay.py")
+RELAY_PY = os.environ.get("RELAY_PY", sys.executable)
+_relays_by_cfg = {}              # gost cfg path -> [relay Popen, ...]
+_relays_lock = threading.Lock()
 
 DEVICES = [
     ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
-    ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
+    ("device-104", "adb-149145555W002883-aGtZ5h._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
     ("device-106", "adb-149145555W006477-JjonPV (2)._adb-tls-connect._tcp"),
     ("device-107", "adb-149145555W006788-Vb9M0e._adb-tls-connect._tcp"),
@@ -87,10 +98,20 @@ def randomize_location(lat, lng, r=5.0):
     d = random.uniform(0, 1)**0.5
     return (round(lat+d*rd_lat*math.sin(a),6), round(lng+d*rd_lng*math.cos(a),6))
 
+def _gost_listen_port(phone_port):
+    """gost's own listener port. With the relay on, gost is shifted up so the
+    phone-facing port (phone_port) belongs to the relay instead."""
+    return phone_port + GOST_PORT_OFFSET if USE_SNI_RELAY else phone_port
+
+def _relay_start(listen_port, gost_port):
+    log = f"/tmp/sni_relay_{listen_port}.log"
+    return subprocess.Popen([RELAY_PY, "-u", RELAY_SCRIPT, str(listen_port), str(gost_port)],
+                            stdout=open(log, "a"), stderr=subprocess.STDOUT)
+
 def gost_start(specs):
     lines = ["services:"]
     for i, s in enumerate(specs):
-        lines += [f'  - name: s{i}', f'    addr: ":{s["port"]}"',
+        lines += [f'  - name: s{i}', f'    addr: ":{_gost_listen_port(s["port"])}"',
                   f'    handler: {{type: socks5, chain: c{i}, auth: {{username: anon, password: anon}}}}',
                   f'    listener: {{type: tcp}}']
     lines.append("chains:")
@@ -102,12 +123,30 @@ def gost_start(specs):
     cfg = f"/tmp/gost_{os.getpid()}_{specs[0]['port']}.yaml"
     with open(cfg, "w") as f: f.write("\n".join(lines)+"\n")
     proc = subprocess.Popen([GOST_BIN, "-C", cfg, "-D"], stdout=open(cfg+".log","w"), stderr=subprocess.STDOUT)
+    # Start one relay per slot (phone_port -> gost listener). Both warm up
+    # during the same 2s window gost needs to bind + chain to Decodo.
+    relays = []
+    if USE_SNI_RELAY:
+        relays = [_relay_start(s["port"], _gost_listen_port(s["port"])) for s in specs]
     time.sleep(2)
     if proc.poll() is not None: raise RuntimeError(f"gost died: {cfg}.log")
+    for r in relays:
+        if r.poll() is not None:
+            raise RuntimeError("sni_relay died — see /tmp/sni_relay_*.log")
+    if relays:
+        with _relays_lock:
+            _relays_by_cfg[cfg] = relays
     return proc, cfg
 
 def gost_stop(proc, cfg):
     if proc and proc.poll() is None: proc.terminate(); proc.wait(timeout=5)
+    with _relays_lock:
+        relays = _relays_by_cfg.pop(cfg, [])
+    for r in relays:
+        if r and r.poll() is None:
+            r.terminate()
+            try: r.wait(timeout=5)
+            except Exception: pass
     for p in (cfg, cfg+".log"):
         try: os.unlink(p)
         except: pass
@@ -119,11 +158,13 @@ def resolve_proxy_ip(port):
     phone tunnel being up. Listener requires anon:anon SOCKS5 auth (gost
     YAML), which the historical preflight in audit_dispatch_http.py omitted —
     that's why proxy_ip was "none" on every audit row. 15s budget covers
-    cold-tunnel handshakes."""
+    cold-tunnel handshakes. Probes gost directly (not the relay) — it's a
+    Mac-side hostname-CONNECT check that doesn't depend on the phone path."""
+    probe_port = _gost_listen_port(port)
     try:
         cp = subprocess.run(
             ["curl", "-sS", "--max-time", "15", "--socks5-hostname",
-             f"anon:anon@127.0.0.1:{port}", "https://ifconfig.me"],
+             f"anon:anon@127.0.0.1:{probe_port}", "https://ifconfig.me"],
             capture_output=True, text=True, timeout=18,
         )
         ip = cp.stdout.strip()

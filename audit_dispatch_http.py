@@ -40,7 +40,10 @@ from typing import Any
 
 from pathlib import Path
 
-from run_with_proxy import DEVICES, socksdroid_connect, socksdroid_disconnect, mock_location, set_timezone
+from run_with_proxy import (
+    DEVICES, socksdroid_connect, socksdroid_disconnect, mock_location, set_timezone,
+    USE_SNI_RELAY, _relay_start,
+)
 from device_dispatch import POOL
 
 # Decodo zip-coverage cache — written by /tmp/probe_problem_zips.py and
@@ -542,6 +545,19 @@ def dispatch_audit_job(
     )
     gost.start(wait_seconds=2.0)
 
+    # SNI relay: the phone connects to the relay (gost_port+1), which recovers
+    # the TLS SNI and re-dials gost BY HOSTNAME — required for mobile Decodo,
+    # which rejects the phone's raw IP-CONNECT. gost stays on gost_port for the
+    # Mac-side preflight curl. gost_port+1 is free (_GOST_PORTS steps by 2). The
+    # relay forwards to the stable gost_port, so the retry's gost restart is
+    # transparent — start once here, stop once in finally.
+    relay_proc = None
+    phone_port = gost_port
+    if USE_SNI_RELAY:
+        phone_port = gost_port + 1
+        relay_proc = _relay_start(phone_port, gost_port)
+        time.sleep(1)
+
     http_port = _http_port_for_serial(serial)
     started = datetime.now(timezone.utc)
     forward_set = False
@@ -549,7 +565,7 @@ def dispatch_audit_job(
     def _setup_and_post() -> dict:
         """Bring socksdroid + GPS + forwarding online then POST the audit.
         Returns the parsed HTTP response. Caller decides whether to retry."""
-        socksdroid_connect(serial, gost_port)
+        socksdroid_connect(serial, phone_port)
         time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
         if not _wait_tunnel(serial):
             raise RuntimeError("socksdroid tun0 never came up")
@@ -563,7 +579,10 @@ def dispatch_audit_job(
         # proxy_ip was "none" on every row.
         try:
             cp = subprocess.run(
-                ["curl", "-sS", "--max-time", "15", "--socks5",
+                # --socks5-hostname (remote DNS): mobile Decodo rejects the
+                # IP-CONNECT that plain --socks5 (local resolve) produces, so the
+                # preflight always returned rc=97. Matches run_with_proxy.resolve_proxy_ip.
+                ["curl", "-sS", "--max-time", "15", "--socks5-hostname",
                  f"anon:anon@127.0.0.1:{gost_port}", "https://ifconfig.me"],
                 capture_output=True, text=True, timeout=18,
             )
@@ -761,6 +780,11 @@ def dispatch_audit_job(
             gost.stop()
         except Exception:
             pass
+        if relay_proc is not None and relay_proc.poll() is None:
+            try:
+                relay_proc.terminate(); relay_proc.wait(timeout=5)
+            except Exception:
+                pass
         _release_gost_port(gost_port)
         POOL.release(device_idx)
 

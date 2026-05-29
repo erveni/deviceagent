@@ -84,6 +84,11 @@ class DevicePool:
         self._busy = [False] * len(DEVICES)
         self._cond = threading.Condition()
         self._forwarded = False
+        # Round-robin starting offset for acquire() — spreads load across all
+        # phones instead of always picking the lowest idle index. Each
+        # successful acquire advances this so subsequent calls start their
+        # search from a different point.
+        self._rr_offset = 0
 
     def setup_forwards(self) -> None:
         with self._cond:
@@ -99,13 +104,19 @@ class DevicePool:
         currently adb-reachable. An offline phone is skipped — its slot
         won't be handed out until adb sees it again."""
         from run_with_proxy import get_online_serials
+        n = len(DEVICES)
         with self._cond:
             deadline = time.time() + timeout if timeout else None
             while True:
                 online = get_online_serials()
-                for i, busy in enumerate(self._busy):
-                    if not busy and DEVICES[i][1] in online:
+                # Round-robin: start scanning from _rr_offset so consecutive
+                # acquires cycle through all phones (e.g. pick 0,1,2,3,...)
+                # instead of repeatedly hitting phones 0,1,2 while 3-9 idle.
+                for k in range(n):
+                    i = (self._rr_offset + k) % n
+                    if not self._busy[i] and DEVICES[i][1] in online:
                         self._busy[i] = True
+                        self._rr_offset = (i + 1) % n
                         return i
                 if deadline is not None:
                     remaining = deadline - time.time()
