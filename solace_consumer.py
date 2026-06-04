@@ -159,6 +159,9 @@ RESULTS_TOPIC = "local.client.business.campaign.keyword.jobs"
 ADMIN_BASE = os.environ.get("ADMIN_BASE", "https://jjm59vpn3y.us-east-1.awsapprunner.com")
 EXECUTOR_TOKEN = os.environ.get("EXECUTOR_TOKEN", "")
 BUILD_SESSION_URL = f"{ADMIN_BASE}/api/llm/build-session"
+# Rotation enforcement: locked/inactive keywords must NOT be ranked. The endpoint
+# returns {keywordId, skip, reason?}; skip=true => publish COMPLETED + ack, no dispatch.
+RANK_ELIGIBILITY_URL = f"{ADMIN_BASE}/api/llm/keyword/{{}}/rank-eligibility"
 HTTP_TIMEOUT = 30
 
 PLATFORMS = ("chatgpt", "gemini", "perplexity")
@@ -259,6 +262,36 @@ def call_build_session(keyword_id: int, platform: str) -> dict:
             if attempt == len(backoffs):
                 raise
             print(f"  [retry] build-session URLError ({e.reason}); sleeping {backoffs[attempt]}s (attempt {attempt+1}/{len(backoffs)+1})", flush=True)
+            time.sleep(backoffs[attempt])
+    raise AssertionError("unreachable")
+
+
+def call_rank_eligibility(keyword_id: int) -> dict:
+    """GET rank-eligibility for a keyword. Returns {keywordId, skip, reason?}.
+
+    Ranking/audit jobs never call build-session, so this is the rotation
+    enforcement hook for the audit path: a locked/inactive keyword returns
+    skip=true and must not be dispatched. Mirrors call_build_session's urllib +
+    token + retry/timeout style; transient URLError retried, HTTPError re-raised.
+    """
+    req = urllib.request.Request(
+        RANK_ELIGIBILITY_URL.format(keyword_id),
+        method="GET",
+        headers={
+            "X-Executor-Token": EXECUTOR_TOKEN,
+        },
+    )
+    backoffs = [2, 4, 8]
+    for attempt in range(len(backoffs) + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except urllib.error.URLError as e:
+            if attempt == len(backoffs):
+                raise
+            print(f"  [retry] rank-eligibility URLError ({e.reason}); sleeping {backoffs[attempt]}s (attempt {attempt+1}/{len(backoffs)+1})", flush=True)
             time.sleep(backoffs[attempt])
     raise AssertionError("unreachable")
 
@@ -635,6 +668,14 @@ def _handle_daily(job: dict, keyword_id: int, platform: str, ack_callback) -> No
         ack_callback()
         return
 
+    # Rotation enforcement: a locked/inactive keyword must NOT be dispatched.
+    # COMPLETED (not FAILED) avoids orchestrator retry storms on a permanent skip.
+    if enriched.get("skip"):
+        print(f"  [skip lock] kid={keyword_id} reason={enriched.get('reason')}", flush=True)
+        publish_result(job, "COMPLETED")
+        ack_callback()
+        return
+
     _log_enriched(enriched)
 
     if DISPATCH_ENABLED:
@@ -663,8 +704,29 @@ def _handle_audit(job: dict, platform: str, ack_callback) -> None:
     # Orchestrator nests keyword under detail.keyword; dummies use top-level keyword.
     keyword_obj = job.get("keyword") or (job.get("detail") or {}).get("keyword") or {}
     keyword_name = keyword_obj.get("name", "?")
+    keyword_id = keyword_obj.get("id")
 
     print(f"  audit: biz='{biz_name}' kw='{keyword_name}' loc={city},{state} url={biz_url or '<none>'}", flush=True)
+
+    # Rotation enforcement: ranking jobs don't hit build-session, so check
+    # eligibility directly. A locked/inactive keyword must NOT be ranked —
+    # publish COMPLETED + ack without dispatching (COMPLETED avoids retry storms).
+    # No id means dummy/legacy payload — proceed as today (no check).
+    if keyword_id is not None:
+        try:
+            eligibility = call_rank_eligibility(keyword_id)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")[:300]
+            print(f"  [err] rank-eligibility HTTP {e.code}: {body}", flush=True)
+            eligibility = None
+        except Exception as e:
+            print(f"  [err] rank-eligibility call failed: {e}", flush=True)
+            eligibility = None
+        if eligibility is not None and eligibility.get("skip"):
+            print(f"  [skip lock] kid={keyword_id} reason={eligibility.get('reason')}", flush=True)
+            publish_result(job, "COMPLETED")
+            ack_callback()
+            return
 
     if not biz_name or not biz_url or not city or not state:
         print(f"  [warn] audit missing required fields (bizName/bizUrl/city/state) — phone will reject", flush=True)
