@@ -39,13 +39,30 @@ DEVICES = [
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h._adb-tls-connect._tcp"),
-    ("device-105", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
-    ("device-106", "adb-149145555W006477-JjonPV (2)._adb-tls-connect._tcp"),
+    ("device-105", "adb-149145555W005208-27c1FH._adb-tls-connect._tcp"),
+    ("device-106", "adb-149145555W006477-JjonPV._adb-tls-connect._tcp"),
     ("device-107", "adb-149145555W006788-Vb9M0e._adb-tls-connect._tcp"),
     ("device-108", "adb-1490455613010287-g9bnc8._adb-tls-connect._tcp"),
     ("device-109", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
     ("device-110", "adb-149145555W006589-2W7yzb._adb-tls-connect._tcp"),
+    ("device-111", "adb-129143748T010173-6zhzYl._adb-tls-connect._tcp"),
+    ("device-112", "adb-129143748T079638-YjN1XH._adb-tls-connect._tcp"),
+    ("device-113", "adb-129143749A011759-fEoBDp._adb-tls-connect._tcp"),
+    ("device-114", "adb-1490455572007706-HQWNyz._adb-tls-connect._tcp"),
+    ("device-115", "adb-R83L103VCVH-uvv2pp._adb-tls-connect._tcp"),
 ]
+
+# ONLY_ONLINE=1 prunes DEVICES to phones currently reporting `device` in
+# `adb devices`, so a run skips offline phones instead of failing their jobs
+# with device_pool_timeout. Runs at import time, before DevicePool sizes itself.
+if os.environ.get("ONLY_ONLINE") == "1":
+    _out = subprocess.run("adb devices", shell=True, capture_output=True, text=True).stdout
+    _online = {l.split()[0] for l in _out.splitlines()[1:]
+               if l.strip() and l.split()[-1] == "device"}
+    _before = len(DEVICES)
+    DEVICES = [(n, s) for n, s in DEVICES if s in _online]
+    print(f"[ONLY_ONLINE] {len(DEVICES)}/{_before} phones online: "
+          f"{', '.join(n for n, _ in DEVICES)}", flush=True)
 
 def run(cmd, timeout=30):
     """Subprocess wrapper that NEVER raises — a hung adb call must not kill the

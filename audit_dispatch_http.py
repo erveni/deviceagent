@@ -85,6 +85,33 @@ _STATE_GOOD_ZIP: dict[str, str] = {
 }
 _FALLBACK_GOOD_ZIP = "10001"  # used when state has no entry above
 
+# State values arrive as either 2-letter codes ("AZ") or full names ("Arizona").
+# _STATE_GOOD_ZIP is keyed by 2-letter codes, so normalize before lookups —
+# otherwise "Arizona" misses and silently falls back to NY 10001 (wrong geo).
+_US_STATE_ABBR = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+    "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+}
+
+
+def _norm_state(state: str) -> str:
+    """Normalize a state value to its 2-letter USPS code. Accepts 'AZ' or 'Arizona'."""
+    s = (state or "").strip()
+    if len(s) == 2:
+        return s.upper()
+    return _US_STATE_ABBR.get(s.lower(), s.upper())
+
 # Client zips observed to fail end-to-end audits even when probe says supported.
 # These get routed to their state's known-good zip via _resolve_zip below.
 _BROKEN_ZIP_OVERRIDE: set[str] = {
@@ -110,11 +137,11 @@ def _resolve_zip(assigned_zip: str, state: str = "") -> tuple[str, str]:
     """
     if not assigned_zip:
         # Empty zip — go straight to state's known-good
-        good = _STATE_GOOD_ZIP.get(state.upper(), _FALLBACK_GOOD_ZIP)
+        good = _STATE_GOOD_ZIP.get(_norm_state(state), _FALLBACK_GOOD_ZIP)
         return good, f"empty_zip_to_{state}_known_good_{good}"
 
     if assigned_zip in _BROKEN_ZIP_OVERRIDE:
-        good = _STATE_GOOD_ZIP.get(state.upper(), _FALLBACK_GOOD_ZIP)
+        good = _STATE_GOOD_ZIP.get(_norm_state(state), _FALLBACK_GOOD_ZIP)
         return good, f"override_{state}_to_{good}"
 
     info = _ZIP_CACHE.get(assigned_zip)
@@ -124,7 +151,7 @@ def _resolve_zip(assigned_zip: str, state: str = "") -> tuple[str, str]:
     if info.get("supported") is False:
         if nearest and nearest != assigned_zip:
             return nearest, f"fallback_to_{nearest}"
-        good = _STATE_GOOD_ZIP.get(state.upper(), _FALLBACK_GOOD_ZIP)
+        good = _STATE_GOOD_ZIP.get(_norm_state(state), _FALLBACK_GOOD_ZIP)
         return good, f"unsupported_{state}_to_{good}"
     return assigned_zip, "cached_ok"
 
@@ -468,6 +495,7 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
         "biz_url": biz_url,
         "city": address.get("city", ""),
         "state": address.get("stateCode") or address.get("state") or "",
+        "zip": address.get("zipCode") or address.get("zip") or "",
         "keyword": keyword.get("name", ""),
         "mode": (job_record.get("type") or "RANKING").lower(),
         "targetDate": job_record.get("targetDate", ""),
@@ -518,7 +546,11 @@ def dispatch_audit_job(
             "city": job.get("city", ""),
             "state": job.get("state", ""),
             "keywords": [{"keyword_id": int(keyword_id), "keyword": job.get("keyword", "")}],
-            "proxy": {"zip": "", "country": "us", "session_duration": 30},
+            # Use the JobRecord's parsed zip (from the business address) instead of
+            # defaulting to NY 10001 — otherwise non-catalog businesses get audited
+            # from the wrong geo and their ranks are meaningless. Empty zip still
+            # falls back via _resolve_zip(state) below.
+            "proxy": {"zip": job.get("zip", ""), "country": "us", "session_duration": 30},
         }
 
     # Start gost
@@ -527,19 +559,30 @@ def dispatch_audit_job(
     gost_port = _acquire_gost_port()
     assigned_zip = (entry.get("proxy") or {}).get("zip") or "10001"
     state_code = entry.get("state", "")
-    # Resolve zip: broken zips → state's known-good (distributes load, keeps
-    # same-state geo). See _resolve_zip for full precedence.
-    biz_zip, zip_note = _resolve_zip(assigned_zip, state_code)
-    if biz_zip != assigned_zip:
-        print(
-            f"  [zip-cache] assigned={assigned_zip} → using={biz_zip or '(region-only)'}"
-            f" ({zip_note})",
-            flush=True,
-        )
+    # Canadian businesses (province code, not US state) must target country-ca —
+    # US zip resolution would map them to a NYC fallback IP and the rank would be
+    # meaningless. Use country-only CA (no US zip).
+    _CA_PROVINCES = {"ON", "QC", "BC", "AB", "MB", "SK", "NS", "NB", "NL", "PE",
+                     "NT", "YT", "NU"}
+    if state_code.upper() in _CA_PROVINCES:
+        country = "ca"
+        biz_zip = ""
+        print(f"  [geo] {state_code} is Canadian → country-ca (no US zip)", flush=True)
+    else:
+        country = "us"
+        # Resolve zip: broken zips → state's known-good (distributes load, keeps
+        # same-state geo). See _resolve_zip for full precedence.
+        biz_zip, zip_note = _resolve_zip(assigned_zip, state_code)
+        if biz_zip != assigned_zip:
+            print(
+                f"  [zip-cache] assigned={assigned_zip} → using={biz_zip or '(region-only)'}"
+                f" ({zip_note})",
+                flush=True,
+            )
     gost = GostManager(
         [{
             "device_id": gost_key, "zip": biz_zip, "state": state_code,
-            "country": "us", "session_duration": 30,
+            "country": country, "session_duration": 30,
         }],
         base_port=gost_port,
     )
@@ -654,7 +697,9 @@ def dispatch_audit_job(
             # gives a different exit IP within the same metro area instead of
             # repeating the same broken zip or dropping to a too-broad state
             # pool. _STATE_GOOD_ZIP map is empirically validated.
-            retry_zip = _STATE_GOOD_ZIP.get(state_code.upper(), _FALLBACK_GOOD_ZIP)
+            # Covered state → its known-good zip; uncovered state → KEEP the
+            # business's real zip (better local geo than dropping to NY 10001).
+            retry_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
             print(
                 f"  [retry] {reason} — dropping zip={biz_zip or '(none)'} → "
                 f"state={state_code} only, rotating Decodo session",

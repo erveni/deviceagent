@@ -22,10 +22,24 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
 from datetime import datetime, timezone
+
+# Match ", XX 12345" or ", XX 12345-6789" near the end of a US address.
+_STATE_RE = re.compile(r',\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?')
+
+
+def _parse_state(addr: str) -> str | None:
+    """Extract 2-letter US state code from a biz_address like
+    '1010 South Gilbert Road, Chandler, AZ 85286-5169, USA'. Returns None if
+    the address lacks a parseable 'STATE ZIP' tail."""
+    if not addr:
+        return None
+    m = _STATE_RE.search(addr)
+    return m.group(1) if m else None
 
 from device_dispatch import (
     DEVICES, BASE_GOST, PROXY_USER, TUNNEL_SETTLE_S, RETRY_TRIGGERS,
@@ -48,6 +62,7 @@ def normalize_plan_job(j: dict) -> dict:
     return {
         "keyword_text": j.get("keyword_text") or j.get("keyword") or "",
         "keyword_variant": j.get("keyword_variant") or j.get("keyword_text") or "",
+        "variant_id": j.get("variant_id"),
         "platform": (j.get("platform") or "chatgpt").lower(),
         "prompt": j.get("prompt", ""),
         "follow_up": j.get("follow_up", "") or "",
@@ -105,8 +120,16 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
             err = (row.get("error") or "").lower()
             if ROLLING_RETRY and row.get("status") == "error" and any(t in err for t in RETRY_TRIGGERS):
                 reason = next(t for t in RETRY_TRIGGERS if t in err).replace(" ", "_")
+                # Zip-aware retry (mirrors device_dispatch.py b758d1b): instead of
+                # repeating country-only US (which gave us the burned IP), target the
+                # state's empirically-validated good Decodo zip. State parsed from
+                # biz_address; NYC 10001 fallback if no parseable 'STATE ZIP' tail.
+                from audit_dispatch_http import _STATE_GOOD_ZIP, _FALLBACK_GOOD_ZIP
+                state = _parse_state(job.get("biz_address", ""))
+                retry_zip = _STATE_GOOD_ZIP.get(state.upper(), _FALLBACK_GOOD_ZIP) if state else _FALLBACK_GOOD_ZIP
                 print(
-                    f"  [retry] {reason} on {device_id} — rotating Decodo session",
+                    f"  [retry] {reason} on {device_id} — rotating Decodo session, "
+                    f"state={state or '?'} zip={retry_zip}",
                     flush=True,
                 )
                 gost_stop(gost_proc, gost_cfg)
@@ -117,7 +140,14 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
                     pass
                 time.sleep(2)
                 sid = rsid()
-                spec = _build_spec(device_idx, sid)
+                spec = {
+                    "port": BASE_GOST + device_idx,
+                    "upstream_user": (
+                        f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}"
+                        f"-country-us-zip-{retry_zip}"
+                    ),
+                    "sid": sid,
+                }
                 gost_proc, gost_cfg = gost_start([spec])
                 socksdroid_connect(serial, spec["port"])
                 time.sleep(TUNNEL_SETTLE_S)
