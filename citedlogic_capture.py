@@ -7,13 +7,14 @@ s3://aeo-rank-screenshots/ — the PNG to `screenshotKey`, a JSON to `rawKey`.
 `{DATE}` -> today in UTC. Idempotent (skips rows already uploaded) + retry-to-complete.
 
 Engines:
-  chatgpt / gemini / perplexity -> dispatch_audit_job (we keep screenshot + response
-    text; the rank it extracts is IGNORED — CitedLogic does its own analysis).
-  google-maps -> NOT YET IMPLEMENTED (needs a Maps map-pack flow) -> skipped + logged.
+  chatgpt / gemini / perplexity -> dispatch_audit_job through the residential proxy
+    (geo by exit IP); we keep screenshot + response text, ranks IGNORED.
+  google-maps -> dispatch_audit_job WITHOUT the proxy; geo via Google's `uule` URL
+    param (canonical "City,State,United States" from the metro). A proxied google.com
+    search trips reCAPTCHA; uule on the clean home IP does not. Captures the map pack.
 
-Location: exact GPS via the new mock_lat/mock_lng hook in audit_dispatch_http.
-NOTE: AI engines also geolocate by IP — for true metro-local results pair this with a
-metro proxy (see handover). This runner currently sets GPS only.
+Location: AI engines by proxy exit IP; google-maps by uule. Exact GPS (mock_lat/lng)
+is also set on the device for both, but is not what localizes the SERP.
 
 Usage:
   DRY_RUN=1 python3 citedlogic_capture.py                 # plan only, no phones/S3
@@ -25,7 +26,7 @@ import csv, json, os, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-sys.path.insert(0, "/Users/seolocalph/projects/device-agent")
+sys.path.insert(0, "/Users/seolocal3/projects/device-agent")
 from audit_dispatch_http import dispatch_audit_job, _STATE_GOOD_ZIP, _FALLBACK_GOOD_ZIP  # noqa: E402
 
 
@@ -35,7 +36,7 @@ def metro_state(metro):
     IP so the engine doesn't reject geo-mismatch). coords->city-zip is a future refinement."""
     return (metro or "").rsplit("-", 1)[-1].upper()
 
-CSV_PATH = os.environ.get("CL_CSV", "/Users/seolocalph/Downloads/citedlogic-MASTER-jobs.csv")
+CSV_PATH = os.environ.get("CL_CSV", "/Users/seolocal3/Downloads/citedlogic-MASTER-jobs.csv")
 BUCKET = os.environ.get("CL_BUCKET", "aeo-rank-screenshots")
 AWS_PROFILE = os.environ.get("CL_AWS_PROFILE", "aeo-admin")
 # {DATE} = today in UTC. Override with DATE=YYYY-MM-DD (recommended until the Mac
@@ -227,6 +228,12 @@ def run_one(j):
         shot, answer, present, status = capture_ai(j)
         if not shot:
             return ("err", j, f"no screenshot (status={status})")
+        # Only a genuine capture uploads. An error status (e.g. ChatGPT login wall,
+        # SERP timeout) still carries a screenshot + text of the WRONG page — gate
+        # on status so junk is never recorded as a completed row. Returning err
+        # leaves the row un-done so the consumer requeues it for a fresh-IP retry.
+        if status not in ("success", "no_rank"):
+            return ("err", j, f"bad status={status}: {(answer or '')[:60]!r}")
         if not upload(j, shot, answer, present):
             return ("err", j, "local save failed" if LOCAL_ONLY else "s3 upload failed")
         where = _local_path(j["rawKey"]) if LOCAL_ONLY else j["rawKey"]

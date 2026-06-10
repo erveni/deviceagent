@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 
 import pika
 
-sys.path.insert(0, "/Users/seolocalph/projects/device-agent")
+sys.path.insert(0, "/Users/seolocal3/projects/device-agent")
 from citedlogic_capture import run_one  # noqa: E402
 
 RABBITMQ_HOST = os.environ.get("RABBITMQ_HOST", "localhost")

@@ -255,6 +255,392 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
     }
 
+    // ── google SERP in Chrome (CitedLogic `google-maps` engine) ──
+    // Ported from the proven v0.8.0 SEO flow: launch Chrome → google.com home →
+    // human-typed search → ?q= fallback. The "google-maps" engine captures the
+    // SERP map pack from a PLAIN Google search, not maps.google.com.
+
+    /** Buttons that dismiss Chrome interstitials / cookie consent blocking google.com. */
+    private val googleDialogButtons = listOf(
+        "No thanks", "No, thanks", "Got it", "Accept all", "Reject all",
+        "I agree", "I Agree", "Continue", "Close", "Use without an account"
+    )
+
+    /** Open google.com home, dismiss any interstitial, and wait for the search box to be ready. */
+    fun navigateToGoogleHome(): Boolean {
+        s.log("── NAVIGATE google.com ──")
+        s.navigateToUrl("https://www.google.com")
+        for (attempt in 1..12) {
+            Thread.sleep(800)
+            for (label in googleDialogButtons) {
+                val b = s.findNode(text = label, timeoutMs = 250)
+                if (b != null) {
+                    s.clickNode(b); b.recycle()
+                    s.log("dismissed dialog: $label")
+                    Thread.sleep(600)
+                }
+            }
+            val n = s.findInputField(hintText = null, timeoutMs = 1200)
+            if (n != null) { n.recycle(); s.log("Google search box ready (attempt $attempt)"); return true }
+        }
+        s.log("Google search box not found")
+        return false
+    }
+
+    /**
+     * Submit the human-typed search. After typing, Google opens an autocomplete dropdown and
+     * moves the box up (to y≈179) — so the on-page submit button vanishes and findInputField's
+     * top>200 guard skips the box. Order that actually works (verified on-device):
+     *   1) tap the exact-match autocomplete suggestion row (human; preserves the exact query)
+     *   2) IME "search" action on the box found by its query text (any y, not the omnibox)
+     *   3) on-page "Google Search" button (only present when the box is empty/unfocused)
+     *   4) keyboard enter tap
+     */
+    fun submitSearch(keyword: String): Boolean {
+        s.log("── SUBMIT SEARCH ──")
+        ensureChromeForeground()
+        Thread.sleep(400)
+
+        val sugg = findSearchSuggestion(keyword)
+        if (sugg != null) {
+            val ok = s.clickNode(sugg); sugg.recycle()
+            if (ok) { s.log("Tapped exact suggestion row"); Thread.sleep(1500); return true }
+        }
+
+        val box = findEditTextContaining(keyword)
+        if (box != null && android.os.Build.VERSION.SDK_INT >= 30) {
+            val ok = try {
+                box.performAction(
+                    android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                )
+            } catch (e: Exception) { s.log("IME_ENTER threw: ${e.message}"); false }
+            box.recycle()
+            if (ok) { s.log("IME_ENTER on query box ok"); Thread.sleep(1500); return true }
+        } else box?.recycle()
+
+        for (cd in listOf("Google Search", "Search")) {
+            val b = s.findNode(contentDesc = cd, timeoutMs = 800)
+            if (b != null) {
+                val ok = s.clickNode(b); b.recycle()
+                if (ok) { s.log("Clicked '$cd' submit"); Thread.sleep(1500); return true }
+            }
+        }
+
+        s.gestureTap(s.screenWidth() - 40f, s.screenHeight() - 45f)
+        s.log("Fallback keyboard-enter tap")
+        Thread.sleep(1500)
+        return true
+    }
+
+    /** Find a clickable autocomplete row whose text exactly matches the typed query. */
+    private fun findSearchSuggestion(keyword: String): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val match = findSuggestionRec(root, keyword.trim().lowercase())
+        root.recycle()
+        return match
+    }
+
+    private fun findSuggestionRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        kw: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val cls = node.className?.toString() ?: ""
+        val txt = node.text?.toString()?.trim()?.lowercase()
+        if (txt == kw && node.isClickable && !cls.contains("EditText")) return node
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child ->
+                findSuggestionRec(child, kw)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** Find the search-box EditText by its query text (excludes the Chrome omnibox). */
+    private fun findEditTextContaining(keyword: String): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val kw = keyword.trim().lowercase().take(12)
+        val match = findEditContainingRec(root, kw)
+        root.recycle()
+        return match
+    }
+
+    private fun findEditContainingRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        kw: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val cls = node.className?.toString() ?: ""
+        val txt = node.text?.toString()?.trim()?.lowercase() ?: ""
+        if (cls.contains("EditText") && txt.contains(kw) &&
+            !txt.startsWith("google.com") && !txt.startsWith("http")) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child ->
+                findEditContainingRec(child, kw)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private val imagePuzzlePhrases = listOf(
+        "select all", "select each image", "verify you are human by completing",
+        "traffic lights", "crosswalk", "bicycles", "fire hydrant", "press & hold",
+        "try again later", "click verify once there are none"
+    )
+
+    /**
+     * Attempt to clear a Google "unusual traffic" reCAPTCHA by ticking the "I'm not a robot"
+     * checkbox. For a low-risk (soft) challenge this passes outright and Google redirects to the
+     * results — returns true once a SERP appears. If reCAPTCHA escalates to an image puzzle
+     * (or "try again later"), it can't be auto-solved here and returns false.
+     */
+    fun solveChallenge(timeoutSec: Int = 22): Boolean {
+        s.log("── SOLVE CHALLENGE (tick 'I'm not a robot') ──")
+        ensureChromeForeground()
+        val box = s.findNode(text = "I'm not a robot", timeoutMs = 2500)
+            ?: s.findNode(className = "CheckBox", timeoutMs = 1500)
+        if (box == null) { s.log("'I'm not a robot' checkbox not found"); return false }
+        val r = android.graphics.Rect(); box.getBoundsInScreen(r)
+        val clicked = s.clickNode(box)
+        box.recycle()
+        if (!clicked) {
+            // The checkbox often lives in an iframe — fall back to a direct tap on its bounds.
+            s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+        }
+        s.log("ticked checkbox (clickNode=$clicked) at ${r.centerX()},${r.centerY()}")
+
+        val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(1200)
+            val nodes = flattenTree()
+            val blob = nodes.joinToString(" ") { it.text + " " + it.cd }.lowercase()
+            if (imagePuzzlePhrases.any { it in blob }) {
+                s.log("reCAPTCHA escalated to an image/advanced puzzle — cannot auto-solve")
+                return false
+            }
+            val ready = nodes.any { it.text == "Search Results" || it.text == "Web results" } ||
+                nodes.any { httpRe.containsMatchIn(it.text) && !it.text.contains("google.com") }
+            if (ready) { s.log("✓ challenge passed — SERP loaded"); return true }
+        }
+        s.log("challenge not cleared in ${timeoutSec}s")
+        return false
+    }
+
+    /** Guaranteed SERP fallback: load google.com/search?q=<keyword> directly. */
+    fun navigateToSerp(keyword: String): Boolean {
+        val q = java.net.URLEncoder.encode(keyword, "UTF-8")
+        s.log("── NAVIGATE SERP DIRECT: ?q=$q ──")
+        s.navigateToUrl("https://www.google.com/search?q=$q")
+        return true
+    }
+
+    /**
+     * Load a Google SERP localized to [location] via the `uule` URL parameter.
+     * [location] is a canonical "City,State,United States" string; Google renders
+     * results as if the searcher is physically there — no proxy/GPS needed, and
+     * (on a clean home IP) no reCAPTCHA. Falls back to a plain ?q= search when
+     * [location] is blank.
+     */
+    fun navigateToSerpLocalized(keyword: String, location: String): Boolean {
+        if (location.isBlank()) return navigateToSerp(keyword)
+        val q = java.net.URLEncoder.encode(keyword, "UTF-8")
+        val uule = buildUule(location)
+        s.log("── NAVIGATE SERP uule: ?q=$q loc=\"$location\" ──")
+        s.navigateToUrl("https://www.google.com/search?q=$q&uule=$uule&gl=us&hl=en")
+        return true
+    }
+
+    /**
+     * Build Google's `uule` location parameter (the SerpApi/rank-tracker standard).
+     * Protobuf-style header [8,2,16,32,34,len] + the canonical-name bytes, base64'd
+     * (URL-safe: +→-, /→_, no padding), prefixed "w+". Mirrors ogun/uule_grabber.
+     */
+    private fun buildUule(location: String): String {
+        val nameBytes = location.toByteArray(Charsets.UTF_8)
+        val header = byteArrayOf(8, 2, 16, 32, 34, nameBytes.size.toByte())
+        val b64 = android.util.Base64.encodeToString(
+            header + nameBytes,
+            android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+        ).replace('+', '-').replace('/', '_')
+        return "w+$b64"
+    }
+
+    /** Set by waitForSerp when a Cloudflare / Google bot challenge interstitial was seen. */
+    var lastChallengeSeen: Boolean = false
+        private set
+
+    private val challengePhrases = listOf(
+        "verifying you are human", "checking your browser", "just a moment",
+        "needs to review the security", "unusual traffic", "i'm not a robot",
+        "detected unusual traffic", "verify you are a human", "cloudflare"
+    )
+
+    private val connErrPhrases = listOf(
+        "site can't be reached", "site can’t be reached", "err_connection",
+        "err_timed_out", "err_name_not_resolved", "err_proxy", "err_tunnel",
+        "err_empty_response", "err_address_unreachable", "webpage is not available"
+    )
+
+    /** Poll until the SERP looks loaded (results header or a non-google result URL present). */
+    fun waitForSerp(timeoutSec: Int = 15): Boolean {
+        lastChallengeSeen = false
+        val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+        while (System.currentTimeMillis() < deadline) {
+            val nodes = flattenTree()
+            val blob = nodes.joinToString(" ") { it.text + " " + it.cd }.lowercase()
+            if (challengePhrases.any { it in blob }) {
+                lastChallengeSeen = true
+                s.log("⚠ bot/cloudflare challenge interstitial — waiting it out")
+                Thread.sleep(1500)
+                continue
+            }
+            if (connErrPhrases.any { it in blob }) {
+                s.log("⚠ connection-error page — tapping Reload")
+                val reload = s.findNode(text = "Reload", timeoutMs = 800)
+                    ?: s.findNode(contentDesc = "Refresh", timeoutMs = 500)
+                if (reload != null) { s.clickNode(reload); reload.recycle() }
+                Thread.sleep(2800)
+                continue
+            }
+            val ready = nodes.any { it.text == "Search Results" || it.text == "Web results" } ||
+                nodes.any { httpRe.containsMatchIn(it.text) && !it.text.contains("google.com") }
+            if (ready) { s.log("SERP ready"); return true }
+            Thread.sleep(800)
+        }
+        s.log("SERP wait timed out (challenge=$lastChallengeSeen)")
+        return false
+    }
+
+    /** Dismiss "See results closer to you?" and similar overlays sitting on the SERP. */
+    fun dismissSerpDialogs(): Boolean {
+        val dismissButtons = listOf(
+            "Not now", "No thanks", "No, thanks", "Dismiss", "Got it",
+            "Maybe later", "Skip", "Close", "Reject all"
+        )
+        var any = false
+        for (attempt in 1..3) {
+            var hit = false
+            for (btn in dismissButtons) {
+                val node = s.findNode(text = btn, timeoutMs = 400)
+                if (node != null) {
+                    s.log("SERP dialog: clicking \"$btn\"")
+                    s.clickNode(node); node.recycle()
+                    hit = true; any = true
+                    Thread.sleep(700)
+                    break
+                }
+            }
+            if (!hit) break
+        }
+        return any
+    }
+
+    private data class FlatNode(val cls: String, val text: String, val cd: String, val targetUrl: String?)
+
+    private fun flattenTree(): List<FlatNode> {
+        val out = ArrayList<FlatNode>()
+        val root = s.rootInActiveWindow ?: return out
+        flattenInto(root, out, 0)
+        root.recycle()
+        return out
+    }
+
+    private fun flattenInto(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        out: ArrayList<FlatNode>,
+        depth: Int
+    ) {
+        if (depth > 40) return
+        val cls = node.className?.toString()?.substringAfterLast('.') ?: ""
+        val text = node.text?.toString()?.trim() ?: ""
+        val cd = node.contentDescription?.toString()?.trim() ?: ""
+        var url: String? = null
+        try {
+            node.extras?.getCharSequence("AccessibilityNodeInfo.targetUrl")?.toString()?.let {
+                if (it.isNotBlank()) url = it
+            }
+        } catch (_: Exception) {}
+        if (text.isNotEmpty() || cd.isNotEmpty() || url != null) {
+            out.add(FlatNode(cls, text, cd, url))
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { flattenInto(it, out, depth + 1) }
+        }
+    }
+
+    private val httpRe = Regex("^https?://")
+
+    // ── content-aware capture stop ──
+
+    /** Per-platform markers that only appear at the END of the answer/results.
+     *  For google-maps the deliverable is the SERP map pack (the "Businesses"
+     *  block) — "More businesses" is its bottom edge, so the capture stops there
+     *  instead of scrolling the rest of the SERP. */
+    private val answerEndMarkers = mapOf(
+        "chatgpt" to listOf("Read aloud", "Good response", "Bad response"),
+        "gemini" to listOf("Good response", "Bad response", "Show drafts"),
+        "perplexity" to listOf("Related", "Ask a follow-up", "Ask follow-up"),
+        "google-maps" to listOf("More businesses", "Related searches", "More results", "People also search for")
+    )
+
+    /**
+     * True when the captured text is ChatGPT's "Log in or sign up" auth wall
+     * instead of an answer. ChatGPT hard-gates logged-out sessions on some proxy
+     * IPs — this is the full auth page (not a dismissable modal), so the only
+     * recovery is a fresh exit IP. A real med-spa answer never contains two+
+     * "Continue with <provider>" buttons, so this won't false-positive.
+     */
+    fun isLoginWall(responseText: String): Boolean {
+        val providers = listOf(
+            "Continue with Google", "Continue with Apple", "Continue with Microsoft",
+            "Continue with phone"
+        )
+        val hits = providers.count { responseText.contains(it, ignoreCase = true) }
+        return hits >= 2 ||
+            (responseText.contains("Log in or sign up", ignoreCase = true) && hits >= 1) ||
+            (responseText.contains("Welcome back", ignoreCase = true) && hits >= 1)
+    }
+
+    /** Popups that appear ASYNCHRONOUSLY over the page mid-capture (e.g. Google's
+     *  "See results closer to you?" — observed popping up AFTER dismiss_serp_dialogs
+     *  already ran, covering the map pack in every frame). Cheap enough to call
+     *  before every frame. */
+    fun dismissMidCapturePopup(): Boolean {
+        for (label in listOf("Not now", "No thanks")) {
+            val node = s.findNode(text = label, timeoutMs = 250)
+            if (node != null) {
+                s.clickNode(node); node.recycle()
+                s.log("mid-capture popup dismissed: $label")
+                Thread.sleep(600)
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * True when an end-of-answer marker is actually VISIBLE on screen (not just present
+     * in the tree below the fold) — the capture loop stops scrolling once the frame
+     * containing the answer's end has been grabbed, instead of swiping to the very
+     * bottom of the page.
+     */
+    fun isAnswerEndVisible(platform: String): Boolean {
+        val markers = answerEndMarkers[platform.lowercase()] ?: return false
+        val h = s.screenHeight()
+        for (m in markers) {
+            val node = s.findNode(text = m, timeoutMs = 300)
+                ?: s.findNode(contentDesc = m, timeoutMs = 200)
+            if (node != null) {
+                val r = android.graphics.Rect()
+                node.getBoundsInScreen(r)
+                val visible = node.isVisibleToUser && r.top in 1 until h
+                node.recycle()
+                if (visible) { s.log("answer end marker visible: \"$m\" (top=${r.top})"); return true }
+            }
+        }
+        return false
+    }
+
     // ── input text ──
 
     fun inputText(text: String): Boolean {
@@ -304,7 +690,14 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             s.log("[B] Text NOT set, going to paste...")
         }
 
-        // Step C: Set clipboard & paste
+        // Step C: Set clipboard & paste.
+        // Clear the field first: Step B's ACTION_SET_TEXT may have actually landed even
+        // though the verify missed it (Chrome lies about timing) — pasting on top then
+        // produces doubled text ("querytquery"). Emptying the field makes paste idempotent.
+        if (inputNode != null) {
+            try { s.setTextOnNode(inputNode, "") } catch (_: Exception) {}
+            Thread.sleep(120)
+        }
         s.setClipboard(text)
         Thread.sleep(150)
 
@@ -387,7 +780,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     // ── submit ──
 
-    fun submit(): Boolean {
+    fun submit(expectedText: String? = null): Boolean {
         s.log("── SUBMIT ──")
         ensureChromeForeground()
         val submitSelectors = listOf(
@@ -398,7 +791,8 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             "Go" to "cd"
         )
         // Two passes: prefer clickable, then any match
-        for (pass in 1..2) {
+        var clickedAny = false
+        outer@ for (pass in 1..2) {
             for ((label, type) in submitSelectors) {
                 val node = if (type == "cd") {
                     s.findNode(contentDesc = label, timeoutMs = 2000)
@@ -410,17 +804,161 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                     if (clicked) {
                         s.log("Clicked submit: $label (pass $pass)")
                         Thread.sleep(1000)
-                        return true
+                        clickedAny = true
+                        break@outer
                     }
                     s.log("Found '$label' but click failed, trying next...")
                 }
             }
             Thread.sleep(500)
         }
-        // Fallback: tap bottom-right corner (Perplexity submit button area)
-        s.gestureTap(s.screenWidth() - 60f, s.screenHeight() * 0.82f)
-        s.log("Fallback tap for submit (bottom-right)")
-        return true
+        if (!clickedAny) {
+            // Fallback: tap bottom-right corner (Perplexity submit button area)
+            s.gestureTap(s.screenWidth() - 60f, s.screenHeight() * 0.82f)
+            s.log("Fallback tap for submit (bottom-right)")
+        }
+        if (expectedText == null) return true
+        return verifySubmitted(expectedText, submitSelectors)
+    }
+
+    /**
+     * ACTION_CLICK on a web "send" button can silently do nothing when the page's JS
+     * never registered the ACTION_SET_TEXT input (Gemini's logged-out composer keeps
+     * the send button functionally disabled — seen 2026-06-10: prompt typed, submit
+     * "OK", page still on the landing screen 70s later). Verify the composer actually
+     * EMPTIED; if not, escalate: real gesture tap on the button → clear + focus +
+     * clipboard-paste re-input (paste fires real input events) → gesture tap again.
+     */
+    private fun verifySubmitted(expectedText: String, submitSelectors: List<Pair<String, String>>): Boolean {
+        // The reliable "it actually sent" signal: the prompt is echoed back as a
+        // message bubble — a NON-edit text node with the prompt's text. Checking
+        // composer emptiness false-positives when the IME window owns the a11y
+        // tree at poll time (seen on Gemini 2026-06-10).
+        val kw = expectedText.trim().lowercase()
+        // The echo bubble must sit ABOVE the composer: web composers render an inner
+        // TextView with the same text at the same bounds as the EditText, which a
+        // text-only check mistakes for the echo (seen on Gemini 2026-06-10).
+        fun promptEchoVisible(): Boolean {
+            val root = s.rootInActiveWindow ?: return false
+            var composerTop = Int.MAX_VALUE
+            var echoBottom = -1
+            fun walk(node: android.view.accessibility.AccessibilityNodeInfo, depth: Int) {
+                if (depth > 40) return
+                val txt = node.text?.toString()?.trim()?.lowercase() ?: ""
+                val matches = txt == kw || (kw.length >= 12 && txt.startsWith(kw))
+                if (matches) {
+                    val r = android.graphics.Rect()
+                    node.getBoundsInScreen(r)
+                    if (node.className?.toString()?.contains("EditText") == true) {
+                        if (r.top < composerTop) composerTop = r.top
+                    } else if (r.bottom > echoBottom) {
+                        echoBottom = r.bottom
+                    }
+                }
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { walk(it, depth + 1) }
+                }
+            }
+            walk(root, 0)
+            root.recycle()
+            if (echoBottom < 0) return false
+            // No EditText with the text left (composer cleared) — the matching text
+            // node IS the echo... unless it's the composer's inner TextView, which
+            // always sits in the bottom fifth of the screen. Require it higher up.
+            if (composerTop == Int.MAX_VALUE) return echoBottom < (s.screenHeight() * 4) / 5
+            return echoBottom < composerTop - 10
+        }
+        fun pollEcho(seconds: Int): Boolean {
+            for (i in 1..seconds) {
+                Thread.sleep(1000)
+                if (promptEchoVisible()) return true
+            }
+            return false
+        }
+        fun gestureTapSend(): Boolean {
+            for ((label, type) in submitSelectors) {
+                val node = if (type == "cd") s.findNode(contentDesc = label, timeoutMs = 600)
+                           else s.findNode(text = label, timeoutMs = 600)
+                if (node != null) {
+                    val r = android.graphics.Rect()
+                    node.getBoundsInScreen(r)
+                    node.recycle()
+                    s.gestureTap(r.exactCenterX(), r.exactCenterY())
+                    s.log("gesture-tapped send '$label' at ${r.centerX()},${r.centerY()}")
+                    return true
+                }
+            }
+            return false
+        }
+
+        // Sent = echo bubble visible above the composer, OR generation already
+        // started (Stop button), OR the prompt text is GONE from the Chrome window
+        // entirely (after a send the echo either shows above or has scrolled off as
+        // the answer streams — it is never still sitting in the composer; seen on
+        // the proxied Gemini run 2026-06-10 where the echo scrolled away and the
+        // echo-only check aborted a job whose answer was already rendering).
+        fun chromeWindowStillHasPrompt(): Boolean {
+            val root = try {
+                s.windows.firstOrNull {
+                    it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION &&
+                        it.root?.packageName == "com.android.chrome"
+                }?.root
+            } catch (_: Exception) { null } ?: s.rootInActiveWindow ?: return true
+            var found = false
+            fun walk(node: android.view.accessibility.AccessibilityNodeInfo, depth: Int) {
+                if (found || depth > 40) return
+                val txt = node.text?.toString()?.trim()?.lowercase() ?: ""
+                if (txt == kw || (kw.length >= 12 && txt.startsWith(kw))) {
+                    // Only the composer (bottom fifth) counts as "still unsent" —
+                    // a match higher up is the echo bubble.
+                    val r = android.graphics.Rect()
+                    node.getBoundsInScreen(r)
+                    if (r.top >= (s.screenHeight() * 4) / 5) found = true
+                }
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { walk(it, depth + 1) }
+                }
+            }
+            walk(root, 0)
+            return found
+        }
+        fun generationStarted(): Boolean =
+            s.findNode(contentDesc = "Stop streaming", timeoutMs = 300) != null ||
+            s.findNode(contentDesc = "Stop generating", timeoutMs = 300) != null ||
+            s.findNode(contentDesc = "Stop response", timeoutMs = 300) != null
+        fun sentSignal(): Boolean =
+            promptEchoVisible() || generationStarted() || !chromeWindowStillHasPrompt()
+        fun pollSent(seconds: Int): Boolean {
+            for (i in 1..seconds) {
+                Thread.sleep(1000)
+                if (sentSignal()) return true
+            }
+            return false
+        }
+
+        if (pollSent(5)) { s.log("submit verified"); return true }
+
+        s.log("no sent signal — escalating: gesture tap on send")
+        gestureTapSend()
+        if (pollSent(5)) { s.log("submit verified after gesture tap"); return true }
+
+        s.log("still unsent — re-input via clipboard paste (fires real input events)")
+        val box = findEditTextContaining(expectedText)
+        if (box != null) {
+            try { s.setTextOnNode(box, "") } catch (_: Exception) {}
+            Thread.sleep(200)
+            s.clickNode(box)            // focus the composer
+            Thread.sleep(300)
+            s.setClipboard(expectedText)
+            Thread.sleep(200)
+            tryPasteOnNode(box)
+            box.recycle()
+            Thread.sleep(600)
+        }
+        gestureTapSend()
+        val sent = pollSent(8)
+        s.log(if (sent) "submit verified after paste re-input" else "submit STILL unverified — prompt still in composer")
+        return sent
     }
 
     // ── scroll ──
@@ -1094,6 +1632,8 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             val hasContent = s.findNode(contentDesc = "Copy", timeoutMs = 500) != null
                 || s.findNode(contentDesc = "Share", timeoutMs = 500) != null
                 || s.findNode(contentDesc = "Read aloud", timeoutMs = 500) != null
+                || s.findNode(contentDesc = "Good response", timeoutMs = 500) != null
+                || s.findNode(contentDesc = "Bad response", timeoutMs = 500) != null
             if (hasContent) {
                 s.log("Generation complete")
                 return true

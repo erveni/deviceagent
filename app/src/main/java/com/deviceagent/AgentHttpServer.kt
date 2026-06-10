@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.2-maps-nearme"
-        const val APP_VERSION_CODE = 18
+        const val APP_VERSION_NAME = "0.9.3-chrome-serp"
+        const val APP_VERSION_CODE = 19
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
@@ -244,7 +244,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             prompt: String,
             maxFrames: Int = 6,
             lat: Double = Double.NaN,
-            lng: Double = Double.NaN
+            lng: Double = Double.NaN,
+            serpLocation: String = ""
         ) {
             result.prompt = prompt
             result.type = "capture"
@@ -271,12 +272,45 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 }
                 Thread.sleep(500)
                 if (plat == "google-maps") {
-                    // Maps map-pack: go straight to a Maps search URL centered on the
-                    // job's coords (/@lat,lng) so results are metro-local regardless
-                    // of device GPS, then wait for results.
-                    if (!step("maps_search") { flowEngine.navigateGoogleMapsSearch(prompt, lat, lng) }) {
-                        pr.status = "error"; pr.error = "maps search failed"; result.status = "error"; return
+                    // Map pack from a PLAIN Google search in Chrome (NOT maps.google.com).
+                    // Localize via the `uule` URL param built from serpLocation — Google
+                    // returns metro-local results from a CLEAN (home/non-proxy) IP, so we
+                    // never hit the reCAPTCHA that a proxied google.com search trips.
+                    // Loading the search URL directly (no human typing) also avoids the
+                    // autocomplete/submit fragility.
+                    if (!step("navigate_serp_uule") { flowEngine.navigateToSerpLocalized(prompt, serpLocation) }) {
+                        pr.status = "error"; pr.error = "serp navigate failed"; result.status = "error"; return
                     }
+                    Thread.sleep(2500)
+                    var onSerp = flowEngine.waitForSerp(15)
+                    var attempt = 0
+                    while (!onSerp && attempt < 3) {
+                        attempt++
+                        if (flowEngine.lastChallengeSeen) {
+                            // Soft "unusual traffic" challenges clear by ticking the
+                            // checkbox; hard image puzzles need a fresh proxy IP.
+                            onSerp = step("solve_challenge_$attempt") { flowEngine.solveChallenge(22) }
+                            if (onSerp) break
+                            onSerp = step("challenge_reload_$attempt") {
+                                Thread.sleep(6000)
+                                flowEngine.navigateToSerpLocalized(prompt, serpLocation)
+                                flowEngine.waitForSerp(18)
+                            }
+                        } else {
+                            onSerp = step("serp_fallback_$attempt") {
+                                flowEngine.navigateToSerpLocalized(prompt, serpLocation)
+                                flowEngine.waitForSerp(20)
+                            }
+                        }
+                    }
+                    if (!onSerp) {
+                        pr.status = "error"
+                        pr.error = if (flowEngine.lastChallengeSeen)
+                            "bot/recaptcha challenge — needs fresh proxy IP" else "serp load timeout"
+                        result.status = "error"; return
+                    }
+                    step("dismiss_serp_dialogs") { flowEngine.dismissSerpDialogs(); true }
+                    Thread.sleep(1000)
                 } else {
                     // Chat flow mirrors the audit per-platform body — only the prompt
                     // source differs (verbatim, not templated).
@@ -290,7 +324,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         pr.status = "error"; pr.error = "input failed"; result.status = "error"; return
                     }
                     Thread.sleep(300)
-                    step("submit") { flowEngine.submit() }
+                    if (!step("submit") { flowEngine.submit(prompt) }) {
+                        pr.status = "error"; pr.error = "submit unverified — prompt never sent"; result.status = "error"; return
+                    }
                     Thread.sleep(2000)
                     if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
                         pr.status = "error"; pr.error = "generation timeout"; result.status = "error"; return
@@ -308,32 +344,63 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 // text scrape afterwards is complete. Stop early when a scroll reveals
                 // no new content (identical frame = answer bottom reached).
                 Thread.sleep(1500)  // let the final answer render settle
-                val frames = mutableListOf<String>()
-                val frameCount = if (maxFrames < 1) 1 else maxFrames
-                for (fi in 0 until frameCount) {
-                    val nm = "capture_${plat}_${System.currentTimeMillis()}_f$fi"
-                    val pth = try { flowEngine.saveScreenshot(nm) } catch (e: Exception) { null } ?: break
-                    if (fi == 0) pr.screenshotPath = pth
-                    val b64 = try {
-                        android.util.Base64.encodeToString(File(pth).readBytes(), android.util.Base64.NO_WRAP)
+
+                // ── Deliverable = ONE normal phone screenshot of the list ──
+                // (not a tall scroll-and-stitch). AI answers open with intro prose,
+                // so nudge the business list into view first; the map pack is already
+                // at the top for google-maps. Down-only scrolls (up = pull-to-refresh).
+                if (flowEngine.dismissMidCapturePopup()) Thread.sleep(400)
+                val preScroll = when (plat) {
+                    "google-maps" -> 0
+                    "chatgpt" -> 3
+                    else -> 2          // gemini / perplexity
+                }
+                if (preScroll > 0) {
+                    flowEngine.scrollResponse(preScroll)
+                    Thread.sleep(1000)
+                    flowEngine.dismissMidCapturePopup()
+                }
+                val listName = "capture_${plat}_${System.currentTimeMillis()}_list"
+                val listPath = try { flowEngine.saveScreenshot(listName) } catch (e: Exception) { null }
+                var listB64: String? = null
+                if (listPath != null) {
+                    pr.screenshotPath = listPath
+                    listB64 = try {
+                        android.util.Base64.encodeToString(File(listPath).readBytes(), android.util.Base64.NO_WRAP)
                     } catch (e: Exception) {
-                        Log.w("DeviceAgent", "capture frame b64 failed $pth: ${e.message}"); null
-                    } ?: break
-                    if (frames.isNotEmpty() && b64 == frames.last()) break  // no change = bottom
-                    frames.add(b64)
-                    if (fi < frameCount - 1) {
-                        flowEngine.scrollResponse(2)   // ~2 swipes ≈ one viewport, with overlap
-                        Thread.sleep(1200)
+                        Log.w("DeviceAgent", "list screenshot b64 failed $listPath: ${e.message}"); null
                     }
                 }
-                result.steps.add("[$plat] captured ${frames.size} frame(s)")
-                pr.screenshotB64 = frames.firstOrNull()
-                pr.screenshotFramesB64 = frames
+                result.steps.add("[$plat] list screenshot captured (preScroll=$preScroll)")
+
+                // Keep scrolling (down-only) to render the FULL answer into the a11y
+                // tree so the text scrape is complete — the spec requires the full
+                // answerText even though the IMAGE is a single screen.
+                for (i in 0 until 5) {
+                    if (flowEngine.isAnswerEndVisible(plat)) break
+                    flowEngine.scrollResponse(2)
+                    Thread.sleep(800)
+                    flowEngine.dismissMidCapturePopup()
+                }
+                pr.screenshotB64 = listB64
+                pr.screenshotFramesB64 = if (listB64 != null) mutableListOf(listB64) else mutableListOf()
                 pr.responseText = flowEngine.getResponseText()
+
+                // ChatGPT hard-gates some proxy IPs with a "Log in or sign up" auth
+                // wall instead of an answer. Report it as a retryable error (distinct
+                // token) so the Mac rotates to a fresh Decodo IP and re-captures,
+                // rather than recording the login page as a valid result.
+                if (plat == "chatgpt" && flowEngine.isLoginWall(pr.responseText ?: "")) {
+                    pr.status = "error"
+                    pr.error = "login wall — needs fresh IP"
+                    result.status = "error"
+                    result.steps.add("[$plat] LOGIN WALL detected — retryable")
+                    return
+                }
 
                 pr.status = "completed"
                 result.status = "completed"
-                result.steps.add("[$plat] capture done answer=${pr.responseText?.length ?: 0}chars frames=${frames.size}")
+                result.steps.add("[$plat] capture done answer=${pr.responseText?.length ?: 0}chars (single-screen)")
             } catch (e: Exception) {
                 pr.status = "error"
                 pr.error = e.message
@@ -603,6 +670,11 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // lat/lng — used by the google-maps flow to center the map on the metro.
         val lat = json.optDouble("lat", Double.NaN)
         val lng = json.optDouble("lng", Double.NaN)
+        // serpLocation — canonical "City,State,United States" for the google-maps
+        // engine. Encoded into Google's `uule` URL param so the SERP localizes to
+        // the metro WITHOUT a proxy (a plain Google search through the flagged
+        // residential proxy IP trips reCAPTCHA; uule on the clean home IP doesn't).
+        val serpLocation = json.optString("serpLocation", "").let { if (it == "null") "" else it }
 
         // CitedLogic capture: only prompt + platform are required (no business).
         if (prompt.isBlank() || platform.isBlank()) {
@@ -620,7 +692,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         )
         lastResult.set(result)
 
-        executeCaptureSession(result, platform, prompt, maxFrames, lat, lng)
+        executeCaptureSession(result, platform, prompt, maxFrames, lat, lng, serpLocation)
 
         // Response mirrors the audit shape so audit_dispatch_http._classify reads it
         // unchanged (platforms map carrying response_text + screenshot_b64).
@@ -668,9 +740,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         prompt: String,
         maxFrames: Int = 6,
         lat: Double = Double.NaN,
-        lng: Double = Double.NaN
+        lng: Double = Double.NaN,
+        serpLocation: String = ""
     ) {
-        executeCaptureSessionStatic(result, flowEngine, platform, prompt, maxFrames, lat, lng)
+        executeCaptureSessionStatic(result, flowEngine, platform, prompt, maxFrames, lat, lng, serpLocation)
     }
 
     fun executeAuditSession(

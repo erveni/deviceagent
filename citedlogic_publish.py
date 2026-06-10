@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 import pika
 
-CSV_PATH = os.environ.get("CL_CSV", "/Users/seolocalph/Downloads/citedlogic-MASTER-jobs.csv")
+CSV_PATH = os.environ.get("CL_CSV", "/Users/seolocal3/Downloads/citedlogic-MASTER-jobs.csv")
 DATE = os.environ.get("DATE", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 AI_ENGINES = {"chatgpt", "gemini", "perplexity"}

@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -206,14 +207,14 @@ def _zip_to_latlng(zip_code: str) -> tuple[float, float] | None:
         _ZIP_LATLNG_CACHE[zip_code] = None
         return None
 
-sys.path.insert(0, "/Users/seolocalph/projects/aeo-appium")
+sys.path.insert(0, "/Users/seolocal3/projects/aeo-appium")
 from gost_manager import GostManager  # noqa: E402
 
-AUDIT_LOG = "/Users/seolocalph/projects/aeo-appium/audit_results/audit_log.csv"
-AUDIT_RESULTS_DIR = "/Users/seolocalph/projects/aeo-appium/audit_results"
+AUDIT_LOG = "/Users/seolocal3/projects/aeo-appium/audit_results/audit_log.csv"
+AUDIT_RESULTS_DIR = "/Users/seolocal3/projects/aeo-appium/audit_results"
 AUDIT_CLIENTS_JSON = os.environ.get(
     "AUDIT_CLIENTS_JSON_PATH",
-    "/Users/seolocalph/projects/aeo-appium/clients_audit_targets.json",
+    "/Users/seolocal3/projects/aeo-appium/clients_audit_targets.json",
 )
 
 
@@ -535,8 +536,12 @@ def _write_b64_screenshot(b64: str, platform: str, keyword_id: int) -> str:
 _STITCH_TOP_CROP = int(os.environ.get("CL_STITCH_TOP_CROP", "150"))
 _STITCH_BOTTOM_CROP = int(os.environ.get("CL_STITCH_BOTTOM_CROP", "140"))
 # ChatGPT's "Ask anything" composer is taller than the search bars on the others;
-# Google Maps has no bottom input bar (just the map edge / gesture nav).
-_STITCH_BOTTOM_CROP_BY_PLAT = {"chatgpt": 215, "google-maps": 60}
+# Gemini's "Ask Gemini" box + model row + disclaimer is taller still (~335px on
+# the 720x1600 fleet phones — measured 2026-06-10; at 140 the composer repeats
+# in every frame and corrupts the stitch).
+# google-maps is a plain Chrome SERP since v0.9.3 (no maps.google.com), so it
+# uses the default Chrome bottom crop like the rest.
+_STITCH_BOTTOM_CROP_BY_PLAT = {"chatgpt": 215, "gemini": 340}
 
 
 def _write_stitched_screenshot(frames_b64: list, platform: str, keyword_id: int) -> str:
@@ -559,6 +564,13 @@ def _write_stitched_screenshot(frames_b64: list, platform: str, keyword_id: int)
             with open(fp, "wb") as f:
                 f.write(base64.b64decode(b64))
             frame_paths.append(fp)
+        # Single-screen deliverable: the phone already framed the list in one normal
+        # screenshot — write it RAW (no crop/stitch, which would chop the search/URL
+        # bar and bottom). Stitching only applies when multiple frames are returned.
+        if len(frame_paths) == 1:
+            out_path = os.path.join(local_dir, f"kw{keyword_id}_{platform.lower()}_{ts}.png")
+            shutil.copyfile(frame_paths[0], out_path)
+            return out_path
         out_path = os.path.join(local_dir, f"kw{keyword_id}_{platform.lower()}_{ts}.png")
         from citedlogic_stitch import stitch_frames  # lazy: keeps PIL/numpy out of the ranking path
         bottom_crop = _STITCH_BOTTOM_CROP_BY_PLAT.get(platform.lower(), _STITCH_BOTTOM_CROP)
@@ -611,6 +623,40 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
 # ── main dispatcher ──
 
 ACQUIRE_TIMEOUT_S = 600
+
+_US_STATE_NAMES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
+}
+
+
+def _canonical_serp_location(city: str, state_code: str) -> str:
+    """Build the canonical 'City,State,United States' string Google's uule param
+    expects, from a metro slug ('atlanta-ga') + 2-letter state. Returns "" when
+    the state is unknown (caller falls back to a plain, non-localized search)."""
+    sc = (state_code or "").strip().upper()
+    state_name = _US_STATE_NAMES.get(sc)
+    if not state_name:
+        return ""
+    slug = (city or "").strip()
+    # Strip a trailing "-<state>" suffix the metro slug carries ("atlanta-ga").
+    if sc and slug.lower().endswith("-" + sc.lower()):
+        slug = slug[: -(len(sc) + 1)]
+    city_name = " ".join(w.capitalize() for w in slug.replace("_", "-").split("-") if w)
+    if not city_name:
+        return ""
+    return f"{city_name},{state_name},United States"
 
 
 def dispatch_audit_job(
@@ -673,6 +719,16 @@ def dispatch_audit_job(
             "proxy": {"zip": job.get("zip", ""), "country": "us", "session_duration": 30},
         }
 
+    # The google-maps capture engine localizes via Google's `uule` URL param on a
+    # CLEAN home IP — running it through the flagged residential proxy trips
+    # reCAPTCHA. So skip the whole proxy tunnel for it; the AI engines still need
+    # the proxy (Gemini refuses the shared home IP, all three localize by exit IP).
+    use_proxy = not (capture_prompt is not None and platform.lower() == "google-maps")
+    serp_location = ""
+    if not use_proxy:
+        serp_location = _canonical_serp_location(entry.get("city", ""), entry.get("state", ""))
+        print(f"  [no-proxy] google-maps capture via uule loc={serp_location!r}", flush=True)
+
     # Start gost
     seq = next(_gost_seq)
     gost_key = f"audit-{seq}"
@@ -699,27 +755,29 @@ def dispatch_audit_job(
                 f" ({zip_note})",
                 flush=True,
             )
-    gost = GostManager(
-        [{
-            "device_id": gost_key, "zip": biz_zip, "state": state_code,
-            "country": country, "session_duration": 30,
-        }],
-        base_port=gost_port,
-    )
-    gost.start(wait_seconds=2.0)
-
-    # SNI relay: the phone connects to the relay (gost_port+1), which recovers
-    # the TLS SNI and re-dials gost BY HOSTNAME — required for mobile Decodo,
-    # which rejects the phone's raw IP-CONNECT. gost stays on gost_port for the
-    # Mac-side preflight curl. gost_port+1 is free (_GOST_PORTS steps by 2). The
-    # relay forwards to the stable gost_port, so the retry's gost restart is
-    # transparent — start once here, stop once in finally.
+    gost = None
     relay_proc = None
     phone_port = gost_port
-    if USE_SNI_RELAY:
-        phone_port = gost_port + 1
-        relay_proc = _relay_start(phone_port, gost_port)
-        time.sleep(1)
+    if use_proxy:
+        gost = GostManager(
+            [{
+                "device_id": gost_key, "zip": biz_zip, "state": state_code,
+                "country": country, "session_duration": 30,
+            }],
+            base_port=gost_port,
+        )
+        gost.start(wait_seconds=2.0)
+
+        # SNI relay: the phone connects to the relay (gost_port+1), which recovers
+        # the TLS SNI and re-dials gost BY HOSTNAME — required for mobile Decodo,
+        # which rejects the phone's raw IP-CONNECT. gost stays on gost_port for the
+        # Mac-side preflight curl. gost_port+1 is free (_GOST_PORTS steps by 2). The
+        # relay forwards to the stable gost_port, so the retry's gost restart is
+        # transparent — start once here, stop once in finally.
+        if USE_SNI_RELAY:
+            phone_port = gost_port + 1
+            relay_proc = _relay_start(phone_port, gost_port)
+            time.sleep(1)
 
     http_port = _http_port_for_serial(serial)
     started = datetime.now(timezone.utc)
@@ -728,6 +786,26 @@ def dispatch_audit_job(
     def _setup_and_post() -> dict:
         """Bring socksdroid + GPS + forwarding online then POST the audit.
         Returns the parsed HTTP response. Caller decides whether to retry."""
+        if not use_proxy:
+            # No tunnel: phone uses its clean home IP. Geo for google-maps comes
+            # from the uule param; still set exact GPS + forward, then POST.
+            _mlat0, _mlng0 = job.get("mock_lat"), job.get("mock_lng")
+            if _mlat0 is not None and _mlng0 is not None:
+                try:
+                    mock_location(serial, float(_mlat0), float(_mlng0))
+                except Exception:
+                    pass
+            _adb(serial, "forward", f"tcp:{http_port}", "tcp:8765", timeout=5)
+            body = {
+                "type": "capture",
+                "prompt": capture_prompt,
+                "platform": platform.lower(),
+                "serpLocation": serp_location,
+            }
+            if job.get("mock_lat") is not None and job.get("mock_lng") is not None:
+                body["lat"] = float(job["mock_lat"])
+                body["lng"] = float(job["mock_lng"])
+            return _post_audit(http_port, body)
         socksdroid_connect(serial, phone_port)
         time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
         if not _wait_tunnel(serial):
@@ -825,15 +903,17 @@ def dispatch_audit_job(
         first_err = (plat_block_first.get("error") or "").lower()
         top_err_first = (response.get("error") or "").lower()
         combined = first_err + " " + top_err_first
-        if (
+        if use_proxy and (
             "navigate" in first_err
             or "proxy_unreachable" in combined
             or "input failed" in combined
             or "generation timeout" in combined
+            or "login wall" in combined
         ):
             if "proxy_unreachable" in combined: reason = "proxy_unreachable"
             elif "input failed" in combined: reason = "input_failed"
             elif "generation timeout" in combined: reason = "generation_timeout"
+            elif "login wall" in combined: reason = "login_wall"
             else: reason = "navigate"
             # On retry, switch to the state's known-good zip (per probes). This
             # gives a different exit IP within the same metro area instead of
@@ -895,7 +975,7 @@ def dispatch_audit_job(
         # it still shows no answer, demote to a retryable status so a bad
         # screenshot is never recorded as a good result. (OCR_VALIDATE_SCREENSHOT=0
         # disables this; _screenshot_has_answer fails open if the OCR tool is gone.)
-        if status in ("success", "no_rank") and ss_local and not _answer_ok(ss_local):
+        if use_proxy and status in ("success", "no_rank") and ss_local and not _answer_ok(ss_local):
             print(f"  [ocr] no answer in screenshot kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
             try:
                 socksdroid_disconnect(serial)
@@ -1003,14 +1083,16 @@ def dispatch_audit_job(
                 _adb(serial, "forward", "--remove", f"tcp:{http_port}", timeout=5)
             except Exception:
                 pass
-        try:
-            socksdroid_disconnect(serial)
-        except Exception:
-            pass
-        try:
-            gost.stop()
-        except Exception:
-            pass
+        if use_proxy:
+            try:
+                socksdroid_disconnect(serial)
+            except Exception:
+                pass
+        if gost is not None:
+            try:
+                gost.stop()
+            except Exception:
+                pass
         if relay_proc is not None and relay_proc.poll() is None:
             try:
                 relay_proc.terminate(); relay_proc.wait(timeout=5)

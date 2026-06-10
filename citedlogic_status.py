@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 BUCKET = os.environ.get("CL_BUCKET", "aeo-rank-screenshots")
 PROFILE = os.environ.get("CL_AWS_PROFILE", "aeo-admin")
 DATE = os.environ.get("DATE", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-CSV_PATH = os.environ.get("CL_CSV", "/Users/seolocalph/Downloads/citedlogic-MASTER-jobs.csv")
+CSV_PATH = os.environ.get("CL_CSV", "/Users/seolocal3/Downloads/citedlogic-MASTER-jobs.csv")
 
 
 def expected():
