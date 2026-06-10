@@ -21,7 +21,19 @@ WAVE_STAGGER_S = int(os.environ.get("WAVE_STAGGER_S", "0"))  # seconds between s
 RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout")
 RETRY_MAX_ROUNDS = int(os.environ.get("RETRY_MAX_ROUNDS", "1"))
 BASE_GOST = 11001
-MAC_IP = "192.168.0.102"
+def _detect_mac_lan_ip():
+    """Auto-detect the Mac's LAN IP so SocksDroid always dials the live gost host.
+    Hardcoding broke when DHCP moved the Mac .102 -> .105 (2026-06-10) — every phone
+    routed to a dead IP -> 'site can't be reached'. Env MAC_IP overrides; .102 fallback."""
+    for _if in ("en0", "en1"):
+        _ip = subprocess.run(["ipconfig", "getifaddr", _if],
+                             capture_output=True, text=True).stdout.strip()
+        if _ip:
+            return _ip
+    return "192.168.0.102"
+
+
+MAC_IP = os.environ.get("MAC_IP") or _detect_mac_lan_ip()
 # SNI-rewriting relay (sni_relay.py). SocksDroid (tun2socks) can only IP-CONNECT,
 # which mobile Decodo rejects. The relay sits in front of gost, recovers the
 # hostname from the TLS SNI, and re-dials gost->Decodo by hostname. The phone
