@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.7.1-b64"
-        const val APP_VERSION_CODE = 9
+        const val APP_VERSION_NAME = "0.9.2-maps-nearme"
+        const val APP_VERSION_CODE = 18
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
@@ -228,6 +228,119 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             val hasError = result.platforms.values.any { it.status == "error" }
             result.status = if (hasError && result.platforms.values.all { it.status == "error" }) "error" else "completed"
         }
+
+        /**
+         * Execute a CitedLogic capture session — types `prompt` VERBATIM on one
+         * platform and returns the answer text + a base64 screenshot. Unlike
+         * [executeAuditSessionStatic] it does NOT wrap the prompt in
+         * [buildAuditPrompt] and does NOT extract a ranking — CitedLogic does its
+         * own analysis off the raw answer. Result is reported under
+         * result.platforms[platform] so the Mac dispatcher reuses the audit reader.
+         */
+        fun executeCaptureSessionStatic(
+            result: SessionResult,
+            flowEngine: FlowEngine,
+            platform: String,
+            prompt: String,
+            maxFrames: Int = 6,
+            lat: Double = Double.NaN,
+            lng: Double = Double.NaN
+        ) {
+            result.prompt = prompt
+            result.type = "capture"
+            val plat = platform.lowercase()
+            val pr = PlatformResult(status = "running")
+            result.platforms[plat] = pr
+
+            val stepBase = System.currentTimeMillis()
+            fun step(name: String, block: () -> Boolean): Boolean {
+                val t0 = System.currentTimeMillis()
+                val ok = try { block() } catch (e: Exception) {
+                    result.steps.add("[$plat] $name FAILED ${(System.currentTimeMillis()-t0)/1000}s - ${e.message}")
+                    false
+                }
+                val dt = (System.currentTimeMillis() - t0) / 1000
+                val total = (System.currentTimeMillis() - stepBase) / 1000
+                result.steps.add("[$plat] $name ${if (ok) "OK" else "FAILED"} ${dt}s (total ${total}s)")
+                return ok
+            }
+
+            try {
+                if (!step("reset_chrome") { flowEngine.resetChrome() }) {
+                    pr.status = "error"; pr.error = "reset_chrome failed"; result.status = "error"; return
+                }
+                Thread.sleep(500)
+                if (plat == "google-maps") {
+                    // Maps map-pack: go straight to a Maps search URL centered on the
+                    // job's coords (/@lat,lng) so results are metro-local regardless
+                    // of device GPS, then wait for results.
+                    if (!step("maps_search") { flowEngine.navigateGoogleMapsSearch(prompt, lat, lng) }) {
+                        pr.status = "error"; pr.error = "maps search failed"; result.status = "error"; return
+                    }
+                } else {
+                    // Chat flow mirrors the audit per-platform body — only the prompt
+                    // source differs (verbatim, not templated).
+                    if (!step("navigate") { flowEngine.navigateTo(plat) }) {
+                        pr.status = "error"; pr.error = "navigate failed"; result.status = "error"; return
+                    }
+                    Thread.sleep(if (plat == "chatgpt") 6000L else 3000L)
+                    step("dismiss_popups") { flowEngine.dismissPlatformPopups(plat); true }
+                    Thread.sleep(500)
+                    if (!step("input") { flowEngine.inputText(prompt) }) {
+                        pr.status = "error"; pr.error = "input failed"; result.status = "error"; return
+                    }
+                    Thread.sleep(300)
+                    step("submit") { flowEngine.submit() }
+                    Thread.sleep(2000)
+                    if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
+                        pr.status = "error"; pr.error = "generation timeout"; result.status = "error"; return
+                    }
+                    // Dismiss any popup that appears WITH the answer (ChatGPT pops a
+                    // "Share your precise location" card post-generation that covers
+                    // the response), then let the answer fully render.
+                    step("dismiss_popups2") { flowEngine.dismissPlatformPopups(plat); true }
+                    Thread.sleep(if (plat == "chatgpt") 3500L else 1500L)
+                }
+                // Capture the FULL answer as a series of frames while scrolling DOWN
+                // (down-scroll only — scrolling up triggers Chrome pull-to-refresh).
+                // The Mac stitches the frames into one tall image. The same downward
+                // scroll also renders the whole answer into the a11y tree, so the
+                // text scrape afterwards is complete. Stop early when a scroll reveals
+                // no new content (identical frame = answer bottom reached).
+                Thread.sleep(1500)  // let the final answer render settle
+                val frames = mutableListOf<String>()
+                val frameCount = if (maxFrames < 1) 1 else maxFrames
+                for (fi in 0 until frameCount) {
+                    val nm = "capture_${plat}_${System.currentTimeMillis()}_f$fi"
+                    val pth = try { flowEngine.saveScreenshot(nm) } catch (e: Exception) { null } ?: break
+                    if (fi == 0) pr.screenshotPath = pth
+                    val b64 = try {
+                        android.util.Base64.encodeToString(File(pth).readBytes(), android.util.Base64.NO_WRAP)
+                    } catch (e: Exception) {
+                        Log.w("DeviceAgent", "capture frame b64 failed $pth: ${e.message}"); null
+                    } ?: break
+                    if (frames.isNotEmpty() && b64 == frames.last()) break  // no change = bottom
+                    frames.add(b64)
+                    if (fi < frameCount - 1) {
+                        flowEngine.scrollResponse(2)   // ~2 swipes ≈ one viewport, with overlap
+                        Thread.sleep(1200)
+                    }
+                }
+                result.steps.add("[$plat] captured ${frames.size} frame(s)")
+                pr.screenshotB64 = frames.firstOrNull()
+                pr.screenshotFramesB64 = frames
+                pr.responseText = flowEngine.getResponseText()
+
+                pr.status = "completed"
+                result.status = "completed"
+                result.steps.add("[$plat] capture done answer=${pr.responseText?.length ?: 0}chars frames=${frames.size}")
+            } catch (e: Exception) {
+                pr.status = "error"
+                pr.error = e.message
+                result.status = "error"
+                Log.e("DeviceAgent", "Capture $plat error: ${e.stackTraceToString()}")
+            }
+        }
     }
 
     private var serverThread: Thread? = null
@@ -244,6 +357,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // during active VPN since the response travels over the existing
         // adb-forward HTTP tunnel.
         var screenshotB64: String? = null,
+        // CitedLogic capture: the full answer as a series of overlapping frames
+        // (scrolled top→bottom). The Mac stitches them into one tall PNG.
+        var screenshotFramesB64: MutableList<String> = mutableListOf(),
         var responseText: String? = null,
         var error: String? = null
     )
@@ -372,10 +488,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             val json = JSONObject(body)
             val sessionType = json.optString("type", "daily")
 
-            if (sessionType == "audit") {
-                handleAuditSession(writer, json)
-            } else {
-                handleDailySession(writer, json)
+            when (sessionType) {
+                "audit" -> handleAuditSession(writer, json)
+                "capture" -> handleCaptureSession(writer, json)
+                else -> handleDailySession(writer, json)
             }
         } catch (e: Exception) {
             Log.e("DeviceAgent", "Session error: ${e.message}")
@@ -477,6 +593,65 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         respond(writer, 200, response.toString())
     }
 
+    private fun handleCaptureSession(writer: OutputStreamWriter, json: JSONObject) {
+        val platform = json.optString("platform", "").lowercase()
+        val prompt = json.optString("prompt", "").let { if (it == "null") "" else it }
+        // maxFrames: how many overlapping frames to grab while scrolling down the
+        // answer (the Mac stitches them into one tall image). Capped to keep a
+        // runaway answer bounded; stops early when a scroll reveals no new content.
+        val maxFrames = json.optInt("maxFrames", 6).coerceIn(1, 12)
+        // lat/lng — used by the google-maps flow to center the map on the metro.
+        val lat = json.optDouble("lat", Double.NaN)
+        val lng = json.optDouble("lng", Double.NaN)
+
+        // CitedLogic capture: only prompt + platform are required (no business).
+        if (prompt.isBlank() || platform.isBlank()) {
+            respond(writer, 400, """{"error":"prompt and platform are required for capture"}""")
+            return
+        }
+
+        Log.d("DeviceAgent", "Capture: $platform prompt=${prompt.take(50)}... maxFrames=$maxFrames latlng=$lat,$lng")
+
+        val result = SessionResult(
+            platform = platform,
+            status = "running",
+            prompt = prompt,
+            type = "capture"
+        )
+        lastResult.set(result)
+
+        executeCaptureSession(result, platform, prompt, maxFrames, lat, lng)
+
+        // Response mirrors the audit shape so audit_dispatch_http._classify reads it
+        // unchanged (platforms map carrying response_text + screenshot_b64).
+        val response = JSONObject().apply {
+            put("status", result.status)
+            put("type", "capture")
+            put("prompt", result.prompt)
+            put("error", result.error ?: "")
+            put("steps", result.steps.size)
+            put("step_log", org.json.JSONArray(result.steps))
+            val platformsJson = JSONObject()
+            for ((name, pr) in result.platforms) {
+                val pj = JSONObject().apply {
+                    put("status", pr.status)
+                    put("ranking_position", 0)
+                    put("ranking_total", "")
+                    put("screenshot_path", pr.screenshotPath ?: "")
+                    put("screenshot_b64", pr.screenshotB64 ?: "")
+                    // All frames (top→bottom) for the Mac to stitch into one tall PNG.
+                    put("screenshot_frames", org.json.JSONArray(pr.screenshotFramesB64))
+                    put("response_text", pr.responseText ?: "")
+                    put("error", pr.error ?: "")
+                }
+                platformsJson.put(name, pj)
+            }
+            put("platforms", platformsJson)
+        }
+        // Always 200 — caller inspects per-platform status in the JSON body.
+        respond(writer, 200, response.toString())
+    }
+
     fun executeSession(
         result: SessionResult,
         platform: String,
@@ -485,6 +660,17 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         backlinkDomain: String?
     ) {
         executeSessionStatic(result, flowEngine, platform, prompt, followUp, backlinkDomain)
+    }
+
+    fun executeCaptureSession(
+        result: SessionResult,
+        platform: String,
+        prompt: String,
+        maxFrames: Int = 6,
+        lat: Double = Double.NaN,
+        lng: Double = Double.NaN
+    ) {
+        executeCaptureSessionStatic(result, flowEngine, platform, prompt, maxFrames, lat, lng)
     }
 
     fun executeAuditSession(

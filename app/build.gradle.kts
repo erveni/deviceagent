@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.7.1-b64"
+        versionCode = 18
+        versionName = "0.9.2-maps-nearme"
     }
 
     buildTypes {

@@ -27,6 +27,7 @@ import hashlib
 import itertools
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -316,6 +317,66 @@ def _pull_screenshot(serial: str, remote_path: str, platform: str, keyword_id: i
         pass
     return ""
 
+
+_OCR_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "ocr_vision")
+_OCR_WARNED = False
+# Answer markers a properly-rendered ranking screenshot must show. The prompt asks
+# for "[RANK: x/y]" + "Google Maps: yes/no" per business, so a real answer always
+# carries one of these; a blank page / prompt-only / login-wall does not.
+_ANSWER_RE = re.compile(r"rank:\s*\d+\s*/\s*\d+|\[rank|google maps|maps:\s*(yes|no)", re.I)
+_WALL_RE = re.compile(r"verify you are human|not a robot|captcha|just a moment|press & hold", re.I)
+
+
+def _screenshot_has_answer(path: str) -> bool:
+    """OCR a ranking screenshot and decide whether it actually shows the answer.
+
+    Returns True if the rendered image contains answer markers (RANK / Google Maps
+    / numbered business list), False if it shows only the prompt, a blank page, or
+    a login/captcha wall. Fail-open: if the OCR tool is missing or errors, returns
+    True so a tooling gap never blocks the audit pipeline."""
+    global _OCR_WARNED
+    if os.environ.get("OCR_VALIDATE_SCREENSHOT", "1") != "1":
+        return True
+    if not path or not os.path.exists(path) or not os.path.exists(_OCR_BIN):
+        if not os.path.exists(_OCR_BIN) and not _OCR_WARNED:
+            print(f"  [ocr] tool not found at {_OCR_BIN} — screenshot validation disabled", flush=True)
+            _OCR_WARNED = True
+        return True
+    try:
+        txt = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40).stdout
+    except Exception:
+        return True
+    if _WALL_RE.search(txt):
+        return False
+    if _ANSWER_RE.search(txt):
+        return True
+    # numbered list of >=2 items with prose is also a real answer
+    if len(re.findall(r"(?m)^\s*\d+[\.\)]\s+\w", txt)) >= 2 and len(txt) > 350:
+        return True
+    return False
+
+
+def _capture_has_answer(path: str, prompt: str) -> bool:
+    """Capture-mode variant of _screenshot_has_answer. CitedLogic types a verbatim
+    prompt, so a real answer carries no [RANK]/Google-Maps markers — the signal is
+    simply that the engine rendered substantial prose BEYOND echoing the prompt.
+
+    Returns False only for a login/captcha wall or a near-empty / prompt-only page.
+    Fail-open if the OCR tool is missing or errors (never block the pipeline)."""
+    if os.environ.get("OCR_VALIDATE_SCREENSHOT", "1") != "1":
+        return True
+    if not path or not os.path.exists(path) or not os.path.exists(_OCR_BIN):
+        return True
+    try:
+        txt = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40).stdout
+    except Exception:
+        return True
+    if _WALL_RE.search(txt):
+        return False
+    body = (txt or "").strip()
+    # Substantially more rendered text than the prompt alone = a real answer block.
+    return len(body) >= max(len(prompt or "") + 60, 120)
+
 # Per-job gost listener port pool (50 slots, even ports).
 _GOST_PORTS = list(range(16001, 16101, 2))
 _gost_lock = threading.Lock()
@@ -464,6 +525,51 @@ def _write_b64_screenshot(b64: str, platform: str, keyword_id: int) -> str:
     return ""
 
 
+# Device chrome to crop off each frame before stitching (status+URL bar at top,
+# nav/gesture bar at bottom). Tune per device via env; defaults for the 720x1600
+# fleet phones. Only used in CitedLogic capture mode.
+# Defaults tuned on the 720x1600 fleet phones: top = status bar + URL bar,
+# bottom = the engine's input/search bar + gesture nav. Cropping these BEFORE
+# stitching is essential — otherwise the fixed bars repeat in the output and
+# create false overlap that collapses the stitch. Override per device via env.
+_STITCH_TOP_CROP = int(os.environ.get("CL_STITCH_TOP_CROP", "150"))
+_STITCH_BOTTOM_CROP = int(os.environ.get("CL_STITCH_BOTTOM_CROP", "140"))
+# ChatGPT's "Ask anything" composer is taller than the search bars on the others;
+# Google Maps has no bottom input bar (just the map edge / gesture nav).
+_STITCH_BOTTOM_CROP_BY_PLAT = {"chatgpt": 215, "google-maps": 60}
+
+
+def _write_stitched_screenshot(frames_b64: list, platform: str, keyword_id: int) -> str:
+    """Decode the CitedLogic capture frames and stitch them into one tall PNG of
+    the full answer. Returns the local path, or "" on failure (caller falls back
+    to the single-frame screenshot)."""
+    frames = [f for f in (frames_b64 or []) if f]
+    if not frames:
+        return ""
+    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
+    plat_dir = plat_dir_map.get(platform.lower(), platform)
+    date_dir = datetime.now().strftime("%Y-%m-%d")
+    local_dir = os.path.join(AUDIT_RESULTS_DIR, date_dir, plat_dir)
+    os.makedirs(local_dir, exist_ok=True)
+    ts = int(datetime.now(timezone.utc).timestamp())
+    frame_paths = []
+    try:
+        for i, b64 in enumerate(frames):
+            fp = os.path.join(local_dir, f"kw{keyword_id}_{platform.lower()}_{ts}_f{i}.png")
+            with open(fp, "wb") as f:
+                f.write(base64.b64decode(b64))
+            frame_paths.append(fp)
+        out_path = os.path.join(local_dir, f"kw{keyword_id}_{platform.lower()}_{ts}.png")
+        from citedlogic_stitch import stitch_frames  # lazy: keeps PIL/numpy out of the ranking path
+        bottom_crop = _STITCH_BOTTOM_CROP_BY_PLAT.get(platform.lower(), _STITCH_BOTTOM_CROP)
+        stitched = stitch_frames(frame_paths, out_path,
+                                 top_crop=_STITCH_TOP_CROP, bottom_crop=bottom_crop)
+        return stitched or (frame_paths[0] if frame_paths else "")
+    except Exception as e:
+        print(f"  [stitch] failed kw{keyword_id} {platform}: {type(e).__name__}: {e}", flush=True)
+        return frame_paths[0] if frame_paths else ""
+
+
 # ── job spec ──
 
 def build_audit_dispatch_job(job_record: dict) -> dict:
@@ -512,11 +618,25 @@ def dispatch_audit_job(
     platform: str,
     csv_path: str | None = None,
     acquire_timeout: float | None = ACQUIRE_TIMEOUT_S,
+    capture_prompt: str | None = None,
 ) -> dict:
     """Run one (job, platform) via HTTP to the device-agent app.
 
     Returns a CSV row dict (same schema as the subprocess dispatcher).
+
+    When `capture_prompt` is set, runs in CitedLogic CAPTURE mode: the phone is
+    sent `type=capture` and types the prompt VERBATIM (no audit template, no
+    business required). All proxy / exact-GPS / retry / screenshot machinery is
+    shared; only the prompt source and the OCR answer-gate differ.
     """
+    # In capture mode the verbatim prompt produces free-form prose with no
+    # [RANK]/Google-Maps markers, so the ranking-oriented OCR gate would wrongly
+    # demote every good capture — use the capture-aware checker instead.
+    _answer_ok = (
+        (lambda p: _capture_has_answer(p, capture_prompt))
+        if capture_prompt is not None
+        else _screenshot_has_answer
+    )
     POOL.setup_forwards()
     device_idx = POOL.acquire(timeout=acquire_timeout)
     if device_idx is None:
@@ -642,13 +762,23 @@ def dispatch_audit_job(
         # ports the rolling fix (run_rolling_test.py 2026-05-16) to audit. Zero
         # traffic during these 60s, so no router/ISP load spike.
         time.sleep(60)
-        zc = (entry.get("proxy") or {}).get("zip", "") or ""
-        ll = _zip_to_latlng(zc)
-        if ll:
+        # Opt-in: a job may carry EXACT mock GPS (mock_lat/mock_lng) — used by the
+        # CitedLogic capture path which puts the device at a precise lat/lng instead
+        # of deriving it from the proxy zip. Falls back to zip-derived otherwise.
+        _mlat, _mlng = job.get("mock_lat"), job.get("mock_lng")
+        if _mlat is not None and _mlng is not None:
             try:
-                mock_location(serial, ll[0], ll[1])
+                mock_location(serial, float(_mlat), float(_mlng))
             except Exception:
                 pass
+        else:
+            zc = (entry.get("proxy") or {}).get("zip", "") or ""
+            ll = _zip_to_latlng(zc)
+            if ll:
+                try:
+                    mock_location(serial, ll[0], ll[1])
+                except Exception:
+                    pass
         tzn = _STATE_TZ.get(entry.get("state", "").upper())
         if tzn:
             try:
@@ -656,15 +786,27 @@ def dispatch_audit_job(
             except Exception:
                 pass
         _adb(serial, "forward", f"tcp:{http_port}", "tcp:8765", timeout=5)
-        body = {
-            "type": "audit",
-            "bizName": entry["biz_name"],
-            "bizUrl": entry.get("biz_url", ""),
-            "city": entry.get("city", ""),
-            "state": entry.get("state", ""),
-            "keyword": _keyword_text(entry, int(keyword_id)),
-            "platform": platform.lower(),
-        }
+        if capture_prompt is not None:
+            body = {
+                "type": "capture",
+                "prompt": capture_prompt,
+                "platform": platform.lower(),
+            }
+            # google-maps centers the map on these coords (/@lat,lng) so results
+            # are metro-local regardless of device GPS.
+            if job.get("mock_lat") is not None and job.get("mock_lng") is not None:
+                body["lat"] = float(job["mock_lat"])
+                body["lng"] = float(job["mock_lng"])
+        else:
+            body = {
+                "type": "audit",
+                "bizName": entry["biz_name"],
+                "bizUrl": entry.get("biz_url", ""),
+                "city": entry.get("city", ""),
+                "state": entry.get("state", ""),
+                "keyword": _keyword_text(entry, int(keyword_id)),
+                "platform": platform.lower(),
+            }
         return _post_audit(http_port, body)
 
     try:
@@ -730,15 +872,59 @@ def dispatch_audit_job(
         # 4. Classify + build row
         duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
         status, rank_pos, rank_total, rank_ctx, ss_remote, ss_b64 = _classify(response, platform)
-        # Prefer inline base64 (zero-adb data plane). Fall back to adb pull when
-        # the phone's APK is older than 0.7.1-b64 or the b64 read failed on-device.
-        ss_local = _write_b64_screenshot(ss_b64, platform, int(keyword_id))
+        # CitedLogic capture mode: stitch the multi-frame full-answer screenshot.
+        # Falls back to the single frame, then adb pull. Audit mode is unchanged.
+        ss_local = ""
+        if capture_prompt is not None:
+            _frames = (response.get("platforms") or {}).get(platform.lower(), {}).get("screenshot_frames") or []
+            ss_local = _write_stitched_screenshot(_frames, platform, int(keyword_id))
+        if not ss_local:
+            # Prefer inline base64 (zero-adb data plane). Fall back to adb pull when
+            # the phone's APK is older than 0.7.1-b64 or the b64 read failed on-device.
+            ss_local = _write_b64_screenshot(ss_b64, platform, int(keyword_id))
         if not ss_local:
             ss_local = _pull_screenshot(serial, ss_remote, platform, int(keyword_id))
         # Persist full LLM response text to a .txt file alongside the screenshot
         # for archival, BUT the DB column gets the actual text blob (not the path).
         resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
         response_text_path = _write_response_text(resp_text_blob, platform, int(keyword_id))
+
+        # 4b. Inline screenshot validation. A 'success'/'no_rank' row MUST visibly
+        # show the answer — OCR the screenshot, and if it's blank / prompt-only /
+        # a login-captcha wall, rotate the Decodo session and re-capture ONCE. If
+        # it still shows no answer, demote to a retryable status so a bad
+        # screenshot is never recorded as a good result. (OCR_VALIDATE_SCREENSHOT=0
+        # disables this; _screenshot_has_answer fails open if the OCR tool is gone.)
+        if status in ("success", "no_rank") and ss_local and not _answer_ok(ss_local):
+            print(f"  [ocr] no answer in screenshot kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
+            try:
+                socksdroid_disconnect(serial)
+            except Exception:
+                pass
+            try:
+                gost.stop()
+            except Exception:
+                pass
+            ocr_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
+            gost = GostManager(
+                [{"device_id": gost_key, "zip": ocr_zip, "state": state_code,
+                  "country": "us", "session_duration": 30}],
+                base_port=gost_port,
+            )
+            gost.start(wait_seconds=2.0)
+            response = _setup_and_post()
+            status, rank_pos, rank_total, rank_ctx, ss_remote, ss_b64 = _classify(response, platform)
+            ss_local = ""
+            if capture_prompt is not None:
+                _frames = (response.get("platforms") or {}).get(platform.lower(), {}).get("screenshot_frames") or []
+                ss_local = _write_stitched_screenshot(_frames, platform, int(keyword_id))
+            ss_local = ss_local or _write_b64_screenshot(ss_b64, platform, int(keyword_id)) \
+                or _pull_screenshot(serial, ss_remote, platform, int(keyword_id))
+            resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
+            response_text_path = _write_response_text(resp_text_blob, platform, int(keyword_id))
+            duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
+            if status in ("success", "no_rank") and (not ss_local or not _answer_ok(ss_local)):
+                status = "ocr_no_answer"  # non-terminal -> outer retry loop re-runs it
 
         # Capture per-platform error + last few steps for diagnostics. Top-level
         # response.error is often empty when a specific platform fails — the real

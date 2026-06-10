@@ -26,3 +26,4 @@ Thumbs.db
 !.env.example
 !.env.*.example
 CLAUDE.local.md
+citedlogic_local/

@@ -199,6 +199,62 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return true
     }
 
+    // ── google maps map-pack (CitedLogic) ──
+
+    /** Navigate straight to a Google Maps search URL for the query and wait for the
+     *  local results pack to render. When lat/lng are given, they are embedded in
+     *  the URL (`/@lat,lng,13z`) so the map CENTERS on the target metro — Maps reads
+     *  the viewport center, not the device GPS, which the mock doesn't reliably
+     *  override for Chrome's geolocation. Dismisses Google's consent interstitials. */
+    fun navigateGoogleMapsSearch(query: String, lat: Double, lng: Double): Boolean {
+        // "near me" forces Maps to resolve to the DEVICE location (overriding the
+        // @viewport), so strip it when we have coords — the map center IS the metro.
+        val hasCoords = lat.isFinite() && lng.isFinite() && (lat != 0.0 || lng != 0.0)
+        val q = if (hasCoords)
+            query.replace(Regex("(?i)\\s*\\bnear\\s*(by|me)\\b"), "").trim()
+        else query
+        s.log("── GOOGLE MAPS SEARCH: \"${q.take(50)}\" @ $lat,$lng ──")
+        var url = "https://www.google.com/maps/search/" +
+            java.net.URLEncoder.encode(q, "UTF-8")
+        if (hasCoords) {
+            url += "/@$lat,$lng,13z"
+        }
+        s.navigateToUrl(url)
+        Thread.sleep(9000)  // Maps is heavy — give the map + results time to load
+        for (retry in 1..2) {
+            val tree = s.dumpTree(8).lowercase()
+            if ("site can" in tree || "net::err" in tree || "err_" in tree) {
+                s.log("Maps load error — reloading (retry $retry/2)")
+                s.navigateToUrl(url)
+                Thread.sleep(8000)
+            } else break
+        }
+        dismissGoogleConsent()
+        Thread.sleep(3500)  // let the results list settle after consent
+        return true
+    }
+
+    private fun dismissGoogleConsent() {
+        val labels = listOf(
+            "Accept all", "Reject all", "I agree", "Accept", "Got it",
+            "No thanks", "Dismiss", "Stay on web", "Continue"
+        )
+        for (round in 1..2) {
+            var hit = false
+            for (label in labels) {
+                val node = s.findNode(text = label, timeoutMs = 800)
+                    ?: s.findNode(contentDesc = label, timeoutMs = 500)
+                if (node != null) {
+                    s.clickNode(node)
+                    s.log("Maps consent dismissed: $label")
+                    hit = true
+                    Thread.sleep(900)
+                }
+            }
+            if (!hit) break
+        }
+    }
+
     // ── input text ──
 
     fun inputText(text: String): Boolean {
@@ -967,7 +1023,9 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             "gemini" -> listOf("No thanks", "Try it", "Close banner")
             "chatgpt" -> listOf(
                 "Reject non-essential", "Reject all", "Close", "Stay logged out",
-                "Not now", "Maybe later", "Skip", "Stay signed out"
+                "Not now", "Maybe later", "Skip", "Stay signed out",
+                // "Share your precise location" card that pops post-generation
+                "No thanks", "No, thanks", "Dismiss"
             )
             "perplexity" -> listOf(
                 // ONLY dismiss/close actions — NEVER tap "Install", "Download", "Open", etc.
