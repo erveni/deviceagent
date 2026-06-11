@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.4-nordvpn"
-        const val APP_VERSION_CODE = 20
+        const val APP_VERSION_NAME = "0.9.5-nordvpn"
+        const val APP_VERSION_CODE = 21
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
@@ -350,10 +350,13 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 // so nudge the business list into view first; the map pack is already
                 // at the top for google-maps. Down-only scrolls (up = pull-to-refresh).
                 if (flowEngine.dismissMidCapturePopup()) Thread.sleep(400)
+                // Perplexity auto-opens a place-detail card over the results — clear it.
+                if (plat == "perplexity") flowEngine.dismissPerplexityPlaceCard()
                 val preScroll = when (plat) {
                     "google-maps" -> 0
                     "chatgpt" -> 3
-                    else -> 2          // gemini / perplexity
+                    "perplexity" -> 1
+                    else -> 1          // gemini (the list starts ~1 viewport down)
                 }
                 if (preScroll > 0) {
                     flowEngine.scrollResponse(preScroll)
@@ -375,8 +378,16 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
 
                 // Keep scrolling (down-only) to render the FULL answer into the a11y
                 // tree so the text scrape is complete — the spec requires the full
-                // answerText even though the IMAGE is a single screen.
-                for (i in 0 until 5) {
+                // answerText even though the IMAGE is a single screen. Cap per engine:
+                // chatgpt answers run long; perplexity's list+summary is compact and
+                // near the top, so stop before the "Related questions" tail.
+                val maxTextScroll = when (plat) {
+                    "google-maps" -> 1
+                    "perplexity" -> 2
+                    "gemini" -> 3
+                    else -> 5          // chatgpt
+                }
+                for (i in 0 until maxTextScroll) {
                     if (flowEngine.isAnswerEndVisible(plat)) break
                     flowEngine.scrollResponse(2)
                     Thread.sleep(800)

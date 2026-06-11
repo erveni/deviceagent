@@ -263,11 +263,23 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     private val NORDVPN_PKG = "com.nordvpn.android"
 
-    /** Connect NordVPN to [city] (e.g. "Atlanta"). Returns true once "Secured". */
+    /** Connect NordVPN to [city] (e.g. "Atlanta"). Returns true once "Secured".
+     *  Short-circuits if already connected to [city]; retries once on failure. */
     fun connectNordVpnCity(city: String): Boolean {
         s.log("── NORDVPN CONNECT: \"$city\" ──")
         if (!s.launchApp(NORDVPN_PKG)) return false
         Thread.sleep(4500)  // app cold-start / resume
+
+        // Already connected to the target city? Avoid a redundant reconnect.
+        if (nordConnectedToCity(city)) { s.log("NordVPN: already connected to \"$city\""); return true }
+        if (connectNordVpnAttempt(city)) return true
+        // retry once: relaunch + attempt again
+        s.log("NordVPN: connect retry for \"$city\"")
+        s.launchApp(NORDVPN_PKG); Thread.sleep(3500)
+        return connectNordVpnAttempt(city)
+    }
+
+    private fun connectNordVpnAttempt(city: String): Boolean {
 
         // Focus the search field. Once it holds text its content-desc changes, so
         // locate it by editability + top position, not by its label.
@@ -301,16 +313,33 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         val ok = s.clickNode(result); result.recycle()
         if (!ok) { s.log("NordVPN: failed to tap city result"); return false }
 
-        // Wait for the connection to come up ("Secured" / "<city>, United States").
+        // Wait for the connection to come up — detect the "Pause connection" button
+        // on the connection card showing the target city. NOT the word "Secured"
+        // (matches the "Secured by VPN" stats card even when DISconnected).
         val deadline = System.currentTimeMillis() + 25000
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(1500)
-            val secured = s.findNode(text = "Secured", timeoutMs = 600) != null ||
-                s.findNode(contentDesc = "Secured", timeoutMs = 400) != null
-            if (secured) { s.log("NordVPN: Secured (\"$city\")"); return true }
+            if (nordConnectedToCity(city)) { s.log("NordVPN: connected (\"$city\")"); return true }
         }
-        s.log("NordVPN: did not reach Secured for \"$city\"")
+        s.log("NordVPN: did not connect to \"$city\"")
         return false
+    }
+
+    /** True only when NordVPN is actively connected (the "Pause connection" button
+     *  is present — it's absent on the disconnected "Secure my connection" screen). */
+    private fun nordConnected(): Boolean =
+        s.findNode(text = "Pause connection", timeoutMs = 700) != null ||
+        s.findNode(contentDesc = "Pause connection", timeoutMs = 400) != null
+
+    /** Connected AND the connection card (upper region, not the Recents row) shows
+     *  the target city. */
+    private fun nordConnectedToCity(city: String): Boolean {
+        if (!nordConnected()) return false
+        val node = s.findNode(text = "$city, United States", timeoutMs = 800)
+            ?: s.findNode(contentDesc = "$city, United States", timeoutMs = 500)
+            ?: return false
+        val r = android.graphics.Rect(); node.getBoundsInScreen(r); node.recycle()
+        return r.top in 1..700   // connection card sits high; Recents tiles are lower
     }
 
     /** The NordVPN search field = the top-most editable node (its label/content-desc
@@ -740,6 +769,27 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             }
         }
         return false
+    }
+
+    /**
+     * Perplexity auto-opens a business-detail card (name + rating + address + phone)
+     * over the dimmed results, which hangs/obscures the capture. Detect it (a lower-
+     * half overlay carrying "reviews" / a phone number, with a Close control) and
+     * dismiss by tapping the dimmed backdrop above the card.
+     */
+    fun dismissPerplexityPlaceCard(): Boolean {
+        val nodes = flattenTree()
+        val h = s.screenHeight()
+        val cardOpen = nodes.any { n ->
+            (n.text.contains("reviews", true) || n.cd.equals("Close", true) ||
+                Regex("\\(\\d{3}\\)\\s?\\d{3}").containsMatchIn(n.text))
+        } && s.findNode(contentDesc = "Close", timeoutMs = 200) != null
+        if (!cardOpen) return false
+        // tap the backdrop (dimmed area above the card) to close the modal
+        s.gestureTap(s.screenWidth() / 2f, h * 0.14f)
+        s.log("perplexity place-card dismissed (backdrop tap)")
+        Thread.sleep(900)
+        return true
     }
 
     /**

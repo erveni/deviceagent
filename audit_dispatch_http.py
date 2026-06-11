@@ -454,6 +454,60 @@ def _keyword_text(entry: dict, keyword_id: int) -> str:
 AUDIT_HTTP_TIMEOUT_S = 360  # caps a single platform call (120s wait_gen + buffer)
 
 
+# ── NordVPN routing (chatgpt/perplexity geo by NordVPN city exit IP) ──
+# 25 CitedLogic metros → NordVPN US city. ~19 exact; the rest map to the nearest
+# NordVPN city (NordVPN has servers in every US state, so geo stays same-region).
+_METRO_NORD_CITY = {
+    "atlanta-ga": "Atlanta", "baltimore-md": "Baltimore", "boston-ma": "Boston",
+    "charlotte-nc": "Charlotte", "chicago-il": "Chicago", "dallas-tx": "Dallas",
+    "denver-co": "Denver", "detroit-mi": "Detroit", "houston-tx": "Houston",
+    "los-angeles-ca": "Los Angeles", "miami-fl": "Miami", "minneapolis-mn": "Minneapolis",
+    "new-york-ny": "New York", "phoenix-az": "Phoenix", "portland-or": "Portland",
+    "san-francisco-ca": "San Francisco", "seattle-wa": "Seattle",
+    "st-louis-mo": "Saint Louis", "washington-dc": "Ashburn",
+    # nearest NordVPN city for the 6 metros without an exact one:
+    "philadelphia-pa": "New York", "riverside-ca": "Los Angeles",
+    "san-antonio-tx": "Houston", "san-diego-ca": "Los Angeles",
+    "orlando-fl": "Miami", "tampa-fl": "Miami",
+}
+
+# Engines that ride NordVPN (geo by datacenter city exit IP) instead of Decodo.
+# Gemini stays on Decodo residential (it rejects datacenter IPs for localization).
+_NORDVPN_AI_ENGINES = {"chatgpt", "perplexity"}
+
+
+def _metro_nord_city(metro: str) -> str:
+    return _METRO_NORD_CITY.get((metro or "").strip().lower(), "")
+
+
+def _get_json(local_port: int, path: str, timeout: float = 8.0) -> dict:
+    """GET JSON from the phone's device-agent (e.g. /health)."""
+    try:
+        with urllib.request.urlopen(f"http://localhost:{local_port}{path}", timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def _post_json(local_port: int, path: str, body: dict, timeout: float = 90.0) -> dict:
+    """POST JSON to the phone's device-agent at an arbitrary path (e.g. /vpn/connect)."""
+    payload = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://localhost:{local_port}{path}",
+        data=payload, headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return {"ok": False, "error": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def _post_audit(local_port: int, body: dict) -> dict:
     payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
@@ -723,7 +777,12 @@ def dispatch_audit_job(
     # CLEAN home IP — running it through the flagged residential proxy trips
     # reCAPTCHA. So skip the whole proxy tunnel for it; the AI engines still need
     # the proxy (Gemini refuses the shared home IP, all three localize by exit IP).
-    use_proxy = not (capture_prompt is not None and platform.lower() == "google-maps")
+    # Proxy routing per engine (capture mode):
+    #   gemini      → Decodo residential (use_proxy=True; datacenter IPs can't localize it)
+    #   chatgpt/perplexity → NordVPN city  (no Decodo; phone /vpn/connect)
+    #   google-maps → no proxy, VPN off, uule
+    # Non-capture (audit/ranking) always uses Decodo.
+    use_proxy = capture_prompt is None or platform.lower() == "gemini"
     serp_location = ""
     if not use_proxy:
         serp_location = _canonical_serp_location(entry.get("city", ""), entry.get("state", ""))
@@ -787,19 +846,59 @@ def dispatch_audit_job(
         """Bring socksdroid + GPS + forwarding online then POST the audit.
         Returns the parsed HTTP response. Caller decides whether to retry."""
         if not use_proxy:
-            # No tunnel: phone uses its clean home IP. Geo for google-maps comes
-            # from the uule param; still set exact GPS + forward, then POST.
-            _mlat0, _mlng0 = job.get("mock_lat"), job.get("mock_lng")
-            if _mlat0 is not None and _mlng0 is not None:
-                try:
-                    mock_location(serial, float(_mlat0), float(_mlng0))
-                except Exception:
-                    pass
+            # No Decodo tunnel. Forward the HTTP control port first (the /vpn/* and
+            # /session calls ride it; it survives the NordVPN VPN — verified).
             _adb(serial, "forward", f"tcp:{http_port}", "tcp:8765", timeout=5)
+            plat_l = platform.lower()
+            if plat_l in _NORDVPN_AI_ENGINES:
+                # chatgpt/perplexity localize by the NordVPN city exit IP.
+                nord_city = _metro_nord_city(entry.get("city", ""))
+                if not nord_city:
+                    raise RuntimeError(f"no NordVPN city for metro {entry.get('city','')}")
+                # Connect, then VERIFY tun0 is actually up — the app's "Secured" can
+                # show before traffic routes (esp. after a Decodo→NordVPN VPN switch
+                # on the same phone), which silently leaks the capture out the home IP.
+                tun_up = False
+                for _att in range(3):
+                    vr = _post_json(http_port, "/vpn/connect", {"city": nord_city}, timeout=120)
+                    if not vr.get("ok"):
+                        print(f"  [nordvpn] connect {nord_city} not ok (try {_att+1}): {vr.get('error','')}", flush=True)
+                        continue
+                    time.sleep(3)  # let the tunnel take over routing
+                    if (_get_json(http_port, "/health").get("tun0") or {}).get("up"):
+                        tun_up = True
+                        break
+                    print(f"  [nordvpn] tun0 not up after connect {nord_city} (try {_att+1}) — retrying", flush=True)
+                if not tun_up:
+                    raise RuntimeError(f"nordvpn tun0 not up after connect {nord_city}")
+                time.sleep(2)  # extra settle before the capture
+                print(f"  [nordvpn] {plat_l} → {nord_city} connected (tun0 up)", flush=True)
+            else:
+                # google-maps: VPN OFF so the plain Google search runs on the clean
+                # home IP (uule supplies geo); a datacenter google.com search trips
+                # reCAPTCHA. Verify tun0 is actually DOWN (the NordVPN disconnect UI
+                # is occasionally flaky in-sequence) — retry, then fail rather than
+                # capture on a datacenter IP.
+                tun_down = False
+                for _att in range(3):
+                    _post_json(http_port, "/vpn/disconnect", {}, timeout=60)
+                    time.sleep(2)
+                    if not ((_get_json(http_port, "/health").get("tun0") or {}).get("up")):
+                        tun_down = True
+                        break
+                    print(f"  [nordvpn] tun0 still up after disconnect (try {_att+1}) — retrying", flush=True)
+                if not tun_down:
+                    raise RuntimeError("nordvpn would not disconnect (tun0 up) — refusing google-maps on datacenter IP")
+                _mlat0, _mlng0 = job.get("mock_lat"), job.get("mock_lng")
+                if _mlat0 is not None and _mlng0 is not None:
+                    try:
+                        mock_location(serial, float(_mlat0), float(_mlng0))
+                    except Exception:
+                        pass
             body = {
                 "type": "capture",
                 "prompt": capture_prompt,
-                "platform": platform.lower(),
+                "platform": plat_l,
                 "serpLocation": serp_location,
             }
             if job.get("mock_lat") is not None and job.get("mock_lng") is not None:
