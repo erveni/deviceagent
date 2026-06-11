@@ -83,6 +83,16 @@ _STATE_GOOD_ZIP: dict[str, str] = {
     "NC": "28303", "NJ": "08736", "NY": "10001", "OH": "34200", "PA": "19102",
     "RI": "02904", "TN": "37402", "TX": "76016", "UT": "84041", "VA": "24502",
     "WA": "98115",
+    # Added 2026-06-12: city/state-only campaigns (no zip) in states absent from the
+    # map were silently routing to the NYC fallback (Nutydes/SC, Mcguire/NV in the
+    # Jun-12 initial-ranking run). Filled the remaining US states with a metro zip so
+    # state-level geo lands in-region instead of New York.
+    "AL": "35203", "AK": "99501", "AR": "72201", "CT": "06103", "DC": "20001",
+    "DE": "19801", "IA": "50309", "KS": "67202", "LA": "70112", "MA": "02108",
+    "ME": "04101", "MI": "48226", "MN": "55401", "MO": "63101", "MT": "59101",
+    "ND": "58102", "NE": "68102", "NH": "03101", "NM": "87101", "NV": "89101",
+    "OK": "73102", "OR": "97201", "SC": "29577", "SD": "57104", "VT": "05401",
+    "WI": "53202", "WV": "25301", "WY": "82001",
 }
 _FALLBACK_GOOD_ZIP = "10001"  # used when state has no entry above
 
