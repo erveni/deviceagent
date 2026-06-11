@@ -255,6 +255,130 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
     }
 
+    // ── NordVPN control (drive the NordVPN app via accessibility) ──
+    // Replaces Decodo/gost/SocksDroid for the engines that work on NordVPN
+    // (chatgpt / perplexity). One-time per phone: app must be installed + logged
+    // in + VPN consent granted. Connect flow mapped on NordVPN Android 2026:
+    //   search field → type city → tap Cities result → wait "Secured".
+
+    private val NORDVPN_PKG = "com.nordvpn.android"
+
+    /** Connect NordVPN to [city] (e.g. "Atlanta"). Returns true once "Secured". */
+    fun connectNordVpnCity(city: String): Boolean {
+        s.log("── NORDVPN CONNECT: \"$city\" ──")
+        if (!s.launchApp(NORDVPN_PKG)) return false
+        Thread.sleep(4500)  // app cold-start / resume
+
+        // Focus the search field. Once it holds text its content-desc changes, so
+        // locate it by editability + top position, not by its label.
+        var field = findNordSearchField()
+        if (field == null) {
+            val lbl = s.findNode(contentDesc = "Search all locations", timeoutMs = 6000)
+                ?: s.findNode(text = "Search all locations", timeoutMs = 2000)
+            if (lbl != null) { s.clickNode(lbl); lbl.recycle(); Thread.sleep(1200) }
+            field = findNordSearchField()
+        }
+        if (field == null) { s.log("NordVPN: search field not found (logged in?)"); return false }
+        s.clickNode(field); field.recycle()
+        Thread.sleep(900)
+
+        // Clear any residual query, then set the city. Re-acquire the node between
+        // operations — a Compose node reference goes stale after each SET_TEXT.
+        field = findNordSearchField()
+        if (field != null) { try { s.setTextOnNode(field, "") } catch (_: Exception) {}; field.recycle() }
+        Thread.sleep(400)
+        field = findNordSearchField()
+        if (field == null) { s.log("NordVPN: search field lost before typing"); return false }
+        val ok1 = try { s.setTextOnNode(field, city) } catch (_: Exception) { false }
+        field.recycle()
+        if (!ok1) { s.log("NordVPN: SET_TEXT failed for \"$city\""); return false }
+        Thread.sleep(2500)  // let the Cities result render
+
+        // Tap the city result. Under "Cities", a node whose text == city (not the
+        // search field) — match case-insensitively and prefer one below the field.
+        val result = findNordCityResult(city)
+        if (result == null) { s.log("NordVPN: no city result for \"$city\""); return false }
+        val ok = s.clickNode(result); result.recycle()
+        if (!ok) { s.log("NordVPN: failed to tap city result"); return false }
+
+        // Wait for the connection to come up ("Secured" / "<city>, United States").
+        val deadline = System.currentTimeMillis() + 25000
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(1500)
+            val secured = s.findNode(text = "Secured", timeoutMs = 600) != null ||
+                s.findNode(contentDesc = "Secured", timeoutMs = 400) != null
+            if (secured) { s.log("NordVPN: Secured (\"$city\")"); return true }
+        }
+        s.log("NordVPN: did not reach Secured for \"$city\"")
+        return false
+    }
+
+    /** The NordVPN search field = the top-most editable node (its label/content-desc
+     *  changes once it holds text, so match by editability + position). */
+    private fun findNordSearchField(): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        var found: android.view.accessibility.AccessibilityNodeInfo? = null
+        fun walk(n: android.view.accessibility.AccessibilityNodeInfo, d: Int) {
+            if (found != null || d > 40) return
+            if (n.isEditable) {
+                val r = android.graphics.Rect(); n.getBoundsInScreen(r)
+                if (r.top in 1..260) { found = n; return }
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, d + 1) }
+        }
+        walk(root, 0)
+        root.recycle()
+        return found
+    }
+
+    private fun findNordCityResult(city: String): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val kw = city.trim().lowercase()
+        val match = findNordCityRec(root, kw)
+        root.recycle()
+        return match
+    }
+
+    private fun findNordCityRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        kw: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val cls = node.className?.toString() ?: ""
+        val txt = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
+        // The search field itself is an EditText holding the typed text — skip it.
+        if (txt == kw && !cls.contains("EditText")) {
+            val r = android.graphics.Rect(); node.getBoundsInScreen(r)
+            if (r.top > 250) return node   // results sit below the search field
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { findNordCityRec(it, kw)?.let { m -> return m } }
+        }
+        return null
+    }
+
+    /** Disconnect/pause NordVPN so the phone uses its clean home IP (google-maps/uule). */
+    fun disconnectNordVpn(): Boolean {
+        s.log("── NORDVPN DISCONNECT ──")
+        if (!s.launchApp(NORDVPN_PKG)) return false
+        Thread.sleep(3500)
+        for (label in listOf("Disconnect", "Pause connection", "Pause")) {
+            val n = s.findNode(text = label, timeoutMs = 1500)
+                ?: s.findNode(contentDesc = label, timeoutMs = 800)
+            if (n != null) {
+                s.clickNode(n); n.recycle()
+                s.log("NordVPN: tapped \"$label\"")
+                Thread.sleep(2500)
+                // handle a possible "pause duration" sheet → pick the longest/confirm
+                val turnOff = s.findNode(text = "Turn off", timeoutMs = 1200)
+                    ?: s.findNode(text = "Disconnect", timeoutMs = 800)
+                if (turnOff != null) { s.clickNode(turnOff); turnOff.recycle(); Thread.sleep(1500) }
+                return true
+            }
+        }
+        s.log("NordVPN: already disconnected (no Disconnect/Pause control)")
+        return true
+    }
+
     // ── google SERP in Chrome (CitedLogic `google-maps` engine) ──
     // Ported from the proven v0.8.0 SEO flow: launch Chrome → google.com home →
     // human-typed search → ?q= fallback. The "google-maps" engine captures the

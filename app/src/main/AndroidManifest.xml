@@ -5,6 +5,14 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
+    <!-- Android 11+ package visibility: needed to launch/query other apps we drive
+         (Chrome for captures, NordVPN for the proxy, FakeGPS for mock location). -->
+    <queries>
+        <package android:name="com.android.chrome" />
+        <package android:name="com.nordvpn.android" />
+        <package android:name="com.blogspot.newapphorizons.fakegps" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:label="DeviceAgent"

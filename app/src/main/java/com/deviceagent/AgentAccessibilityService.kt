@@ -368,6 +368,33 @@ class AgentAccessibilityService : AccessibilityService() {
         log("Navigating to $url")
     }
 
+    /** Launch an installed app by package via its launcher intent. */
+    fun launchApp(pkg: String): Boolean {
+        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: run {
+            log("launchApp: no launch intent for $pkg (not installed?)"); return false
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        log("Launched $pkg")
+        return true
+    }
+
+    /** Find the currently-focused editable node (for typing into arbitrary app
+     *  fields, incl. Jetpack Compose text fields which don't report an EditText
+     *  className — match on isEditable instead). */
+    fun findFocusedEditText(timeoutMs: Long = 3000): AccessibilityNodeInfo? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                val f = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                if (f != null && (f.isEditable || f.className?.toString()?.contains("EditText") == true)) return f
+            }
+            Thread.sleep(200)
+        }
+        return null
+    }
+
     // get screen dimensions
     fun screenWidth(): Int = resources.displayMetrics.widthPixels
     fun screenHeight(): Int = resources.displayMetrics.heightPixels

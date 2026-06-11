@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 19
-        versionName = "0.9.3-chrome-serp"
+        versionCode = 20
+        versionName = "0.9.4-nordvpn"
     }
 
     buildTypes {

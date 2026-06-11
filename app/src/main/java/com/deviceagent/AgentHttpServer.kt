@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.3-chrome-serp"
-        const val APP_VERSION_CODE = 19
+        const val APP_VERSION_NAME = "0.9.4-nordvpn"
+        const val APP_VERSION_CODE = 20
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
@@ -530,6 +530,14 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         respond(writer, 405, """{"error":"use POST"}""")
                     }
                 }
+                path == "/vpn/connect" || path == "/vpn/connect/" -> {
+                    if (method == "POST") handleVpnConnect(writer, body)
+                    else respond(writer, 405, """{"error":"use POST"}""")
+                }
+                path == "/vpn/disconnect" || path == "/vpn/disconnect/" -> {
+                    if (method == "POST") handleVpnDisconnect(writer)
+                    else respond(writer, 405, """{"error":"use POST"}""")
+                }
                 path == "/mqtt/config" || path == "/mqtt/config/" -> {
                     if (method == "POST") {
                         handleMqttConfig(writer, body)
@@ -756,6 +764,25 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         platformFilter: String? = null
     ) {
         executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter)
+    }
+
+    private fun handleVpnConnect(writer: OutputStreamWriter, body: String) {
+        val city = try { JSONObject(body).optString("city", "") } catch (e: Exception) { "" }
+        if (city.isBlank()) { respond(writer, 400, """{"error":"city required"}"""); return }
+        val ok = try { flowEngine.connectNordVpnCity(city) } catch (e: Exception) {
+            Log.e("DeviceAgent", "vpn connect $city: ${e.message}"); false
+        }
+        val json = JSONObject().apply {
+            put("ok", ok); put("city", city); put("tun0", readTunInterface().first)
+        }
+        respond(writer, if (ok) 200 else 500, json.toString())
+    }
+
+    private fun handleVpnDisconnect(writer: OutputStreamWriter) {
+        val ok = try { flowEngine.disconnectNordVpn() } catch (e: Exception) {
+            Log.e("DeviceAgent", "vpn disconnect: ${e.message}"); false
+        }
+        respond(writer, if (ok) 200 else 500, JSONObject().apply { put("ok", ok) }.toString())
     }
 
     private fun handleMqttConfig(writer: OutputStreamWriter, body: String) {
