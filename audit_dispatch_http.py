@@ -687,7 +687,11 @@ def dispatch_audit_job(
     seq = next(_gost_seq)
     gost_key = f"audit-{seq}"
     gost_port = _acquire_gost_port()
-    assigned_zip = (entry.get("proxy") or {}).get("zip") or "10001"
+    # Empty zip must stay empty so _resolve_zip maps it to the STATE's known-good
+    # zip (city/state-only campaigns have no zip of their own). Defaulting to
+    # "10001" here made _resolve_zip treat it as a valid NYC zip and skip the
+    # state mapping → every zipless campaign got audited from New York. (2026-06-12)
+    assigned_zip = (entry.get("proxy") or {}).get("zip") or ""
     state_code = entry.get("state", "")
     # Canadian businesses (province code, not US state) must target country-ca —
     # US zip resolution would map them to a NYC fallback IP and the rank would be

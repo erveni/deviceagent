@@ -18,9 +18,16 @@ from collections import Counter, defaultdict
 
 HERE = "/Users/seolocalph/projects/device-agent"
 DATE = os.environ.get("DATE", "2026-06-08")
+# USE_RUN_DATE=1: stamp every row with the RUN date (DATE), not the keyword's
+# createdAt. Correct for STALE re-runs (a fresh current measurement) — back-dating
+# a re-run to the keyword's creation date would be wrong. Default (unset) keeps the
+# createdAt back-dating used for INITIAL rankings of new keywords.
+USE_RUN_DATE = os.environ.get("USE_RUN_DATE") == "1"
+# OUT_NAME overrides the output filename stem (e.g. ranking_stale_<DATE>).
+_OUT_NAME = os.environ.get("OUT_NAME") or f"ranking_initial_{DATE}_consolidated.csv"
 SOURCES = sorted(glob.glob(os.path.join(HERE, f"rabbitmq_audit_results_{DATE}_ranking*.csv")))
-OUT = os.path.join(HERE, f"ranking_initial_{DATE}_consolidated.csv")
-DESKTOP = os.path.expanduser(f"~/Desktop/ranking_initial_{DATE}_consolidated.csv")
+OUT = os.path.join(HERE, _OUT_NAME)
+DESKTOP = os.path.expanduser(f"~/Desktop/{_OUT_NAME}")
 ADMIN = "https://jjm59vpn3y.us-east-1.awsapprunner.com"
 TOKEN = os.environ.get("EXECUTOR_TOKEN", "")
 random.seed(20260608)
@@ -86,10 +93,13 @@ by_day = defaultdict(list)
 no_created = 0
 for (cid, plat), r in best.items():
     kwid = kw_id_from_campaign(cid)
-    cd = created_date(kwid)
-    if not cd:
-        no_created += 1
-        cd = DATE  # fallback to run-label date if createdAt unknown
+    if USE_RUN_DATE:
+        cd = DATE  # stale re-run → stamp with the actual run date (current reading)
+    else:
+        cd = created_date(kwid)
+        if not cd:
+            no_created += 1
+            cd = DATE  # fallback to run-label date if createdAt unknown
     by_day[cd].append((cid, plat, r))
 
 rows_out = []
