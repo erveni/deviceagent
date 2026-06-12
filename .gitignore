@@ -26,3 +26,11 @@ Thumbs.db
 !.env.example
 !.env.*.example
 CLAUDE.local.md
+
+# SEO pipeline output artifacts (generated; not source)
+seo_results/
+client_reports/
+geo_grid_results/
+keyword_results/
+inverted_results/
+*.log

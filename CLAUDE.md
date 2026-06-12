@@ -93,7 +93,29 @@ Audit screenshots write to `aeo-appium/audit_results/<DATE>/<Platform>/kw<ID>_<p
 |---|---|---|
 | v0.6.x | 0b202a6 | Old. Pre-rolling-stability fix. |
 | v0.7.0-phase1 | (no source on disk) | What's installed on Mac-1 fleet as of 2026-05-24 — versionCode 8. APK file lost. |
-| v0.7.1-b64 | 8670bac | Current. versionCode 9. Inlines audit PNG as base64 in `/session` response → no `adb pull` round-trip. APK at `device-agent.apk` (root, tracked, May 24). |
+| v0.7.1-b64 | 8670bac | versionCode 9. Inlines audit PNG as base64 in `/session` response → no `adb pull` round-trip. APK at `device-agent.apk` (root, tracked, May 24). |
+| v0.8.0-seo | (this branch) | versionCode 10. Adds the Google SERP / SEO flow (`type:"seo"`). Not yet copied to the tracked root `device-agent.apk`. |
+| v0.9.0-httpctl | (this branch, uncommitted) | Current. versionCode 11. First step of the HTTP control-model flip: `POST /session {"type":"noop"}` dry-run handler — parses a full job-shaped body (incl. new `proxy{host,port,mode,zip,username}` + `gps{lat,lng}` envelope), echoes `received` + `device` state + a `would_do` plan, runs NO flow / NO proxy / NO GPS. Lets the Mac prove the stateless per-request LAN control path (no `adb forward`) on one phone. Installed + verified on transport-1 (192.168.0.188). |
+
+## SEO / Google SERP flow (`type:"seo"`, v0.8.0)
+
+Real-Chrome, on-device Google rank auditing — the SerpApi analogue of the AI-platform
+audit. `POST /session {"type":"seo","keyword":...,"targetDomain":...}` →
+`executeGoogleSerpStatic` (in `AgentHttpServer.kt`): reset → google.com home (human-typed
+search via the proven input ladder + `submitSearch`) → **direct `?q=` fallback** if the
+human submit doesn't navigate (`FlowEngine.navigateToSerp`) → scroll → `FlowEngine.parseSerp`.
+
+`parseSerp` walks the a11y tree and returns SerpApi-like JSON: ordered **organic** results
+(position, title, domain, url) with **ads excluded** (count reported), the **local/Maps
+pack** (name, rating, sponsored flag), `location`, and the target's `organic_rank`/`local_rank`.
+Response also inlines a proof `screenshot_b64`. Parser discriminators (anchor on
+`About this result` vs `Why this ad?`; local pack on `Rated X out of 5`) are documented +
+ground-truthed in `seo-voice-rank/docs/SERP-PARSE-REFERENCE.md`.
+
+Mac runner: `python3 seo_dispatch.py --keyword "..." --target domain.com [--serial S]`
+(stdlib only) → writes `seo_results/<slug>_<ts>.json` + `.png`. Verified end-to-end on
+SM-style fleet phone (Infinix X6725, Android 15): `personal injury lawyer austin` →
+9 organic, 5 ads excluded, 4 local, target `ramosjames.com` #7, ~96s.
 
 ### Deploying APK to a new Mac
 
