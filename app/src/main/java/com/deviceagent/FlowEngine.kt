@@ -1,5 +1,44 @@
 package com.deviceagent
 
+// ── SEO / Google SERP data model (SerpApi-like) ──
+data class SerpResult(
+    val position: Int,
+    val title: String,
+    val domain: String,
+    val url: String,
+    val site: String?,
+    val snippet: String? = null,
+    val displayedLink: String? = null
+)
+
+data class LocalResult(
+    val position: Int,
+    val name: String,
+    val rating: String?,
+    val sponsored: Boolean,
+    val reviews: Int? = null,
+    val reviewsOriginal: String? = null,
+    val price: String? = null,
+    val type: String? = null,
+    val address: String? = null,
+    val description: String? = null
+)
+
+data class SerpTarget(
+    val domain: String,
+    val organicRank: Int?,
+    val localRank: Int?
+)
+
+data class SerpData(
+    val organic: List<SerpResult>,
+    val local: List<LocalResult>,
+    val adsExcluded: Int,
+    val localAdsExcluded: Int,
+    val location: String?,
+    val target: SerpTarget?
+)
+
 class FlowEngine(private val s: AgentAccessibilityService) {
 
     // ── chrome reset ──
@@ -97,6 +136,33 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             }
         }
         return true
+    }
+
+    /** Dismiss on-SERP overlays (esp. Google's "See results closer to you?" precise-location
+     *  prompt) that sit on top of the results and break parsing. Does NOT navigate (unlike
+     *  dismissChromeFre) — it only taps a dismiss button if one is present, so it's safe to
+     *  call after the SERP has loaded. Returns true if something was dismissed. */
+    fun dismissSerpDialogs(): Boolean {
+        val dismissButtons = listOf(
+            "Not now", "No thanks", "No, thanks", "Dismiss", "Got it",
+            "Maybe later", "Skip", "Close", "Reject all"
+        )
+        var any = false
+        for (attempt in 1..3) {
+            var hit = false
+            for (btn in dismissButtons) {
+                val node = s.findNode(text = btn, timeoutMs = 400)
+                if (node != null) {
+                    s.log("SERP dialog: clicking \"$btn\"")
+                    s.clickNode(node); node.recycle()
+                    hit = true; any = true
+                    Thread.sleep(700)
+                    break
+                }
+            }
+            if (!hit) break
+        }
+        return any
     }
 
     // ── preflight ──
@@ -248,7 +314,14 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             s.log("[B] Text NOT set, going to paste...")
         }
 
-        // Step C: Set clipboard & paste
+        // Step C: Set clipboard & paste.
+        // Clear the field first: Step B's ACTION_SET_TEXT may have actually landed even
+        // though the verify missed it (Chrome lies about timing) — pasting on top then
+        // produces doubled text ("querytquery"). Emptying the field makes paste idempotent.
+        if (inputNode != null) {
+            try { s.setTextOnNode(inputNode, "") } catch (_: Exception) {}
+            Thread.sleep(120)
+        }
         s.setClipboard(text)
         Thread.sleep(150)
 
@@ -1140,5 +1213,697 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
         s.log("No [RANK: X/Y] pattern found in response")
         return Pair(null, null)
+    }
+
+    // ── SEO / Google SERP ────────────────────────────────────────────────
+    // Grounded against a live mobile SERP dump — see
+    // seo-voice-rank/docs/SERP-PARSE-REFERENCE.md for the discriminators.
+
+    /** One flattened a11y node: class tail, text, content-desc, Chrome targetUrl extra. */
+    private data class FlatNode(val cls: String, val text: String, val cd: String, val targetUrl: String?)
+
+    private fun flattenTree(): List<FlatNode> {
+        val out = ArrayList<FlatNode>()
+        val root = s.rootInActiveWindow ?: return out
+        flattenInto(root, out, 0)
+        root.recycle()
+        return out
+    }
+
+    private fun flattenInto(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        out: ArrayList<FlatNode>,
+        depth: Int
+    ) {
+        if (depth > 40) return
+        val cls = node.className?.toString()?.substringAfterLast('.') ?: ""
+        val text = node.text?.toString()?.trim() ?: ""
+        val cd = node.contentDescription?.toString()?.trim() ?: ""
+        var url: String? = null
+        try {
+            node.extras?.getCharSequence("AccessibilityNodeInfo.targetUrl")?.toString()?.let {
+                if (it.isNotBlank()) url = it
+            }
+        } catch (_: Exception) {}
+        if (text.isNotEmpty() || cd.isNotEmpty() || url != null) {
+            out.add(FlatNode(cls, text, cd, url))
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { flattenInto(it, out, depth + 1) }
+        }
+    }
+
+    private val httpRe = Regex("^https?://")
+
+    private val localLabelStop = setOf(
+        "Website", "Directions", "Reviews", "Terms", "Open", "Closed", "Share", "Map",
+        "Sponsored", "More businesses", "Businesses", "Call", "·"
+    )
+    private val numericOnly = Regex("^[0-9.,KMmi+()\\s]+$")
+
+    /** A plausible local-pack business name (not a button label, status text, or review count). */
+    private fun isLocalName(t: String): Boolean {
+        if (t.length < 4 || t.none { it.isLetter() }) return false
+        if (t.startsWith("Call") || t.startsWith("+") || t.startsWith("http")) return false
+        // Open-status / hours text ("Open 24 hours", "Open ⋅ Closes 5 PM", "Closed").
+        if (t.startsWith("Open") || t.startsWith("Closed") || t.startsWith("Closes") || t.startsWith("Opens")) return false
+        if (t.contains(" hours", true) || t.contains("years in business", true)) return false
+        if (t in localLabelStop) return false
+        if (t.contains("review", true)) return false
+        // " · " is Google's metadata separator (e.g. a "More places" list blob), never a name.
+        if (t.contains(" · ")) return false
+        if (numericOnly.matches(t)) return false
+        return true
+    }
+
+    /** Dedupe key for a local-pack name — drops trailing taglines after " - " and lowercases. */
+    private fun localKey(name: String): String =
+        name.lowercase().substringBefore(" - ").trim()
+
+    /** Reduce a visible URL line (incl. ad breadcrumb "https://x.com › a › b") to a bare host. */
+    private fun hostOf(raw: String): String {
+        var u = raw.trim().substringBefore(' ').substringBefore('›').trim() // › = ›
+        u = u.removePrefix("https://").removePrefix("http://")
+        u = u.substringBefore('/').substringBefore('?')
+        return u.removePrefix("www.").trim().lowercase()
+    }
+
+    /** Buttons that dismiss Chrome interstitials / cookie consent blocking google.com. */
+    private val googleDialogButtons = listOf(
+        "No thanks", "No, thanks", "Got it", "Accept all", "Reject all",
+        "I agree", "I Agree", "Continue", "Close", "Use without an account"
+    )
+
+    /** Open google.com home, dismiss any interstitial, and wait for the search box to be ready. */
+    fun navigateToGoogleHome(): Boolean {
+        s.log("── NAVIGATE google.com ──")
+        s.navigateToUrl("https://www.google.com")
+        for (attempt in 1..12) {
+            Thread.sleep(800)
+            // Clear any Chrome notification / consent dialog sitting over the page.
+            for (label in googleDialogButtons) {
+                val b = s.findNode(text = label, timeoutMs = 250)
+                if (b != null) {
+                    s.clickNode(b); b.recycle()
+                    s.log("dismissed dialog: $label")
+                    Thread.sleep(600)
+                }
+            }
+            val n = s.findInputField(hintText = null, timeoutMs = 1200)
+            if (n != null) { n.recycle(); s.log("Google search box ready (attempt $attempt)"); return true }
+        }
+        s.log("Google search box not found")
+        return false
+    }
+
+    /**
+     * Submit a Google search the human way: fire the IME "search" editor action on the
+     * search box (API 30+), then fall back to the Search button / on-screen Enter.
+     */
+    /**
+     * Submit the human-typed search. After typing, Google opens an autocomplete dropdown and
+     * moves the box up (to y≈179) — so the on-page submit button vanishes and findInputField's
+     * top>200 guard skips the box. Order that actually works (verified on-device):
+     *   1) tap the exact-match autocomplete suggestion row (human; preserves the exact query)
+     *   2) IME "search" action on the box found by its query text (any y, not the omnibox)
+     *   3) on-page "Google Search" button (only present when the box is empty/unfocused)
+     *   4) keyboard enter tap
+     */
+    fun submitSearch(keyword: String): Boolean {
+        s.log("── SUBMIT SEARCH ──")
+        ensureChromeForeground()
+        Thread.sleep(400)
+
+        // 1) exact-match autocomplete suggestion row
+        val sugg = findSearchSuggestion(keyword)
+        if (sugg != null) {
+            val ok = s.clickNode(sugg); sugg.recycle()
+            if (ok) { s.log("Tapped exact suggestion row"); Thread.sleep(1500); return true }
+        }
+
+        // 2) IME enter on the query box (found by text so the y<200 guard doesn't skip it)
+        val box = findEditTextContaining(keyword)
+        if (box != null && android.os.Build.VERSION.SDK_INT >= 30) {
+            val ok = try {
+                box.performAction(
+                    android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                )
+            } catch (e: Exception) { s.log("IME_ENTER threw: ${e.message}"); false }
+            box.recycle()
+            if (ok) { s.log("IME_ENTER on query box ok"); Thread.sleep(1500); return true }
+        } else box?.recycle()
+
+        // 3) on-page Google Search button (empty-box state)
+        for (cd in listOf("Google Search", "Search")) {
+            val b = s.findNode(contentDesc = cd, timeoutMs = 800)
+            if (b != null) {
+                val ok = s.clickNode(b); b.recycle()
+                if (ok) { s.log("Clicked '$cd' submit"); Thread.sleep(1500); return true }
+            }
+        }
+
+        // 4) keyboard enter tap
+        s.gestureTap(s.screenWidth() - 40f, s.screenHeight() - 45f)
+        s.log("Fallback keyboard-enter tap")
+        Thread.sleep(1500)
+        return true
+    }
+
+    /** Find a clickable autocomplete row whose text exactly matches the typed query. */
+    private fun findSearchSuggestion(keyword: String): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val match = findSuggestionRec(root, keyword.trim().lowercase())
+        root.recycle()
+        return match
+    }
+
+    private fun findSuggestionRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        kw: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val cls = node.className?.toString() ?: ""
+        val txt = node.text?.toString()?.trim()?.lowercase()
+        if (txt == kw && node.isClickable && !cls.contains("EditText")) return node
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child ->
+                findSuggestionRec(child, kw)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** Find the search-box EditText by its query text (excludes the Chrome omnibox). */
+    private fun findEditTextContaining(keyword: String): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val kw = keyword.trim().lowercase().take(12)
+        val match = findEditContainingRec(root, kw)
+        root.recycle()
+        return match
+    }
+
+    private fun findEditContainingRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        kw: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val cls = node.className?.toString() ?: ""
+        val txt = node.text?.toString()?.trim()?.lowercase() ?: ""
+        if (cls.contains("EditText") && txt.contains(kw) &&
+            !txt.startsWith("google.com") && !txt.startsWith("http")) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child ->
+                findEditContainingRec(child, kw)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private val imagePuzzlePhrases = listOf(
+        "select all", "select each image", "verify you are human by completing",
+        "traffic lights", "crosswalk", "bicycles", "fire hydrant", "press & hold",
+        "try again later", "click verify once there are none"
+    )
+
+    /**
+     * Attempt to clear a Google "unusual traffic" reCAPTCHA by ticking the "I'm not a robot"
+     * checkbox. For a low-risk (soft) challenge this passes outright and Google redirects to the
+     * results — returns true once a SERP appears. If reCAPTCHA escalates to an image puzzle
+     * (or "try again later"), it can't be auto-solved here and returns false.
+     */
+    fun solveChallenge(timeoutSec: Int = 22): Boolean {
+        s.log("── SOLVE CHALLENGE (tick 'I'm not a robot') ──")
+        ensureChromeForeground()
+        val box = s.findNode(text = "I'm not a robot", timeoutMs = 2500)
+            ?: s.findNode(className = "CheckBox", timeoutMs = 1500)
+        if (box == null) { s.log("'I'm not a robot' checkbox not found"); return false }
+        val r = android.graphics.Rect(); box.getBoundsInScreen(r)
+        val clicked = s.clickNode(box)
+        box.recycle()
+        if (!clicked) {
+            // The checkbox often lives in an iframe — fall back to a direct tap on its bounds.
+            s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+        }
+        s.log("ticked checkbox (clickNode=$clicked) at ${r.centerX()},${r.centerY()}")
+
+        val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(1200)
+            val nodes = flattenTree()
+            val blob = nodes.joinToString(" ") { it.text + " " + it.cd }.lowercase()
+            if (imagePuzzlePhrases.any { it in blob }) {
+                s.log("reCAPTCHA escalated to an image/advanced puzzle — cannot auto-solve")
+                return false
+            }
+            val ready = nodes.any { it.text == "Search Results" || it.text == "Web results" } ||
+                nodes.any { httpRe.containsMatchIn(it.text) && !it.text.contains("google.com") }
+            if (ready) { s.log("✓ challenge passed — SERP loaded"); return true }
+        }
+        s.log("challenge not cleared in ${timeoutSec}s")
+        return false
+    }
+
+    /**
+     * Guaranteed SERP fallback: load google.com/search?q=<keyword> directly. Used when the
+     * human-typed submit doesn't navigate — mirrors the proven voice-search simplification
+     * ("don't rely on auto-submit; load the search URL directly"). Same organic SERP.
+     */
+    fun navigateToSerp(keyword: String): Boolean {
+        val q = java.net.URLEncoder.encode(keyword, "UTF-8")
+        s.log("── NAVIGATE SERP DIRECT: ?q=$q ──")
+        s.navigateToUrl("https://www.google.com/search?q=$q&hl=en&gl=us")
+        return true
+    }
+
+    /**
+     * Load a Google SERP localized to [location] via the `uule` URL parameter +
+     * pinned `gl=us&hl=en`. [location] is a canonical "City,State,United States"
+     * string; Google renders results as if the searcher is physically there. This
+     * is the SEO PRIMARY path — direct `?q=` nav skips the flaky human-typed input
+     * (DEFECT #2) and pins locale deterministically. Blank [location] → no uule.
+     */
+    fun navigateToSerpLocalized(keyword: String, location: String): Boolean {
+        val q = java.net.URLEncoder.encode(keyword, "UTF-8")
+        if (location.isBlank()) {
+            s.log("── NAVIGATE SERP (gl=us, no uule): ?q=$q ──")
+            s.navigateToUrl("https://www.google.com/search?q=$q&hl=en&gl=us")
+            return true
+        }
+        val uule = buildUule(location)
+        s.log("── NAVIGATE SERP uule: ?q=$q loc=\"$location\" ──")
+        s.navigateToUrl("https://www.google.com/search?q=$q&uule=$uule&gl=us&hl=en")
+        return true
+    }
+
+    /**
+     * Build Google's `uule` location parameter (the SerpApi/rank-tracker standard).
+     * Protobuf-style header [8,2,16,32,34,len] + the canonical-name bytes, base64'd
+     * (URL-safe: +→-, /→_, no padding), prefixed "w+". Mirrors ogun/uule_grabber.
+     */
+    private fun buildUule(location: String): String {
+        val nameBytes = location.toByteArray(Charsets.UTF_8)
+        val header = byteArrayOf(8, 2, 16, 32, 34, nameBytes.size.toByte())
+        val b64 = android.util.Base64.encodeToString(
+            header + nameBytes,
+            android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+        ).replace('+', '-').replace('/', '_')
+        return "w+$b64"
+    }
+
+    /** Set by waitForSerp when a Cloudflare / Google bot challenge interstitial was seen. */
+    var lastChallengeSeen: Boolean = false
+        private set
+
+    private val challengePhrases = listOf(
+        "verifying you are human", "checking your browser", "just a moment",
+        "needs to review the security", "unusual traffic", "i'm not a robot",
+        "detected unusual traffic", "verify you are a human", "cloudflare"
+    )
+
+    /**
+     * Poll until the SERP looks loaded (results header or a non-google result URL present).
+     * If a Cloudflare / Google bot-challenge interstitial appears, keep waiting (these usually
+     * auto-resolve) and record it in [lastChallengeSeen] so the caller can report it distinctly
+     * instead of as a generic timeout.
+     */
+    private val connErrPhrases = listOf(
+        "site can't be reached", "site can’t be reached", "err_connection",
+        "err_timed_out", "err_name_not_resolved", "err_proxy", "err_tunnel",
+        "err_empty_response", "err_address_unreachable", "webpage is not available"
+    )
+
+    fun waitForSerp(timeoutSec: Int = 15): Boolean {
+        lastChallengeSeen = false
+        val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+        while (System.currentTimeMillis() < deadline) {
+            val nodes = flattenTree()
+            val blob = nodes.joinToString(" ") { it.text + " " + it.cd }.lowercase()
+            if (challengePhrases.any { it in blob }) {
+                lastChallengeSeen = true
+                s.log("⚠ bot/cloudflare challenge interstitial — waiting it out")
+                Thread.sleep(1500)
+                continue
+            }
+            // Connection-aborted page (flaky cellular proxy) — tap Reload; transient aborts recover.
+            if (connErrPhrases.any { it in blob }) {
+                s.log("⚠ connection-error page — tapping Reload")
+                val reload = s.findNode(text = "Reload", timeoutMs = 800)
+                    ?: s.findNode(contentDesc = "Refresh", timeoutMs = 500)
+                if (reload != null) { s.clickNode(reload); reload.recycle() }
+                Thread.sleep(2800)
+                continue
+            }
+            val ready = nodes.any { it.text == "Search Results" || it.text == "Web results" } ||
+                nodes.any { httpRe.containsMatchIn(it.text) && !it.text.contains("google.com") }
+            if (ready) { s.log("SERP ready"); return true }
+            Thread.sleep(800)
+        }
+        s.log("SERP wait timed out (challenge=$lastChallengeSeen)")
+        return false
+    }
+
+    /**
+     * Scroll the SERP so a header (e.g. "Businesses", the local pack) sits near the top of the
+     * screen, so the proof screenshot starts there instead of on the top sponsored ads.
+     *
+     * Calibrated on-device: swipes MUST run on the far-right edge — a centre swipe lands on the
+     * local pack's embedded map and pans it instead of scrolling the page. An off-screen node
+     * reports a clamped top ≈ screenHeight-90 ("still below the fold"); only once it enters the
+     * viewport does it report real coordinates. We reveal until it's on-screen, then nudge it
+     * into the [180, 440] top band and stop.
+     */
+    fun scrollToTextTop(texts: List<String>, targetTop: Int = 300, maxSwipes: Int = 9): Boolean =
+        scrollNodeToTop("text:$texts", targetTop, maxSwipes) { findExactTextNode(texts) }
+
+    /**
+     * Generic: swipe the SERP until the node returned by [finder] sits in the [180,440] top
+     * band, so a proof screenshot frames that EXACT element regardless of its header label.
+     * Far-right-edge swipes only (a centre swipe pans the local-pack map). An off-screen node
+     * reports a clamped top ≈ screenH-140; reveal until on-screen, then nudge into the band.
+     */
+    private fun scrollNodeToTop(
+        label: String, targetTop: Int = 300, maxSwipes: Int = 9,
+        finder: () -> android.view.accessibility.AccessibilityNodeInfo?
+    ): Boolean {
+        s.log("── SCROLL TO $label (top) ──")
+        ensureChromeForeground()
+        val x = s.screenWidth() - 3f
+        val h = s.screenHeight()
+        val offscreenClamp = h - 140  // ~1460 on a 1600px screen → treat as "below the fold"
+        for (i in 1..maxSwipes) {
+            val node = finder()
+            val top = node?.let {
+                val r = android.graphics.Rect(); it.getBoundsInScreen(r); it.recycle(); r.top
+            }
+            when {
+                top == null || top >= offscreenClamp -> {
+                    s.gestureSwipe(x, h * 0.70f, x, h * 0.70f - 480f, 450)
+                    s.log("reveal swipe (top=${top ?: "NF"})")
+                }
+                top in 180..440 -> { s.log("aligned $label at top=$top (swipe $i)"); return true }
+                top > 440 -> {
+                    val dy = (top - targetTop).coerceIn(150, 520).toFloat()
+                    s.gestureSwipe(x, h * 0.70f, x, h * 0.70f - dy, 450)
+                }
+                else -> { // top < 180 → scrolled a touch too far, ease back down
+                    val dy = (targetTop - top).coerceIn(120, 360).toFloat()
+                    s.gestureSwipe(x, h * 0.35f, x, h * 0.35f + dy, 450)
+                }
+            }
+            Thread.sleep(1300)
+        }
+        s.log("$label not aligned to top after $maxSwipes swipes")
+        return false
+    }
+
+    /** Align the first local-pack business card (a "Rated X out of 5" node) to the top — robust
+     *  to the pack's header varying ("Places" / "Businesses" / "With outdoor seating" / …). */
+    fun scrollToLocalPackTop(): Boolean = scrollNodeToTop("local-pack") { findFirstRatedNode() }
+
+    private val ratedCd = Regex("Rated\\s+[\\d.]+\\s+out of 5")
+    private fun findFirstRatedNode(): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val found = findFirstRec(root) { n ->
+            ratedCd.containsMatchIn(n.contentDescription?.toString() ?: "") ||
+            (n.text?.toString()?.contains("out of 5") == true)
+        }
+        root.recycle(); return found
+    }
+    private fun findFirstRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        pred: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        if (pred(node)) return node
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child -> findFirstRec(child, pred)?.let { return it } }
+        }
+        return null
+    }
+
+    /**
+     * Scroll so the ORGANIC results block sits near the top, for the organic proof shot.
+     * Organic follows the local pack: prefer the "Web results" header, else the local-pack
+     * footer ("More places"/"More businesses") — organic renders just below it.
+     */
+    fun scrollToOrganicTop(): Boolean {
+        if (scrollToTextTop(listOf("Web results"))) return true
+        return scrollToTextTop(listOf("More places", "More businesses"))
+    }
+
+    /** First node (DOM order) whose text EXACTLY equals one of the candidates. */
+    private fun findExactTextNode(texts: List<String>): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val found = findExactRec(root, texts)
+        root.recycle()
+        return found
+    }
+
+    private fun findExactRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        texts: List<String>
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val t = node.text?.toString()?.trim()
+        if (t != null && texts.any { it.equals(t, ignoreCase = true) }) return node
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child ->
+                findExactRec(child, texts)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** Known mobile-SERP filter chips whose active form is "Remove <name>". */
+    private val knownFilters = listOf(
+        "Top rated", "Open now", "Cheap", "Upscale", "Online appointments",
+        "Open 24 hours", "Highly rated", "Dine-in", "Takeout", "Delivery", "Deals"
+    )
+
+    /**
+     * Clear any active search-result filter chip (e.g. "Top rated") so the ranking reflects the
+     * default, unfiltered SERP — essential for honest SEO rank. An active chip exposes a clickable
+     * "Remove <filter>" node in the top filter strip; clicking it toggles the filter off.
+     * Returns how many were cleared.
+     */
+    fun clearSearchFilters(): Int {
+        s.log("── CLEAR SEARCH FILTERS ──")
+        var cleared = 0
+        for (pass in 1..5) {
+            val chip = findActiveFilterChip() ?: break
+            val r = android.graphics.Rect(); chip.getBoundsInScreen(r)
+            val cd = chip.contentDescription?.toString() ?: ""
+            val ok = s.clickNode(chip); chip.recycle()
+            if (!ok) s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+            s.log("cleared filter: \"$cd\"")
+            cleared++
+            Thread.sleep(1800) // let the SERP re-render unfiltered
+        }
+        if (cleared == 0) s.log("no active filters")
+        return cleared
+    }
+
+    private fun findActiveFilterChip(): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val found = findActiveFilterRec(root)
+        root.recycle()
+        return found
+    }
+
+    private fun findActiveFilterRec(
+        node: android.view.accessibility.AccessibilityNodeInfo
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val cd = node.contentDescription?.toString()?.trim() ?: ""
+        if (node.isClickable && cd.startsWith("Remove ")) {
+            val name = cd.removePrefix("Remove ").trim()
+            // Only known filter chips, and only in the top filter strip (avoids unrelated "Remove …").
+            if (knownFilters.any { it.equals(name, ignoreCase = true) }) {
+                val r = android.graphics.Rect(); node.getBoundsInScreen(r)
+                if (r.top < s.screenHeight() * 0.5f) return node
+            }
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child ->
+                findActiveFilterRec(child)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Parse the currently-rendered mobile Google SERP into SerpApi-like structured data:
+     * ordered organic results (ads excluded), the local/Maps pack, and an ad count.
+     * Off-screen SERP nodes only materialise after layout, so callers should scroll the
+     * full page before parsing (see executeGoogleSerpStatic).
+     */
+    fun parseSerp(targetDomain: String?): SerpData {
+        s.log("── PARSE SERP ──")
+        val nodes = flattenTree()
+        if (nodes.isEmpty()) {
+            s.log("SERP parse: empty tree")
+            return SerpData(emptyList(), emptyList(), 0, 0, null, null)
+        }
+
+        val ratedRe = Regex("Rated\\s+([\\d.]+)\\s+out of 5")
+
+        // Mark the sponsored region (between "Sponsored results" and "Hide sponsored results").
+        val sponsoredAt = BooleanArray(nodes.size)
+        var inSponsored = false
+        for (i in nodes.indices) {
+            when (nodes[i].text) {
+                "Sponsored results" -> inSponsored = true
+                "Hide sponsored results" -> inSponsored = false
+            }
+            sponsoredAt[i] = inSponsored
+        }
+
+        val location = nodes.firstOrNull { it.text.matches(Regex(".+,\\s+[A-Z]{2},\\s+USA")) }?.text
+
+        // WEB results: anchor on each visible https:// URL text line.
+        val organicRaw = ArrayList<SerpResult>()
+        var adCount = 0
+        val adDomains = HashSet<String>()
+        for (i in nodes.indices) {
+            val urlText = nodes[i].text
+            if (urlText.isBlank() || !httpRe.containsMatchIn(urlText)) continue
+            val domain = hostOf(urlText)
+            if (domain.isBlank() || domain.contains("google.com")) continue
+
+            var site: String? = null
+            for (j in i - 1 downTo maxOf(0, i - 4)) {
+                val tj = nodes[j].text
+                if (tj.isNotBlank() && !httpRe.containsMatchIn(tj)) { site = tj; break }
+            }
+            var title: String? = null
+            var titleIdx = -1
+            for (j in i + 1..minOf(nodes.size - 1, i + 5)) {
+                val tj = nodes[j].text
+                if (tj.length > 3 && !httpRe.containsMatchIn(tj) && tj != "About this result") { title = tj; titleIdx = j; break }
+            }
+            // Snippet: the first sentence-like line after the title (before the next result URL).
+            var snippet: String? = null
+            if (titleIdx >= 0) {
+                for (j in titleIdx + 1..minOf(nodes.size - 1, titleIdx + 6)) {
+                    val tj = nodes[j].text
+                    if (tj.isNotBlank() && httpRe.containsMatchIn(tj)) break
+                    if (tj.length > 40 && tj.contains(' ') && tj != "About this result") { snippet = tj; break }
+                }
+            }
+            // Classify: first marker button scanning forward is THIS result's marker.
+            var isAd = sponsoredAt[i]
+            for (j in i + 1..minOf(nodes.size - 1, i + 8)) {
+                val c = nodes[j].cd
+                if (c == "Why this ad?") { isAd = true; break }
+                if (c == "About this result") { isAd = sponsoredAt[i]; break }
+                if (nodes[j].text.isNotBlank() && httpRe.containsMatchIn(nodes[j].text)) break // next result
+            }
+            if (isAd) {
+                if (adDomains.add(domain)) adCount++
+            } else {
+                organicRaw.add(SerpResult(0, title ?: site ?: domain, domain, urlText.substringBefore(' '), site, snippet, urlText.substringBefore(' ')))
+            }
+        }
+        // Dedupe organic by domain (sitelinks repeat), assign 1-based positions.
+        val seen = HashSet<String>()
+        val organic = ArrayList<SerpResult>()
+        for (r in organicRaw) {
+            if (!seen.add(r.domain)) continue
+            organic.add(r.copy(position = organic.size + 1))
+        }
+
+        // LOCAL pack: anchor on "Rated X out of 5". The business name is either packed in
+        // the card container's content-desc ("<name> Rated …") or a name-like TextView just
+        // above the star image — never a button label (Call / Website / Directions / …).
+        // Scope the local pack to the actual Places/Businesses cluster so organic rich-result
+        // ratings (e.g. a Yelp listicle showing stars) aren't mistaken for local businesses.
+        var lpStart = nodes.indexOfFirst { it.text == "Places" || it.text == "Businesses" }
+        if (lpStart < 0) {
+            // Themed local pack (e.g. "With outdoor seating") has no Places/Businesses header.
+            // Anchor on the rated-card cluster sitting just above the "More places/businesses" footer.
+            val moreIdx = nodes.indexOfFirst { it.text == "More places" || it.text == "More businesses" }
+            if (moreIdx > 0) {
+                lpStart = ((0 until moreIdx).firstOrNull { ratedRe.containsMatchIn(nodes[it].cd) } ?: 0) - 1
+            }
+        }
+        val lpEnd = if (lpStart < 0) 0 else {
+            val endMarkers = setOf(
+                "More places", "More businesses", "People also ask", "Web results",
+                "Discussions and forums", "Related searches", "People also search for"
+            )
+            (lpStart + 1 until nodes.size).firstOrNull { nodes[it].text in endMarkers } ?: nodes.size
+        }
+        val seenL = HashSet<String>()
+        val local = ArrayList<LocalResult>()
+        var localAdsExcluded = 0
+        for (i in (if (lpStart < 0) IntRange.EMPTY else (lpStart + 1) until lpEnd)) {
+            val m = ratedRe.find(nodes[i].cd) ?: continue
+            // 1) container prefix before "Rated"
+            var name: String? = nodes[i].cd.substring(0, m.range.first).trim().ifBlank { null }
+                ?.takeIf { isLocalName(it) }
+            // 2) else nearest name-like TextView above (skip UI/button labels)
+            if (name == null) {
+                for (j in i - 1 downTo maxOf(0, i - 6)) {
+                    val nj = nodes[j]
+                    if (nj.cls == "TextView" && isLocalName(nj.text)) { name = nj.text; break }
+                }
+            }
+            if (name.isNullOrBlank()) continue
+            val sponsored = (maxOf(0, i - 8) until i).any { nodes[it].text == "Sponsored" || nodes[it].cd == "Why this ad?" }
+            // Drop sponsored local ads entirely (parity with organic ad exclusion); count them.
+            // Check sponsored BEFORE dedup so a sponsored card doesn't shadow the same
+            // business's real organic entry that follows it.
+            if (sponsored) { localAdsExcluded++; continue }
+            if (!seenL.add(localKey(name))) continue
+            // Extra fields: Google packs the whole card into the container's content-desc, e.g.
+            //   "Little Foot Preschool  Rated 5.0 out of 5,  (12)  ·  Bilingual preschools 20+ years
+            //    in business Open now · Serves San Francisco"
+            //   "Via Nova Children's School Rated 4.6 out of 5 16 reviews · Bilingual preschools …
+            //    1319 20th Ave …"
+            // Parse it with substring regexes (strip Unicode bidi isolates U+2066/U+2069 first).
+            val cd = nodes[i].cd.replace('⁦', ' ').replace('⁩', ' ')
+                .replace(Regex("\\s+"), " ").trim()
+            val revStr = Regex("\\((\\d[\\d.,]*[KkMm]?)\\)").find(cd)?.groupValues?.get(1)
+                ?: Regex("([\\d.,]+[KkMm]?)\\s+reviews?").find(cd)?.groupValues?.get(1)
+            val reviews = revStr?.let { parseReviewCount(it) }
+            val reviewsOrig = revStr?.let { if (cd.contains("($it)")) "($it)" else "$it reviews" }
+            val price = Regex("\\$\\d[\\d–\\-]*").find(cd)?.value
+            val type = Regex("·\\s*([A-Za-z][A-Za-z'&/ -]{2,30}?)(?=\\s+\\d|\\s+Open|\\s+Closed|\\s+Serves|·|$)")
+                .find(cd)?.groupValues?.get(1)?.trim()
+            val addr = Regex(
+                "\\d{1,5}\\s+[A-Za-z0-9.\\- ]+?\\s+(Ave|Avenue|St|Street|Rd|Road|Dr|Drive|Blvd|Ln|Lane|Way|Ct|Court|Pl|Place|Hwy|Sq|Ste|Suite)\\b\\.?",
+                RegexOption.IGNORE_CASE
+            ).find(cd)?.value?.trim()
+            val desc = Regex("(\\d+\\+?\\s+years in business)").find(cd)?.value?.trim()
+            local.add(LocalResult(local.size + 1, name, m.groupValues[1], false, reviews, reviewsOrig, price, type, addr, desc))
+        }
+
+        // Target match.
+        var target: SerpTarget? = null
+        if (!targetDomain.isNullOrBlank()) {
+            val td = hostOf(targetDomain)
+            val orank = organic.firstOrNull { it.domain.contains(td) || td.contains(it.domain) }?.position
+            // Local cards show the business NAME, not a domain — match the domain's brand token
+            // (e.g. "epoch.coffee" → "epoch" → "Epoch Coffee"; "ramosjames.com" → "ramosjames"
+            // → "Ramos James Law"). Compare against the space-stripped name.
+            val brand = td.substringBefore('.')
+            val lrank = local.firstOrNull {
+                val collapsed = it.name.replace(" ", "").lowercase()
+                it.name.contains(td, true) || (brand.length >= 4 && collapsed.contains(brand))
+            }?.position
+            target = SerpTarget(td, orank, lrank)
+        }
+
+        s.log("SERP parsed: ${organic.size} organic, ${local.size} local, $adCount ads excluded, $localAdsExcluded local-ads excluded")
+        return SerpData(organic, local, adCount, localAdsExcluded, location, target)
+    }
+
+    /** "(1.2K)" -> 1200, "(353)" -> 353, "(1,400)" -> 1400. Null if unparseable. */
+    private fun parseReviewCount(s: String): Int? {
+        val t = s.trim().removePrefix("(").removeSuffix(")").replace(",", "").trim()
+        val mult = when {
+            t.endsWith("K", true) -> 1000.0
+            t.endsWith("M", true) -> 1_000_000.0
+            else -> 1.0
+        }
+        val num = t.trimEnd('K', 'k', 'M', 'm').toDoubleOrNull() ?: return null
+        return (num * mult).toInt()
     }
 }

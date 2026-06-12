@@ -8,25 +8,44 @@ from urllib.parse import urlparse
 PLAN_PATH = sys.argv[1] if len(sys.argv) > 1 else "/Users/seolocalph/projects/aeo-appium/daily_plan_2026-05-04.json"
 
 GOST_BIN = os.environ.get("GOST_BIN", "/opt/homebrew/bin/gost")
+# Decodo connector: HTTP CONNECT is the reliable path (SOCKS5->Decodo:10001 times
+# out on some networks). Override with GOST_CONNECTOR=socks5 if needed.
+GOST_CONNECTOR = os.environ.get("GOST_CONNECTOR", "http")
 PROXY_HOST = os.environ.get("PROXY_HOST", "gate.decodo.com")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "10001"))
 PROXY_USER = os.environ.get("PROXY_USER", "")
 PROXY_PASS = os.environ.get("PROXY_PASS", "")
 DURATION = 30
 BASE_GOST = 11001
-MAC_IP = "192.168.0.102"
+def _detect_mac_lan_ip():
+    """Auto-detect the Mac's LAN IP so SocksDroid always dials the live gost host.
+    Hardcoding broke repeatedly when DHCP/Wi-Fi moved the Mac (.102 -> .105 -> .164
+    -> .254.x) — every phone routed to a dead IP -> 'site can't be reached' on every
+    daily AND ranking job. Env MAC_IP overrides; .102 fallback. (Restores commit 4a196f3,
+    which a later hardcoded edit had clobbered.)"""
+    for _if in ("en0", "en1"):
+        _ip = subprocess.run(["ipconfig", "getifaddr", _if],
+                             capture_output=True, text=True).stdout.strip()
+        if _ip:
+            return _ip
+    return "192.168.0.102"
 
+
+MAC_IP = os.environ.get("MAC_IP") or _detect_mac_lan_ip()
+
+# Mac-2 fleet — 10 phones. Non-TECNO first so small waves hit toybox-nc phones first
+# (TECNO KL4s use BusyBox nc; wait_tunnel uses BusyBox-compatible probe upstream as of 298b462).
 DEVICES = [
-    ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
-    ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
-    ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
-    ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
-    ("device-105", "adb-149145555W005208-27c1FH (2)._adb-tls-connect._tcp"),
-    ("device-106", "adb-149145555W006477-JjonPV (2)._adb-tls-connect._tcp"),
-    ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
-    ("device-108", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
-    ("device-109", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
-    ("device-110", "adb-149145555W006589-2W7yzb (2)._adb-tls-connect._tcp"),
+    ("device-101", "adb-R83L103VCVH-uvv2pp._adb-tls-connect._tcp"),       # Samsung A07 / Android 16
+    ("device-102", "adb-1490455615007763-aoRAJa._adb-tls-connect._tcp"),  # Infinix X6725 / Android 15
+    ("device-103", "adb-1490455613010660-eFvcOg._adb-tls-connect._tcp"),  # Infinix X6725 / Android 15
+    ("device-104", "adb-1490455613010774-txpX1j._adb-tls-connect._tcp"),  # Infinix X6725 / Android 15
+    ("device-105", "adb-14904335CH002523-3ROGjb._adb-tls-connect._tcp"),  # Infinix X6725 / Android 15 (new 2026-05-24)
+    ("device-106", "adb-1490455572007706-HQWNyz._adb-tls-connect._tcp"),  # Infinix X6725 / Android 15 (new 2026-05-24)
+    ("device-107", "adb-1490455613009805-LsEGCF._adb-tls-connect._tcp"),  # Infinix X6725 / Android 15 (new 2026-05-24)
+    ("device-108", "adb-129143749A011759-fEoBDp._adb-tls-connect._tcp"),  # TECNO KL4 / Android 14 (BusyBox nc)
+    ("device-109", "adb-129143748T010173-6zhzYl._adb-tls-connect._tcp"),  # TECNO KL4 / Android 14 (BusyBox nc)
+    ("device-110", "adb-129143748T079638-YjN1XH._adb-tls-connect._tcp"),  # TECNO KL4 / Android 14 (new 2026-05-24, BusyBox nc)
 ]
 
 def run(cmd, timeout=30):
@@ -74,7 +93,7 @@ def gost_start(specs):
     for i, s in enumerate(specs):
         lines += [f'  - name: c{i}', f'    hops:', f'      - name: h{i}', f'        nodes:',
                   f'          - name: d{i}', f'            addr: {PROXY_HOST}:{PROXY_PORT}',
-                  f'            connector: {{type: socks5, auth: {{username: "{s["upstream_user"]}", password: "{PROXY_PASS}"}}}}',
+                  f'            connector: {{type: {GOST_CONNECTOR}, auth: {{username: "{s["upstream_user"]}", password: "{PROXY_PASS}"}}}}',
                   f'            dialer: {{type: tcp}}']
     cfg = f"/tmp/gost_{os.getpid()}_{specs[0]['port']}.yaml"
     with open(cfg, "w") as f: f.write("\n".join(lines)+"\n")
@@ -99,7 +118,10 @@ def resolve_proxy_ip(port):
     cold-tunnel handshakes."""
     try:
         cp = subprocess.run(
-            ["curl", "-sS", "--max-time", "15", "--socks5",
+            # --socks5-hostname (NOT --socks5): Decodo rejects IP-CONNECT with HTTP 522,
+            # so the destination must be sent as a hostname for gost to re-dial. Plain
+            # --socks5 resolves locally and sends an IP → 522 "route Server Error".
+            ["curl", "-sS", "--max-time", "15", "--socks5-hostname",
              f"anon:anon@127.0.0.1:{port}", "https://ifconfig.me"],
             capture_output=True, text=True, timeout=18,
         )

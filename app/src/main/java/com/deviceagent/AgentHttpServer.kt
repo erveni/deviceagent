@@ -1,5 +1,7 @@
 package com.deviceagent
 
+import android.content.ComponentName
+import android.content.Intent
 import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -18,8 +20,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.7.1-b64"
-        const val APP_VERSION_CODE = 9
+        const val APP_VERSION_NAME = "0.9.9-seo"
+        const val APP_VERSION_CODE = 20
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
@@ -228,6 +230,146 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             val hasError = result.platforms.values.any { it.status == "error" }
             result.status = if (hasError && result.platforms.values.all { it.status == "error" }) "error" else "completed"
         }
+
+        /**
+         * Execute a Google SEO session: real Chrome → human-typed search → parse the SERP
+         * into SerpApi-like organic + local-pack rankings (ads excluded) + a proof screenshot.
+         * Structurally mirrors the daily/audit flow (reset → navigate → input → submit).
+         */
+        fun executeGoogleSerpStatic(
+            result: SessionResult,
+            flowEngine: FlowEngine,
+            keyword: String,
+            targetDomain: String?,
+            location: String = ""
+        ) {
+            result.type = "seo"
+            result.prompt = keyword
+            val stepBase = System.currentTimeMillis()
+            fun step(name: String, block: () -> Boolean): Boolean {
+                val t0 = System.currentTimeMillis()
+                val ok = try { block() } catch (e: Exception) {
+                    result.steps.add("[seo] $name FAILED ${(System.currentTimeMillis()-t0)/1000}s - ${e.message}")
+                    false
+                }
+                val dt = (System.currentTimeMillis() - t0) / 1000
+                val total = (System.currentTimeMillis() - stepBase) / 1000
+                result.steps.add("[seo] $name ${if (ok) "OK" else "FAILED"} ${dt}s (total ${total}s)")
+                return ok
+            }
+
+            try {
+                if (!step("reset_chrome") { flowEngine.resetChrome() }) {
+                    result.status = "error"; result.error = "reset_chrome failed"; return
+                }
+                Thread.sleep(500)
+                // PRIMARY path: load the SERP URL directly (?q= + uule + gl=us&hl=en).
+                // Skips the through-proxy-flaky human-typed input ladder (DEFECT #2) and
+                // pins locale deterministically. `location` (canonical "City,State,United
+                // States") localizes via uule; blank → gl=us only. Matches the precision
+                // posture (no human-typing theater).
+                if (!step("navigate_serp") { flowEngine.navigateToSerpLocalized(keyword, location) }) {
+                    result.status = "error"; result.error = "serp navigate failed"; return
+                }
+                Thread.sleep(2500)
+
+                // Reach a real SERP, self-checking for a Google/Cloudflare bot challenge and
+                // auto-recovering (wait + reload) so no manual intervention is needed. A soft
+                // "unusual traffic" interstitial often clears with a short cool-down + reload;
+                // a hard reCAPTCHA does not (that needs a fresh proxy IP — reported as blocked).
+                var onSerp = flowEngine.waitForSerp(12)
+                if (onSerp) {
+                    result.steps.add("[seo] wait_serp OK (human submit)")
+                } else {
+                    var attempt = 0
+                    while (!onSerp && attempt < 3) {
+                        attempt++
+                        if (flowEngine.lastChallengeSeen) {
+                            // Try to clear the reCAPTCHA by ticking "I'm not a robot".
+                            onSerp = step("solve_challenge_$attempt") { flowEngine.solveChallenge(22) }
+                            if (onSerp) break
+                            // Couldn't tick/pass — cool down and reload for a fresh challenge.
+                            onSerp = step("challenge_reload_$attempt") {
+                                Thread.sleep(6000)
+                                flowEngine.navigateToSerpLocalized(keyword, location)
+                                flowEngine.waitForSerp(18)
+                            }
+                        } else {
+                            onSerp = step("serp_fallback_$attempt") {
+                                flowEngine.navigateToSerpLocalized(keyword, location)
+                                flowEngine.waitForSerp(20)
+                            }
+                        }
+                    }
+                    if (!onSerp) {
+                        result.challenge = flowEngine.lastChallengeSeen
+                        result.status = "blocked"
+                        result.error = if (flowEngine.lastChallengeSeen)
+                            "bot/recaptcha challenge — needs fresh proxy IP" else "serp load timeout"
+                        // Capture the blocking page itself as evidence.
+                        val blkName = "seo_blocked_${System.currentTimeMillis()}"
+                        val blkPath = try { flowEngine.saveScreenshot(blkName) } catch (e: Exception) { null }
+                        result.screenshotPath = blkPath
+                        if (!blkPath.isNullOrBlank()) {
+                            result.screenshotB64 = try {
+                                android.util.Base64.encodeToString(File(blkPath).readBytes(), android.util.Base64.NO_WRAP)
+                            } catch (e: Exception) { null }
+                        }
+                        result.steps.add("[seo] BLOCKED: ${result.error}")
+                        return
+                    }
+                }
+
+                // Dismiss Google's "See results closer to you?" precise-location prompt (and
+                // similar overlays) that otherwise sit on top of the results and break parsing.
+                step("dismiss_serp_dialogs") { flowEngine.dismissSerpDialogs(); true }
+
+                // Clear any active result filter (e.g. "Top rated") so the ranking is the default,
+                // unfiltered SERP — a selected filter would skew the SEO rank.
+                step("clear_filters") { flowEngine.clearSearchFilters() >= 0 }
+
+                // Capture TWO proof screenshots: one framed on the LOCAL/Maps pack, one on the
+                // ORGANIC results — a rank audit needs both. Each scroll falls back gracefully
+                // if its section is absent; we still shoot whatever is on screen.
+                fun shootB64(tag: String): Pair<String?, String?> {
+                    Thread.sleep(800)
+                    val name = "seo_${tag}_${System.currentTimeMillis()}"
+                    val path = try { flowEngine.saveScreenshot(name) } catch (e: Exception) { null }
+                    val b64 = if (!path.isNullOrBlank()) try {
+                        android.util.Base64.encodeToString(File(path).readBytes(), android.util.Base64.NO_WRAP)
+                    } catch (e: Exception) { Log.w("DeviceAgent", "seo $tag ss b64 failed: ${e.message}"); null } else null
+                    return path to b64
+                }
+                // 1) local/Maps pack — anchor on the first star-rating card (header label varies)
+                step("scroll_to_local") {
+                    flowEngine.scrollToLocalPackTop() || flowEngine.scrollToTextTop(listOf("Places", "Businesses")); true
+                }
+                shootB64("local").let { (p, b) -> result.screenshotLocalPath = p; result.screenshotLocalB64 = b }
+                // 2) organic results — anchor on the organic block top (proven reliable; a
+                //    target-row anchor over-scrolled off the SERP when the row wasn't yet rendered).
+                step("scroll_to_organic") { flowEngine.scrollToOrganicTop(); true }
+                shootB64("organic").let { (p, b) -> result.screenshotOrganicPath = p; result.screenshotOrganicB64 = b }
+                // legacy single-screenshot fields → local shot, for back-compat
+                result.screenshotPath = result.screenshotLocalPath
+                result.screenshotB64 = result.screenshotLocalB64
+
+                // Scroll the rest of the SERP so off-screen results materialise in the a11y tree, then parse.
+                step("scroll") { flowEngine.scrollResponse(8) }
+                Thread.sleep(800)
+                val serp = flowEngine.parseSerp(targetDomain)
+                result.serp = serp
+                result.rankingPosition = serp.target?.organicRank
+                result.steps.add(
+                    "[seo] parsed: ${serp.organic.size} organic, ${serp.local.size} local, " +
+                    "${serp.adsExcluded} ads + ${serp.localAdsExcluded} local-ads excluded, " +
+                    "target_organic=${serp.target?.organicRank} target_local=${serp.target?.localRank}"
+                )
+                result.status = "completed"
+            } catch (e: Exception) {
+                result.status = "error"; result.error = e.message
+                Log.e("DeviceAgent", "SEO error: ${e.stackTraceToString()}")
+            }
+        }
     }
 
     private var serverThread: Thread? = null
@@ -260,6 +402,15 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         var rankingPosition: Int? = null,
         var rankingTotal: String? = null,
         var proxyIp: String? = null,
+        // SEO (Google SERP) results — populated for type=="seo".
+        var serp: SerpData? = null,
+        var challenge: Boolean = false,
+        var screenshotPath: String? = null,
+        var screenshotB64: String? = null,
+        var screenshotLocalB64: String? = null,
+        var screenshotOrganicB64: String? = null,
+        var screenshotLocalPath: String? = null,
+        var screenshotOrganicPath: String? = null,
         val platforms: MutableMap<String, PlatformResult> = mutableMapOf()
     )
 
@@ -340,6 +491,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 path.startsWith("/screenshot") -> {
                     handleScreenshot(socket.outputStream, writer, path)
                 }
+                path.startsWith("/voice_search") -> {
+                    handleVoiceSearch(writer, path)
+                }
                 path == "/session" || path == "/session/" -> {
                     if (method == "POST") {
                         handleSession(writer, body)
@@ -350,6 +504,34 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 path == "/mqtt/config" || path == "/mqtt/config/" -> {
                     if (method == "POST") {
                         handleMqttConfig(writer, body)
+                    } else {
+                        respond(writer, 405, """{"error":"use POST"}""")
+                    }
+                }
+                path == "/proxy/start" || path == "/proxy/start/" -> {
+                    if (method == "POST") {
+                        handleProxyStart(writer, body)
+                    } else {
+                        respond(writer, 405, """{"error":"use POST"}""")
+                    }
+                }
+                path == "/proxy/stop" || path == "/proxy/stop/" -> {
+                    if (method == "POST") {
+                        handleProxyStop(writer)
+                    } else {
+                        respond(writer, 405, """{"error":"use POST"}""")
+                    }
+                }
+                path == "/agent/start" || path == "/agent/start/" -> {
+                    if (method == "POST") {
+                        handleAgentStart(writer, body)
+                    } else {
+                        respond(writer, 405, """{"error":"use POST"}""")
+                    }
+                }
+                path == "/agent/stop" || path == "/agent/stop/" -> {
+                    if (method == "POST") {
+                        handleAgentStop(writer)
                     } else {
                         respond(writer, 405, """{"error":"use POST"}""")
                     }
@@ -372,15 +554,90 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             val json = JSONObject(body)
             val sessionType = json.optString("type", "daily")
 
-            if (sessionType == "audit") {
-                handleAuditSession(writer, json)
-            } else {
-                handleDailySession(writer, json)
+            when (sessionType) {
+                "audit" -> handleAuditSession(writer, json)
+                "seo" -> handleSeoSession(writer, json)
+                "noop" -> handleNoopSession(writer, json)
+                else -> handleDailySession(writer, json)
             }
         } catch (e: Exception) {
             Log.e("DeviceAgent", "Session error: ${e.message}")
             respond(writer, 400, """{"error":"${e.message?.replace("\"", "'")}"}""")
         }
+    }
+
+    /**
+     * Dry-run handler for the HTTP control model (CONTROL_MODE=http). Parses a
+     * FULL job-shaped body — including the new self-managed proxy + GPS envelope —
+     * and echoes back exactly what it received, the current device state, and the
+     * actions it WOULD take. Runs NO LLM flow, starts NO proxy, sets NO GPS.
+     * Lets the Mac prove the stateless per-request control path on one phone
+     * before the real self-management code lands. type:"noop".
+     */
+    private fun handleNoopSession(writer: OutputStreamWriter, json: JSONObject) {
+        val platform = json.optString("platform", "")
+        val keyword = json.optString("keyword", "").let { if (it == "null") "" else it }
+        val prompt = json.optString("prompt", "").let { if (it == "null") "" else it }
+
+        // New control-model envelope (forward-compat with the self-managed path).
+        val proxyIn = json.optJSONObject("proxy")
+        val gpsIn = json.optJSONObject("gps")
+        // Accept a nested gps{} object OR flat lat/lng (latitude/longitude) fields.
+        val lat = gpsIn?.opt("lat") ?: gpsIn?.opt("latitude")
+            ?: json.opt("lat") ?: json.opt("latitude")
+        val lng = gpsIn?.opt("lng") ?: gpsIn?.opt("longitude")
+            ?: json.opt("lng") ?: json.opt("longitude")
+
+        Log.d(
+            "DeviceAgent",
+            "NOOP dry-run: platform=$platform kw=${keyword.take(40)} " +
+                "proxy=${proxyIn?.optString("host")}:${proxyIn?.optInt("port")} gps=$lat,$lng"
+        )
+
+        val wouldStartProxy = proxyIn?.let {
+            JSONObject().apply {
+                put("host", it.optString("host", ""))
+                put("port", it.optInt("port", 0))
+                put("mode", it.optString("mode", "gost"))
+                put("zip", it.optString("zip", ""))
+                put("username", it.optString("username", ""))
+            }
+        }
+        val wouldSetGps = if (lat != null && lng != null) {
+            JSONObject().apply { put("lat", lat); put("lng", lng) }
+        } else null
+
+        val tun = readTunInterface()
+        val response = JSONObject().apply {
+            put("status", "ok")
+            put("type", "noop")
+            put("dry_run", true)
+            put("ts", System.currentTimeMillis())
+            put("device", JSONObject().apply {
+                put("version", APP_VERSION_NAME)
+                put("versionCode", APP_VERSION_CODE)
+                put("wifiIp", currentWifiIp() ?: "")
+                put("accessibility", AgentAccessibilityService.instance != null)
+                put("tun0_up", tun.first)
+                put("tun0_addr", tun.second ?: "")
+            })
+            put("received", JSONObject().apply {
+                put("platform", platform)
+                put("keyword", keyword)
+                put("prompt", prompt)
+                put("proxy", proxyIn ?: JSONObject.NULL)
+                put("gps", gpsIn ?: JSONObject.NULL)
+                put("raw_keys", org.json.JSONArray(json.keys().asSequence().toList()))
+            })
+            put("would_do", JSONObject().apply {
+                put("start_proxy", wouldStartProxy ?: JSONObject.NULL)
+                put("set_gps", wouldSetGps ?: JSONObject.NULL)
+                put("verify_egress", proxyIn != null)
+                put("run_platform", platform)
+                put("run_keyword", keyword)
+            })
+        }
+        respond(writer, 200, response.toString())
     }
 
     private fun handleDailySession(writer: OutputStreamWriter, json: JSONObject) {
@@ -475,6 +732,117 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // Always 200 — caller inspects per-platform status in the JSON body.
         // Returning 500 made urllib.urlopen raise and discard the body.
         respond(writer, 200, response.toString())
+    }
+
+    /** Normalize a location string to uule's canonical "City,State,United States".
+     *  "San Francisco, California" → "San Francisco,California,United States".
+     *  Already-canonical or empty strings pass through. */
+    private fun canonicalizeLocation(raw: String): String {
+        val s = raw.trim()
+        if (s.isBlank()) return ""
+        if (s.contains("United States", ignoreCase = true)) {
+            return s.split(",").joinToString(",") { it.trim() }
+        }
+        val parts = s.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return ""
+        return (parts + "United States").joinToString(",")
+    }
+
+    private fun handleSeoSession(writer: OutputStreamWriter, json: JSONObject) {
+        val keyword = json.optString("keyword", "").let { if (it == "null") "" else it }
+        val targetDomain = json.optString("targetDomain", "")
+            .ifBlank { json.optString("bizUrl", "") }
+            .let { if (it.isBlank() || it == "null") null else it }
+        // Optional location → uule. Accept "City, State" or a full canonical
+        // "City,State,United States"; normalize to the canonical form.
+        val location = canonicalizeLocation(
+            json.optString("location", "").let { if (it == "null") "" else it }
+        )
+
+        if (keyword.isBlank()) {
+            respond(writer, 400, """{"error":"keyword is required for seo"}""")
+            return
+        }
+
+        Log.d("DeviceAgent", "SEO: \"$keyword\" target=$targetDomain loc=\"$location\"")
+
+        val result = SessionResult(platform = "google", status = "running", type = "seo")
+        lastResult.set(result)
+
+        executeGoogleSerpStatic(result, flowEngine, keyword, targetDomain, location)
+
+        val serp = result.serp
+        val response = JSONObject().apply {
+            put("status", result.status)
+            put("type", "seo")
+            put("keyword", keyword)
+            put("challenge", result.challenge)
+            put("error", result.error ?: "")
+            put("steps", result.steps.size)
+            put("step_log", org.json.JSONArray(result.steps))
+            put("screenshot_path", result.screenshotPath ?: "")
+            put("screenshot_b64", result.screenshotB64 ?: "")
+            put("screenshot_local_b64", result.screenshotLocalB64 ?: "")
+            put("screenshot_organic_b64", result.screenshotOrganicB64 ?: "")
+            put("screenshot_local_path", result.screenshotLocalPath ?: "")
+            put("screenshot_organic_path", result.screenshotOrganicPath ?: "")
+            put("serp", serpToJson(serp))
+        }
+        respond(writer, 200, response.toString())
+    }
+
+    private fun serpToJson(serp: SerpData?): JSONObject {
+        val obj = JSONObject()
+        if (serp == null) {
+            obj.put("organic", org.json.JSONArray())
+            obj.put("local_pack", org.json.JSONArray())
+            obj.put("ads_excluded", 0)
+            return obj
+        }
+        val organic = org.json.JSONArray()
+        for (r in serp.organic) {
+            organic.put(JSONObject().apply {
+                put("position", r.position)
+                put("title", r.title)
+                put("domain", r.domain)
+                put("url", r.url)
+                put("source", r.site ?: "")
+                put("snippet", r.snippet ?: "")
+                put("displayed_link", r.displayedLink ?: "")
+            })
+        }
+        val local = org.json.JSONArray()
+        for (r in serp.local) {
+            local.put(JSONObject().apply {
+                put("position", r.position)
+                put("name", r.name)
+                put("rating", r.rating ?: "")
+                put("sponsored", r.sponsored)
+                put("reviews", r.reviews ?: JSONObject.NULL)
+                put("reviews_original", r.reviewsOriginal ?: "")
+                put("price", r.price ?: "")
+                put("type", r.type ?: "")
+                put("address", r.address ?: "")
+                put("description", r.description ?: "")
+            })
+        }
+        obj.put("organic", organic)
+        obj.put("local_pack", local)
+        obj.put("ads_excluded", serp.adsExcluded)
+        obj.put("local_ads_excluded", serp.localAdsExcluded)
+        obj.put("location", serp.location ?: "")
+        serp.target?.let { t ->
+            obj.put("target", JSONObject().apply {
+                put("domain", t.domain)
+                put("organic_rank", t.organicRank ?: 0)
+                put("local_rank", t.localRank ?: 0)
+            })
+        }
+        return obj
+    }
+
+    fun executeGoogleSerp(result: SessionResult, keyword: String, targetDomain: String?) {
+        executeGoogleSerpStatic(result, flowEngine, keyword, targetDomain)
     }
 
     fun executeSession(
@@ -637,6 +1005,383 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             rawOut.flush()
         } catch (e: Exception) {
             respond(writer, 500, """{"error":"read failed: ${e.message?.replace("\"", "'")}"}""")
+        }
+    }
+
+    // Hands-free voice search via acoustic loopback. GET /voice_search?query=<text>[&url=<url>]
+    // Speaks the query out the speaker so Google's voice search (Chrome) hears + runs it.
+    private fun handleVoiceSearch(writer: OutputStreamWriter, fullPath: String) {
+        val svc = AgentAccessibilityService.instance
+        if (svc == null) {
+            respond(writer, 503, """{"error":"accessibility service not running"}""")
+            return
+        }
+        val query = queryParam(fullPath, "query") ?: queryParam(fullPath, "q") ?: ""
+        val url = queryParam(fullPath, "url") ?: "https://www.google.com"
+        val engine = queryParam(fullPath, "engine") ?: "chrome"
+        if (query.isBlank()) {
+            respond(writer, 400, """{"error":"query param required"}""")
+            return
+        }
+        Log.d("DeviceAgent", "VoiceSearch[$engine]: \"$query\"")
+        val result = try {
+            VoiceSearchFlow.run(svc, query, url, engine)
+        } catch (e: Exception) {
+            respond(writer, 500, """{"error":"${e.message?.replace("\"", "'")}"}""")
+            return
+        }
+        val json = JSONObject().apply {
+            put("status", "ok")
+            put("query", query)
+            put("result", result)
+        }
+        respond(writer, 200, json.toString())
+    }
+
+    /** Pull a single decoded query-string param from a raw request path. */
+    private fun queryParam(fullPath: String, key: String): String? {
+        val qIdx = fullPath.indexOf('?')
+        if (qIdx < 0) return null
+        return fullPath.substring(qIdx + 1).split("&")
+            .map { it.split("=", limit = 2) }
+            .firstOrNull { it.size == 2 && it[0] == key }
+            ?.let { java.net.URLDecoder.decode(it[1], "UTF-8") }
+    }
+
+    // ---- HTTP control model: app self-manages the SocksDroid proxy (CONTROL_MODE=http) ----
+    // Replaces the Mac's per-job `adb shell am start ... ACTION_START_VPN`. One-time
+    // provisioning (VPN consent + `appops set net.typeblog.socks ACTIVATE_VPN allow`)
+    // still happens once per phone over ADB — not per run.
+
+    /** Fire SocksDroid's ACTION_START_VPN from inside the app (no per-run ADB). */
+    private fun startSocksDroid(
+        host: String, port: Int, dns: String, route: String, uname: String, passwd: String
+    ): Boolean {
+        val ctx = AgentAccessibilityService.instance ?: return false
+        return try {
+            val intent = Intent("net.typeblog.socks.ACTION_START_VPN").apply {
+                component = ComponentName("net.typeblog.socks", "net.typeblog.socks.AdbStartActivity")
+                putExtra("SOCKSSERV", host)
+                putExtra("SOCKSPORT", port)
+                putExtra("SOCKSUNAME", uname)
+                putExtra("SOCKSPASSWD", passwd)
+                putExtra("SOCKSDNS", dns)
+                putExtra("SOCKSROUTE", route)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.e("DeviceAgent", "startSocksDroid failed: ${e.message}")
+            false
+        }
+    }
+
+    /** Fetch the phone's public egress IP THROUGH the tunnel — proves the full chain
+     *  (socksdroid -> gost -> Decodo) carries traffic, and returns the residential IP. */
+    private fun fetchEgressIp(): String? {
+        // ip-api first: most reliable over the Decodo SOCKS chain in testing
+        // (returns the bare IP via fields=query). ipify/ifconfig.me as fallbacks.
+        for (u in listOf("http://ip-api.com/line/?fields=query", "https://api.ipify.org", "http://ifconfig.me/ip")) {
+            try {
+                val conn = (java.net.URL(u).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 6000
+                    readTimeout = 6000
+                    requestMethod = "GET"
+                    setRequestProperty("User-Agent", "curl/8.0")
+                }
+                val ip = conn.inputStream.bufferedReader().use { it.readText().trim() }
+                conn.disconnect()
+                if (ip.isNotBlank() && ip.length <= 45 && !ip.contains("<")) return ip
+            } catch (_: Exception) { /* try next */ }
+        }
+        return null
+    }
+
+    /** Set the device's mock GPS to lat/lng using LocationManager test providers.
+     *  Requires one-time provisioning: `appops set com.deviceagent android:mock_location allow`
+     *  + ACCESS_FINE_LOCATION granted. Replaces the old per-job fakegps ADB intent. */
+    private fun setMockLocation(lat: Double, lng: Double): Boolean {
+        val ctx = AgentAccessibilityService.instance ?: return false
+        return try {
+            val lm = ctx.getSystemService(android.content.Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+            var any = false
+            for (provider in listOf(
+                android.location.LocationManager.GPS_PROVIDER,
+                android.location.LocationManager.NETWORK_PROVIDER
+            )) {
+                try {
+                    lm.addTestProvider(
+                        provider, false, false, false, false, true, true, true,
+                        android.location.Criteria.POWER_LOW, android.location.Criteria.ACCURACY_FINE
+                    )
+                } catch (_: Exception) { /* may already exist */ }
+                try { lm.setTestProviderEnabled(provider, true) } catch (_: Exception) {}
+                val loc = android.location.Location(provider).apply {
+                    latitude = lat
+                    longitude = lng
+                    accuracy = 5f
+                    time = System.currentTimeMillis()
+                    elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+                    altitude = 10.0
+                    bearing = 0f
+                    speed = 0f
+                }
+                try { lm.setTestProviderLocation(provider, loc); any = true }
+                catch (e: Exception) { Log.w("DeviceAgent", "setTestProviderLocation($provider): ${e.message}") }
+            }
+            any
+        } catch (e: Exception) {
+            Log.e("DeviceAgent", "setMockLocation failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun handleProxyStart(writer: OutputStreamWriter, body: String) {
+        val json = try { JSONObject(body) } catch (e: Exception) {
+            respond(writer, 400, """{"error":"bad json: ${e.message?.replace("\"", "'")}"}""")
+            return
+        }
+        // Accept a nested proxy{} object OR flat fields.
+        val p = json.optJSONObject("proxy") ?: json
+        val host = p.optString("host", "")
+        val port = p.optInt("port", 0)
+        if (host.isBlank() || port <= 0) {
+            respond(writer, 400, """{"error":"host and port are required"}""")
+            return
+        }
+        val dns = p.optString("dns", "8.8.8.8")
+        // bypass-lan keeps the LAN (192.168/10/172 private ranges) OFF the tunnel so the
+        // Mac<->phone HTTP control channel survives while the VPN is up. route:"all" would
+        // capture the control socket and make the phone unreachable mid-job (the old ADB
+        // daily got away with "all" because its control plane was the ADB transport, not Wi-Fi).
+        val route = p.optString("route", "bypass-lan")
+        val uname = p.optString("uname", p.optString("username", "anon"))
+        val passwd = p.optString("passwd", "anon")
+
+        if (AgentAccessibilityService.instance == null) {
+            respond(writer, 503, """{"error":"accessibility/app context not available"}""")
+            return
+        }
+
+        val t0 = System.currentTimeMillis()
+        val started = startSocksDroid(host, port, dns, route, uname, passwd)
+
+        // Poll tun0 up to ~12s (mirror of the Mac's wait_tunnel local check).
+        var tunUp = false
+        var tunAddr: String? = null
+        if (started) {
+            for (i in 0 until 12) {
+                Thread.sleep(1000)
+                val t = readTunInterface()
+                if (t.first) { tunUp = true; tunAddr = t.second; break }
+            }
+        }
+        // Egress check proves traffic actually flows through the chain (not just tun0 has an IP).
+        val egress = if (tunUp) fetchEgressIp() else null
+
+        val resp = JSONObject().apply {
+            put("ok", started && tunUp)
+            put("intent_sent", started)
+            put("tun0_up", tunUp)
+            put("tun0_addr", tunAddr ?: "")
+            put("egress_ip", egress ?: "")
+            put("proxy", JSONObject().apply {
+                put("host", host); put("port", port); put("dns", dns); put("route", route)
+            })
+            put("took_ms", System.currentTimeMillis() - t0)
+        }
+        respond(writer, 200, resp.toString())
+    }
+
+    /** Best-effort stop. Without root the app can't `pm clear` SocksDroid; we try its
+     *  stop action. Re-firing /proxy/start re-points the tunnel for the next job. */
+    private fun handleProxyStop(writer: OutputStreamWriter) {
+        val ctx = AgentAccessibilityService.instance
+        var sent = false
+        if (ctx != null) {
+            try {
+                val intent = Intent("net.typeblog.socks.ACTION_STOP_VPN").apply {
+                    component = ComponentName("net.typeblog.socks", "net.typeblog.socks.AdbStartActivity")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(intent)
+                sent = true
+            } catch (e: Exception) {
+                Log.e("DeviceAgent", "stopSocksDroid failed: ${e.message}")
+            }
+        }
+        Thread.sleep(1500)
+        val t = readTunInterface()
+        respond(writer, 200, JSONObject().apply {
+            put("ok", true)
+            put("stop_sent", sent)
+            put("tun0_up", t.first)
+            put("note", "stop is best-effort without root; re-fire /proxy/start to re-point")
+        }.toString())
+    }
+
+    // ---- INVERTED control plane: phone-pull worker loop (CONTROL_MODE=http) ----
+    // The phone drives: register -> poll Mac for a job -> bring its own proxy up ->
+    // run -> push result back. All phone-initiated, so it works even while the VPN is
+    // up (phone -> gost-on-Mac -> Mac) and a Wi-Fi flap just delays the next poll.
+
+    @Volatile private var workerThread: Thread? = null
+    @Volatile private var workerStop = false
+
+    private fun handleAgentStart(writer: OutputStreamWriter, body: String) {
+        val json = try { JSONObject(body) } catch (e: Exception) {
+            respond(writer, 400, """{"error":"bad json: ${e.message?.replace("\"", "'")}"}"""); return
+        }
+        val mac = json.optString("mac", "")  // "host:port" of mac_job_server
+        if (mac.isBlank()) {
+            respond(writer, 400, """{"error":"mac (host:port) is required"}"""); return
+        }
+        val serial = json.optString("serial", "").ifBlank { currentWifiIp() ?: "unknown" }
+        val intervalMs = (json.optDouble("interval_s", 5.0) * 1000).toLong()
+        if (workerThread?.isAlive == true) {
+            respond(writer, 200, """{"ok":true,"already_running":true}"""); return
+        }
+        workerStop = false
+        workerThread = Thread { runWorkerLoop(mac, serial, intervalMs) }
+            .also { it.isDaemon = true; it.start() }
+        respond(writer, 200, JSONObject().apply {
+            put("ok", true); put("started", true); put("mac", mac); put("serial", serial)
+            put("interval_ms", intervalMs)
+        }.toString())
+    }
+
+    private fun handleAgentStop(writer: OutputStreamWriter) {
+        workerStop = true
+        respond(writer, 200, """{"ok":true,"stopping":true}""")
+    }
+
+    private fun runWorkerLoop(mac: String, serial: String, intervalMs: Long) {
+        val base = "http://$mac"
+        Log.d("DeviceAgent", "worker start: mac=$mac serial=$serial interval=${intervalMs}ms")
+        httpReq("POST", "$base/register", JSONObject().apply {
+            put("serial", serial); put("ip", currentWifiIp() ?: ""); put("version", APP_VERSION_NAME)
+        }.toString())
+        while (!workerStop) {
+            try {
+                val (code, text) = httpReq("GET", "$base/next-job?serial=$serial", null)
+                if (code == 200 && text.isNotBlank()) {
+                    val job = JSONObject(text)
+                    Log.d("DeviceAgent", "worker job ${job.optString("job_id")} type=${job.optString("type")}")
+                    val result = processJob(job).apply {
+                        put("serial", serial)
+                        put("job_id", job.optString("job_id", ""))
+                    }
+                    httpReq("POST", "$base/result", result.toString())
+                } else {
+                    Thread.sleep(intervalMs)
+                }
+            } catch (e: Exception) {
+                Log.e("DeviceAgent", "worker loop error: ${e.message}")
+                Thread.sleep(intervalMs)
+            }
+        }
+        Log.d("DeviceAgent", "worker stopped")
+    }
+
+    /** Run one job. Brings the proxy up if the job carries one (persistent VPN — no
+     *  teardown needed). Real daily/audit/seo flows wire in here later; for now every
+     *  type echoes a dry-run result that also proves the proxy chain (egress IP). */
+    private fun processJob(job: JSONObject): JSONObject {
+        val type = job.optString("type", "noop")
+        var tunUp = false
+        var egress: String? = null
+        var gpsSet = false
+
+        // Mock GPS first so Chrome/Google picks it up on navigation.
+        val gps = job.optJSONObject("gps")
+        val lat = gps?.optDouble("lat", Double.NaN) ?: job.optDouble("lat", Double.NaN)
+        val lng = gps?.optDouble("lng", Double.NaN) ?: job.optDouble("lng", Double.NaN)
+        if (!lat.isNaN() && !lng.isNaN()) {
+            gpsSet = setMockLocation(lat, lng)
+        }
+
+        val proxy = job.optJSONObject("proxy")
+        if (proxy != null) {
+            val host = proxy.optString("host", "")
+            val port = proxy.optInt("port", 0)
+            if (host.isNotBlank() && port > 0) {
+                startSocksDroid(
+                    host, port, proxy.optString("dns", "8.8.8.8"),
+                    proxy.optString("route", "all"),
+                    proxy.optString("uname", proxy.optString("username", "anon")),
+                    proxy.optString("passwd", "anon")
+                )
+                for (i in 0 until 12) {
+                    Thread.sleep(1000)
+                    if (readTunInterface().first) { tunUp = true; break }
+                }
+                if (tunUp) egress = fetchEgressIp()
+            }
+        }
+        // Real SEO / Google SERP flow — drives Chrome through the proxy and
+        // captures framed screenshots (proves the whole chain end-to-end).
+        if (type == "seo") {
+            val keyword = job.optString("keyword", "")
+            val targetDomain = job.optString("targetDomain", "")
+                .ifBlank { job.optString("bizUrl", "") }
+                .let { if (it.isBlank() || it == "null") null else it }
+            val result = SessionResult(platform = "google", status = "running", type = "seo")
+            lastResult.set(result)
+            executeGoogleSerpStatic(result, flowEngine, keyword, targetDomain)
+            return JSONObject().apply {
+                put("status", result.status)
+                put("type", "seo")
+                put("keyword", keyword)
+                put("tun0_up", tunUp)
+                put("egress_ip", egress ?: "")
+                put("gps_set", gpsSet)
+                put("challenge", result.challenge)
+                put("error", result.error ?: "")
+                put("steps", result.steps.size)
+                put("screenshot_b64", result.screenshotB64 ?: "")
+                put("screenshot_local_b64", result.screenshotLocalB64 ?: "")
+                put("screenshot_organic_b64", result.screenshotOrganicB64 ?: "")
+                put("serp", serpToJson(result.serp))
+                put("device_version", APP_VERSION_NAME)
+                put("ts", System.currentTimeMillis())
+            }
+        }
+
+        return JSONObject().apply {
+            put("status", "ok")
+            put("type", type)
+            put("dry_run", true)
+            put("tun0_up", tunUp)
+            put("egress_ip", egress ?: "")
+            put("gps_set", gpsSet)
+            put("keyword", job.optString("keyword", ""))
+            put("device_version", APP_VERSION_NAME)
+            put("wifiIp", currentWifiIp() ?: "")
+            put("ts", System.currentTimeMillis())
+        }
+    }
+
+    private fun httpReq(method: String, urlStr: String, body: String?): Pair<Int, String> {
+        return try {
+            val conn = (java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = 8000
+                readTimeout = 30000
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                }
+            }
+            if (body != null) conn.outputStream.use { it.write(body.toByteArray()) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            conn.disconnect()
+            code to text
+        } catch (e: Exception) {
+            -1 to (e.message ?: "error")
         }
     }
 
