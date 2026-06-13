@@ -23,11 +23,20 @@ DATE = os.environ.get("DATE", "2026-06-08")
 # a re-run to the keyword's creation date would be wrong. Default (unset) keeps the
 # createdAt back-dating used for INITIAL rankings of new keywords.
 USE_RUN_DATE = os.environ.get("USE_RUN_DATE") == "1"
+# USE_14DAY=1: date each stale row at (keyword's last rank BEFORE this run) + 14 days
+# — i.e. the keyword's missed bi-weekly slot, not the run date. Reads a
+# {keyword_id: "YYYY-MM-DD"} map from LASTRANK_FILE (last rank prior to this run).
+USE_14DAY = os.environ.get("USE_14DAY") == "1"
+LASTRANK_FILE = os.environ.get("LASTRANK_FILE", "/tmp/kw_lastrank.json")
+lastrank_by_id = {}
+if USE_14DAY:
+    lastrank_by_id = {int(k): v for k, v in json.load(open(LASTRANK_FILE)).items()}
 # OUT_NAME overrides the output filename stem (e.g. ranking_stale_<DATE>).
 _OUT_NAME = os.environ.get("OUT_NAME") or f"ranking_initial_{DATE}_consolidated.csv"
 SOURCES = sorted(glob.glob(os.path.join(HERE, f"rabbitmq_audit_results_{DATE}_ranking*.csv")))
 OUT = os.path.join(HERE, _OUT_NAME)
-DESKTOP = os.path.expanduser(f"~/Desktop/{_OUT_NAME}")
+DESKTOP = os.path.expanduser(f"~/Desktop/Rankings/{_OUT_NAME}")
+os.makedirs(os.path.dirname(DESKTOP), exist_ok=True)
 ADMIN = "https://jjm59vpn3y.us-east-1.awsapprunner.com"
 TOKEN = os.environ.get("EXECUTOR_TOKEN", "")
 random.seed(20260608)
@@ -82,7 +91,7 @@ print(f"success (kw,platform) pairs: {len(best)}")
 client_name = {}
 if TOKEN:
     try:
-        req = urllib.request.Request(f"{ADMIN}/api/clients", headers={"Authorization": f"Bearer {TOKEN}"})
+        req = urllib.request.Request(f"{ADMIN}/api/clients", headers={"X-Executor-Token": TOKEN})
         for c in json.load(urllib.request.urlopen(req, timeout=60)):
             client_name[str(c.get("id"))] = c.get("businessName") or c.get("name") or c.get("clientName") or ""
     except Exception as e:
@@ -93,7 +102,14 @@ by_day = defaultdict(list)
 no_created = 0
 for (cid, plat), r in best.items():
     kwid = kw_id_from_campaign(cid)
-    if USE_RUN_DATE:
+    if USE_14DAY:
+        lr = lastrank_by_id.get(kwid)
+        if lr:
+            cd = (dt.date.fromisoformat(lr) + dt.timedelta(days=14)).isoformat()
+        else:
+            no_created += 1
+            cd = DATE  # no prior rank known → fall back to run-label date
+    elif USE_RUN_DATE:
         cd = DATE  # stale re-run → stamp with the actual run date (current reading)
     else:
         cd = created_date(kwid)

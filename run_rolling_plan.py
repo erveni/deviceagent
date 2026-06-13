@@ -55,6 +55,9 @@ PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")
 DURATION = int(os.environ.get("PROXY_DURATION", "60"))
 SLEEP_BETWEEN_JOBS_S = float(os.environ.get("SLEEP_BETWEEN_JOBS_S", "3"))
 ROLLING_RETRY = os.environ.get("ROLLING_RETRY", "1") == "1"
+# NOTE: DEVICE_EXCLUDE is honored by POOL.acquire() (device_dispatch.DevicePool),
+# which skips excluded/offline indices and returns indices into the full DEVICES
+# list. Do NOT filter DEVICES here — that desyncs the index space and IndexErrors.
 
 
 def normalize_plan_job(j: dict) -> dict:

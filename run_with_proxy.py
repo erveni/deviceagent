@@ -47,8 +47,8 @@ _relays_by_cfg = {}              # gost cfg path -> [relay Popen, ...]
 _relays_lock = threading.Lock()
 
 DEVICES = [
-    ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
-    ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
+    ("device-101", "adb-R83L112EVWK-PydBnX (2)._adb-tls-connect._tcp"),
+    ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y (2)._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH._adb-tls-connect._tcp"),

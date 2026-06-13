@@ -84,6 +84,18 @@ class DevicePool:
         self._busy = [False] * len(DEVICES)
         self._cond = threading.Condition()
         self._forwarded = False
+        # Phones to never hand out (chronically flaky / physically offline).
+        # Set DEVICE_EXCLUDE to a comma list of device labels or serial substrings,
+        # e.g. DEVICE_EXCLUDE="device-105,device-107".
+        self._excluded = set()
+        _exc = os.environ.get("DEVICE_EXCLUDE", "")
+        if _exc.strip():
+            toks = [t.strip() for t in _exc.split(",") if t.strip()]
+            for i, (label, ser) in enumerate(DEVICES):
+                if any(t == label or t in ser for t in toks):
+                    self._excluded.add(i)
+            print(f"[pool] DEVICE_EXCLUDE -> skipping idx {sorted(self._excluded)}: "
+                  f"{[DEVICES[i][0] for i in sorted(self._excluded)]}", flush=True)
         # Round-robin starting offset for acquire() — spreads load across all
         # phones instead of always picking the lowest idle index. Each
         # successful acquire advances this so subsequent calls start their
@@ -114,6 +126,8 @@ class DevicePool:
                 # instead of repeatedly hitting phones 0,1,2 while 3-9 idle.
                 for k in range(n):
                     i = (self._rr_offset + k) % n
+                    if i in self._excluded:
+                        continue
                     if not self._busy[i] and DEVICES[i][1] in online:
                         self._busy[i] = True
                         self._rr_offset = (i + 1) % n
