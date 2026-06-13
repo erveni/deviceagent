@@ -264,14 +264,18 @@ def run_client(c: dict) -> dict:
                     print(f"    {kw!r}: session error {e}; retry", flush=True)
                     continue
                 clicked = bool(resp.get("engaged") or resp.get("backlink_clicked"))
-                challenge = bool(resp.get("challenge"))
-                print(f"    {kw!r}: status={resp.get('status')} clicked={clicked} "
-                      f"challenge={challenge} (try {attempt + 1})", flush=True)
-                if clicked or not challenge or attempt == QUERY_RETRIES:
+                status = resp.get("status")
+                # A flagged exit IP shows up as EITHER an explicit captcha (challenge=true)
+                # OR a "blocked" SERP (sorry/unusual-traffic page, challenge=false). Both mean
+                # this IP is burned — rotate to a fresh one and retry, don't accept the result.
+                burned = bool(resp.get("challenge")) or status == "blocked"
+                print(f"    {kw!r}: status={status} clicked={clicked} "
+                      f"burned_ip={burned} (try {attempt + 1})", flush=True)
+                if clicked or not burned or attempt == QUERY_RETRIES:
                     break
-                # UPDATE 2 — captcha: rotate to a FRESH exit IP, then re-confirm it's still
-                # in the client's geo before retrying (a rotated IP could land out-of-area).
-                print("    captcha → rotating to a fresh localized exit IP…", flush=True)
+                # UPDATE 2 — captcha/blocked: rotate to a FRESH exit IP, then re-confirm it's
+                # still in the client's geo before retrying (a rotated IP could land out-of-area).
+                print("    blocked/captcha → rotating to a fresh localized exit IP…", flush=True)
                 _rotate_gost(h, geo)
                 _ensure_localized(h, geo, name)
             results.append({"keyword": kw, "clicked": clicked})
