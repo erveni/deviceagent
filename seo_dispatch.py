@@ -84,7 +84,8 @@ def _slug(keyword: str) -> str:
 
 
 def _to_serpapi(*, keyword, target, serial, status, challenge, error, elapsed,
-                serp, location_requested, local_png, organic_png, step_log):
+                serp, location_requested, local_png, organic_png, step_log,
+                engaged=False):
     """Reshape the on-device parse into a SerpApi-compatible structure. Only fields obtainable
     from an on-device a11y scrape are populated; SerpApi-internal fields (place_id, lsig,
     gps_coordinates, thumbnail/favicon, redirect_link, raw_html_file, total_results) are omitted."""
@@ -162,6 +163,7 @@ def _to_serpapi(*, keyword, target, serial, status, challenge, error, elapsed,
         "ads_excluded": serp.get("ads_excluded", 0),
         "local_ads_excluded": serp.get("local_ads_excluded", 0),
         "screenshots": {"local": local_png or None, "organic": organic_png or None},
+        "engagement": {"clicked": bool(engaged)},
         "challenge": bool(challenge),
         "error": error or "",
         "_step_log": step_log,
@@ -170,7 +172,8 @@ def _to_serpapi(*, keyword, target, serial, status, challenge, error, elapsed,
 
 def dispatch_one(serial: str, keyword: str, target: str | None, out_dir: Path,
                  local_port: int = 8765, retries: int = 2, retry_wait_s: int = 45,
-                 location: str = "") -> dict:
+                 location: str = "", engage: bool = False, target_name: str = "",
+                 lat: float | None = None, lng: float | None = None) -> dict:
     """Run one SEO session on a device; write JSON + PNG; return a compact summary.
 
     Auto-retries when the phone reports a bot/reCAPTCHA block (status "blocked" /
@@ -187,6 +190,15 @@ def dispatch_one(serial: str, keyword: str, target: str | None, out_dir: Path,
     # device — so the SERP was localized only by the proxy IP, not the target city.
     if location:
         body["location"] = location
+    if engage:
+        body["engage"] = True
+        body["mode"] = "daily"
+    if target_name:
+        body["targetName"] = target_name
+    # Street-level GPS pin on top of the proxy IP. The device mock-sets this location
+    # (needs one-time `appops set com.deviceagent android:mock_location allow`).
+    if lat is not None and lng is not None:
+        body["gps"] = {"lat": lat, "lng": lng}
 
     t0 = time.time()
     resp = _post_seo(local_port, body)
@@ -236,6 +248,7 @@ def dispatch_one(serial: str, keyword: str, target: str | None, out_dir: Path,
         error=resp.get("error", ""), elapsed=elapsed, serp=serp,
         location_requested=location, local_png=local_png, organic_png=organic_png,
         step_log=resp.get("step_log", []),
+        engaged=bool(resp.get("engaged") or resp.get("backlink_clicked")),
     )
     json_path = out_dir / f"{stem}.json"
     json_path.write_text(json.dumps(record, indent=2))
@@ -250,6 +263,7 @@ def dispatch_one(serial: str, keyword: str, target: str | None, out_dir: Path,
         "local_count": len(local),
         "organic_rank": target_info.get("organic_rank") or None,
         "local_rank": target_info.get("local_rank") or None,
+        "engaged": bool(resp.get("engaged") or resp.get("backlink_clicked")),
         "elapsed_s": elapsed,
         "json": str(json_path),
         "png": png_path,
@@ -272,7 +286,8 @@ def _print_summary(s: dict) -> None:
     print(
         f"[{s['status']}] \"{s['keyword']}\" — {s['organic_count']} organic "
         f"({s['ads_excluded']} ads excluded), {s['local_count']} local · "
-        f"organic {rank_str} · local {lrank_str} · {s['elapsed_s']}s"
+        f"organic {rank_str} · local {lrank_str} · "
+        f"engaged={bool(s.get('engaged'))} · {s['elapsed_s']}s"
     )
     print(f"   json: {s['json']}")
     if s.get("png_local"):
@@ -292,6 +307,12 @@ def main() -> None:
     ap.add_argument("--retries", type=int, default=2, help="Auto-retries on a bot/reCAPTCHA block (default: 2)")
     ap.add_argument("--retry-wait", type=int, default=45, help="Seconds between block retries (default: 45)")
     ap.add_argument("--location", default="", help="Geo we proxied to, for search_parameters.location_requested (e.g. 'Austin, Texas')")
+    ap.add_argument("--engage", action="store_true",
+                    help="After measuring rank, click the target SERP listing and dwell/scroll")
+    ap.add_argument("--target-name", default="",
+                    help="Optional business name hint for local-pack engagement fallback")
+    ap.add_argument("--lat", type=float, default=None, help="Street-level mock-GPS latitude")
+    ap.add_argument("--lng", type=float, default=None, help="Street-level mock-GPS longitude")
     args = ap.parse_args()
 
     serial = args.serial or _first_device()
@@ -307,7 +328,10 @@ def main() -> None:
     for job in jobs:
         summary = dispatch_one(serial, job["keyword"], job.get("target"), out_dir,
                                local_port=args.local_port, retries=args.retries,
-                               retry_wait_s=args.retry_wait, location=args.location)
+                               retry_wait_s=args.retry_wait, location=args.location,
+                               engage=args.engage,
+                               target_name=job.get("target_name") or args.target_name,
+                               lat=job.get("lat", args.lat), lng=job.get("lng", args.lng))
         _print_summary(summary)
 
 

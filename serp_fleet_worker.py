@@ -5,10 +5,9 @@ tracker, run each as a real Google search on a fleet phone via
 ingest body, and POST it back (executor token). The tracker then detects +
 trends.
 
-MEASUREMENT + EVIDENCE ONLY. This worker runs Google searches to *observe*
-rank/visibility and captures proof screenshots. It performs NO engagement, NO
-CTR manipulation, and NO clicking on results — it never interacts with any
-listing beyond reading the SERP. Look-but-don't-touch.
+Default mode is MEASUREMENT + EVIDENCE ONLY: observe rank/visibility and capture
+proof screenshots. ``--engage`` is the explicit daily SEO mode from the service
+flow: after measurement, the phone clicks the target listing and scrolls/dwells.
 
 Design:
   - PURE helpers ``serpapi_to_ingest`` (SerpApi result -> tracker serp body)
@@ -201,13 +200,15 @@ def _post_result_http(base: str, run_id: int, executor_token: str):
 
 
 def _dispatch_query_real(serial: str, out_dir: Path, location: str,
-                         local_port: int = 8765, target_domain: str | None = None):
+                         local_port: int = 8765, target_domain: str | None = None,
+                         engage: bool = False, target_name: str = "",
+                         lat: float | None = None, lng: float | None = None):
     """Real measurement: run one Google search on a phone and read its JSON.
 
     LAZY-imports ``seo_dispatch`` so this module imports without it (tests).
     ``dispatch_one`` writes a SerpApi-shaped JSON to ``out_dir``; we read it
-    back so ``serpapi_to_ingest`` gets the full result. Measurement only — no
-    engagement/clicking happens anywhere in this path.
+    back so ``serpapi_to_ingest`` gets the full result. When ``engage`` is true,
+    the phone performs the daily click + scroll/dwell step after rank parsing.
 
     ``local_port`` is the adb-forwarded port for the phone's agent (:8765). On
     the proxy path it is the per-device port (8765 + device_idx) that
@@ -224,6 +225,9 @@ def _dispatch_query_real(serial: str, out_dir: Path, location: str,
         summary = seo_dispatch.dispatch_one(
             serial, prompt, target_domain, out_dir, location=location,
             local_port=local_port, retries=0,   # bridge rotates the exit IP on captcha
+            engage=engage,
+            target_name=target_name,
+            lat=lat, lng=lng,
         )
         serpapi = json.loads(Path(summary["json"]).read_text())
         return {
@@ -231,6 +235,7 @@ def _dispatch_query_real(serial: str, out_dir: Path, location: str,
             "status": summary.get("status"),
             "challenge": summary.get("challenge"),
             "error": summary.get("error"),
+            "engaged": summary.get("engaged"),
         }
     return dispatch_query
 
@@ -262,8 +267,23 @@ def _teardown_superproxy(serial: str) -> None:
     sp.teardown(serial)
 
 
+def _build_geo_suffix(geo: dict | None) -> str:
+    """Decodo username geo-targeting segment, e.g. '-state-california-city-san_francisco-zip-94117'.
+    Empty when no geo given (→ random in-country exit, the prior behavior). Pins the
+    EXIT IP to the client's city/zip so a local SERP (e.g. 'childcare Alamo Square')
+    actually surfaces the client instead of an out-of-town IP's results."""
+    if not geo:
+        return ""
+    parts = []
+    for key in ("state", "city", "zip"):                 # Decodo order: state → city → zip
+        val = (geo.get(key) or "").strip().lower().replace(" ", "_")
+        if val:
+            parts.append(f"-{key}-{val}")
+    return "".join(parts)
+
+
 def _setup_gost(serial: str, gateway: str, country: str, attempts: int,
-                keyword: str, state: dict) -> dict:
+                keyword: str, state: dict, geo: dict | None = None) -> dict:
     """Bring up a clean US egress tunnel via the socksdroid path and stash the
     process handles in ``state`` for teardown. Mirrors ``seo_proxy_run.py``.
 
@@ -300,10 +320,12 @@ def _setup_gost(serial: str, gateway: str, country: str, attempts: int,
     direct_decodo = gateway == "mobile"
     state.setdefault("procs", [])
 
+    geo_suffix = _build_geo_suffix(geo)
+
     def start_attempt(i: int):
         sid = spr._sid()
         spec = {"port": spr.GOST_PORT, "sid": sid,
-                "upstream_user": f"{user_prefix}-country-{country}-session-{sid}"
+                "upstream_user": f"{user_prefix}-country-{country}{geo_suffix}-session-{sid}"
                                  f"-sessionduration-{spr.SESSION_DURATION}"}
         rwp.PROXY_HOST, rwp.PROXY_PORT, rwp.PROXY_PASS = host, int(port), password
         gost_proc = gost_cfg = relay_proc = None
@@ -389,9 +411,13 @@ def _teardown_gost(state: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Fleet rank-MEASUREMENT bridge (no engagement/CTR/clicking)")
-    ap.add_argument("--base", required=True, help="Tracker base URL, e.g. http://localhost:8000")
-    ap.add_argument("--run-id", type=int, required=True, help="serp-run id to measure")
+        description="Fleet rank bridge; optional daily engagement with --engage")
+    ap.add_argument("--base", default=None,
+                    help="Tracker base URL, e.g. http://localhost:8000 (measurement mode). "
+                         "Not needed in engagement-only mode (--keyword).")
+    ap.add_argument("--run-id", type=int, default=None,
+                    help="serp-run id to measure (measurement mode). Omit and pass --keyword "
+                         "for engagement-only daily mode.")
     ap.add_argument("--proxy", choices=["gost", "superproxy", "none", "serper"], default="gost",
                     help="Egress path. 'serper' (RECOMMENDED for Google rank) = SERP API, "
                          "NO phone/proxy/captcha — server-side, returns structured JSON; "
@@ -422,6 +448,27 @@ def main() -> None:
                     help="Client domain to rank (e.g. maeschildcare.com). Passed to the device "
                          "so parseSerp computes organic/local rank. If omitted, falls back to the "
                          "run's business_domain. Without either, results come back rank-null.")
+    ap.add_argument("--engage", action="store_true",
+                    help="Click the target SERP listing and dwell after the search. "
+                         "Only valid with phone-backed sources, not --proxy serper.")
+    ap.add_argument("--keyword", action="append", dest="keywords", default=[],
+                    help="Engagement-ONLY daily mode: search + click + scroll/dwell this keyword "
+                         "(repeatable). Keywords come from here, NOT a tracker run — implies "
+                         "--engage, creates no serp-run and posts NO rank back. Phone source only; "
+                         "requires --target-domain (the listing to click).")
+    ap.add_argument("--target-name", default="",
+                    help="Optional business name hint for local-pack engagement fallback.")
+    ap.add_argument("--zip", dest="zip_code", default="",
+                    help="Pin the Decodo exit IP to this ZIP (e.g. 94117). Localizes the SERP to "
+                         "the client's area so local keywords surface the client. gost only.")
+    ap.add_argument("--city", default="",
+                    help="Pin the Decodo exit IP to this city (e.g. san_francisco). gost only.")
+    ap.add_argument("--geo-state", dest="geo_state", default="",
+                    help="Pin the Decodo exit IP to this US state (e.g. california). gost only.")
+    ap.add_argument("--lat", type=float, default=None,
+                    help="Street-level mock-GPS latitude pushed to the phone (on top of the IP geo).")
+    ap.add_argument("--lng", type=float, default=None,
+                    help="Street-level mock-GPS longitude pushed to the phone.")
     ap.add_argument("--limit", type=int, default=None, help="Max prompts to measure this run")
     ap.add_argument("--query-retries", type=int, default=2,
                     help="Extra dispatch attempts when a query fails (rides out the device "
@@ -430,31 +477,55 @@ def main() -> None:
                     help="X-Executor-Token (default: $EXECUTOR_TOKEN)")
     args = ap.parse_args()
 
-    if not args.executor_token:
-        ap.error("provide --executor-token or set $EXECUTOR_TOKEN")
+    # Engagement-only daily mode: keywords supplied locally (--keyword), no tracker.
+    # The fleet searches + clicks + dwells; it records nothing back. The whole
+    # get_run/post_result measurement contract is satisfied with a synthetic run
+    # and a no-op poster, so the proxy/tunnel/IP-rotation path is reused untouched.
+    engage_only = bool(args.keywords)
+    if engage_only:
+        args.engage = True
+        if not args.target_domain:
+            ap.error("engagement-only mode (--keyword) requires --target-domain "
+                     "(the listing to click)")
+        _kw = list(args.keywords)
+        get_run = lambda: {"prompts": [
+            {"id": i, "prompt": kw, "status": "queued"} for i, kw in enumerate(_kw)]}
+        def post_result(_prompt_id, _body):   # daily engagement records nothing
+            return None
+        target_domain = args.target_domain
+        print(f"[bridge] ENGAGEMENT-ONLY — {len(_kw)} keyword(s), target={target_domain}, "
+              f"no tracker run, no rank recorded", flush=True)
+    else:
+        if args.run_id is None or not args.base:
+            ap.error("measurement mode requires --base and --run-id "
+                     "(or use --keyword for engagement-only mode)")
+        if not args.executor_token:
+            ap.error("provide --executor-token or set $EXECUTOR_TOKEN")
+        get_run = lambda: _get_run_http(args.base, args.run_id)
+        post_result = _post_result_http(args.base, args.run_id, args.executor_token)
+
+        # Resolve the target domain once: explicit flag wins, else read it off the run
+        # (signal_seo_daily POSTs business_domain into the run). Without it the device
+        # parses the SERP fine but has nothing to match → every rank comes back null.
+        target_domain = args.target_domain
+        if not target_domain:
+            try:
+                run0 = get_run()
+                target_domain = run0.get("business_domain") or run0.get("businessDomain")
+            except Exception as e:
+                print(f"[bridge] could not read run for business_domain: "
+                      f"{type(e).__name__}: {e}", flush=True)
+        if target_domain:
+            print(f"[bridge] target_domain={target_domain} (ranks will be computed)", flush=True)
+        else:
+            print("[bridge] WARNING no target_domain — ranks will come back null "
+                  "(pass --target-domain or set the run's business_domain)", flush=True)
 
     out_dir = Path(args.out)
-    get_run = lambda: _get_run_http(args.base, args.run_id)
-    post_result = _post_result_http(args.base, args.run_id, args.executor_token)
-
-    # Resolve the target domain once: explicit flag wins, else read it off the run
-    # (signal_seo_daily POSTs business_domain into the run). Without it the device
-    # parses the SERP fine but has nothing to match → every rank comes back null.
-    target_domain = args.target_domain
-    if not target_domain:
-        try:
-            run0 = get_run()
-            target_domain = run0.get("business_domain") or run0.get("businessDomain")
-        except Exception as e:
-            print(f"[bridge] could not read run for business_domain: "
-                  f"{type(e).__name__}: {e}", flush=True)
-    if target_domain:
-        print(f"[bridge] target_domain={target_domain} (ranks will be computed)", flush=True)
-    else:
-        print("[bridge] WARNING no target_domain — ranks will come back null "
-              "(pass --target-domain or set the run's business_domain)", flush=True)
 
     if args.proxy == "serper":
+        if args.engage:
+            ap.error("--engage requires a phone-backed proxy path; --proxy serper cannot click listings")
         # SERP API path: no phone, no tunnel, no captcha. The provider runs the
         # proxy/browser/captcha handling server-side and returns structured JSON,
         # which we map to the same SerpApi shape the on-phone parse produces — so
@@ -480,13 +551,15 @@ def main() -> None:
         device_id, serial = DEVICES[args.device_idx]
         if args.serial:                       # explicit serial wins (robust to mDNS drift)
             serial = args.serial
+        geo = {"state": args.geo_state, "city": args.city, "zip": args.zip_code}
+        geo_desc = _build_geo_suffix(geo) or "(random in-country)"
         print(f"[bridge] {device_id} ({serial}) — socksdroid {args.gateway} tunnel "
-              f"(Decodo {args.country}); searches egress US, not the phone's real IP")
+              f"(Decodo {args.country}{geo_desc}); searches egress US, not the phone's real IP")
         state: dict = {}
 
         def setup():
             info = _setup_gost(serial, args.gateway, args.country, args.attempts,
-                               args.probe_keyword, state)
+                               args.probe_keyword, state, geo=geo)
             print(f"[bridge] tunnel UP — exit_ip={info.get('exit_ip')} "
                   f"gateway={args.gateway} local_port={info['local_port']}")
             return info
@@ -498,14 +571,15 @@ def main() -> None:
                 # dispatch keeps working on the new IP.
                 _stop_procs(serial, state.get("procs", []))
                 new = _setup_gost(serial, args.gateway, args.country, args.attempts,
-                                  args.probe_keyword, state)
+                                  args.probe_keyword, state, geo=geo)
                 print(f"[bridge] rotated exit IP → {new.get('exit_ip')}", flush=True)
 
             return process_run(
                 get_run=get_run,
                 dispatch_query=_dispatch_query_real(
                     serial, out_dir, args.location, local_port=info["local_port"],
-                    target_domain=target_domain),
+                    target_domain=target_domain, engage=args.engage,
+                    target_name=args.target_name, lat=args.lat, lng=args.lng),
                 post_result=post_result,
                 limit=args.limit,
                 query_retries=args.query_retries,
@@ -536,7 +610,8 @@ def main() -> None:
                 get_run=get_run,
                 dispatch_query=_dispatch_query_real(
                     serial, out_dir, args.location, local_port=info["local_port"],
-                    target_domain=target_domain),
+                    target_domain=target_domain, engage=args.engage,
+                    target_name=args.target_name, lat=args.lat, lng=args.lng),
                 post_result=post_result,
                 limit=args.limit,
                 query_retries=args.query_retries,
@@ -559,7 +634,8 @@ def main() -> None:
         summary = process_run(
             get_run=get_run,
             dispatch_query=_dispatch_query_real(
-                serial, out_dir, args.location, target_domain=target_domain),
+                serial, out_dir, args.location, target_domain=target_domain,
+                engage=args.engage, target_name=args.target_name, lat=args.lat, lng=args.lng),
             post_result=post_result,
             limit=args.limit,
             query_retries=args.query_retries,

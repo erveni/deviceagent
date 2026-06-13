@@ -2,6 +2,7 @@ package com.deviceagent
 
 import android.content.ComponentName
 import android.content.Intent
+import android.graphics.Bitmap
 import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -236,12 +237,32 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
          * into SerpApi-like organic + local-pack rankings (ads excluded) + a proof screenshot.
          * Structurally mirrors the daily/audit flow (reset → navigate → input → submit).
          */
+        /** Pull a lat/lng pair from a job body — nested gps{lat,lng|latitude,longitude}
+         *  or flat lat/lng|latitude/longitude. Returns (null,null) if absent/unparseable. */
+        fun parseGps(json: JSONObject): Pair<Double?, Double?> {
+            val g = json.optJSONObject("gps")
+            fun num(o: Any?): Double? = when (o) {
+                is Number -> o.toDouble()
+                is String -> o.toDoubleOrNull()
+                else -> null
+            }
+            val lat = num(g?.opt("lat")) ?: num(g?.opt("latitude"))
+                ?: num(json.opt("lat")) ?: num(json.opt("latitude"))
+            val lng = num(g?.opt("lng")) ?: num(g?.opt("longitude"))
+                ?: num(json.opt("lng")) ?: num(json.opt("longitude"))
+            return Pair(lat, lng)
+        }
+
         fun executeGoogleSerpStatic(
             result: SessionResult,
             flowEngine: FlowEngine,
             keyword: String,
             targetDomain: String?,
-            location: String = ""
+            location: String = "",
+            engage: Boolean = false,
+            targetName: String? = null,
+            lat: Double? = null,
+            lng: Double? = null
         ) {
             result.type = "seo"
             result.prompt = keyword
@@ -259,6 +280,11 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             }
 
             try {
+                // Street-level GPS pin (optional): on top of the proxy IP geo. Best-effort —
+                // if mock_location isn't provisioned, log and continue IP-only.
+                if (lat != null && lng != null) {
+                    step("set_gps") { flowEngine.setMockLocation(lat, lng) }
+                }
                 if (!step("reset_chrome") { flowEngine.resetChrome() }) {
                     result.status = "error"; result.error = "reset_chrome failed"; return
                 }
@@ -364,6 +390,13 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     "${serp.adsExcluded} ads + ${serp.localAdsExcluded} local-ads excluded, " +
                     "target_organic=${serp.target?.organicRank} target_local=${serp.target?.localRank}"
                 )
+                if (engage) {
+                    val clicked = step("serp_engage") {
+                        flowEngine.clickSerpTargetAndDwell(targetDomain, targetName)
+                    }
+                    result.backlinkClicked = clicked
+                    result.backlinkDomain = targetDomain
+                }
                 result.status = "completed"
             } catch (e: Exception) {
                 result.status = "error"; result.error = e.message
@@ -487,6 +520,19 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 }
                 path == "/health" || path == "/health/" -> {
                     handleHealth(writer)
+                }
+                path == "/netstate" || path == "/netstate/" -> {
+                    // Read-only VPN health: does the per-app tunnel interface exist + have an IP.
+                    // Lets the LAN runner detect a DROPPED VPN (Chrome would egress the real IP)
+                    // without MUTATING it the way /proxy/start does.
+                    val t = readTunInterface()
+                    respond(writer, 200, JSONObject().apply {
+                        put("tun0_up", t.first)
+                        put("tun0_addr", t.second ?: "")
+                    }.toString())
+                }
+                path.startsWith("/screencap") -> {
+                    handleScreencap(socket.outputStream, writer)
                 }
                 path.startsWith("/screenshot") -> {
                     handleScreenshot(socket.outputStream, writer, path)
@@ -758,24 +804,33 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val location = canonicalizeLocation(
             json.optString("location", "").let { if (it == "null") "" else it }
         )
+        val engage = json.optBoolean("engage", false) ||
+            json.optString("mode", "").equals("daily", ignoreCase = true)
+        val targetName = json.optString("targetName", "")
+            .ifBlank { json.optString("businessName", "") }
+            .let { if (it.isBlank() || it == "null") null else it }
+        val (lat, lng) = parseGps(json)
 
         if (keyword.isBlank()) {
             respond(writer, 400, """{"error":"keyword is required for seo"}""")
             return
         }
 
-        Log.d("DeviceAgent", "SEO: \"$keyword\" target=$targetDomain loc=\"$location\"")
+        Log.d("DeviceAgent", "SEO: \"$keyword\" target=$targetDomain loc=\"$location\" engage=$engage gps=$lat,$lng")
 
         val result = SessionResult(platform = "google", status = "running", type = "seo")
         lastResult.set(result)
 
-        executeGoogleSerpStatic(result, flowEngine, keyword, targetDomain, location)
+        executeGoogleSerpStatic(result, flowEngine, keyword, targetDomain, location, engage, targetName, lat, lng)
 
         val serp = result.serp
         val response = JSONObject().apply {
             put("status", result.status)
             put("type", "seo")
             put("keyword", keyword)
+            put("engaged", result.backlinkClicked)
+            put("backlink_clicked", result.backlinkClicked)
+            put("backlink_domain", result.backlinkDomain ?: "")
             put("challenge", result.challenge)
             put("error", result.error ?: "")
             put("steps", result.steps.size)
@@ -963,6 +1018,34 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         respond(writer, 200, json.toString())
     }
 
+    /** GET /screencap — capture a LIVE screenshot and stream it as PNG over LAN.
+     *  Replaces `adb exec-out screencap` for the Mac-side consumer (no adb at all). */
+    private fun handleScreencap(rawOut: OutputStream, writer: OutputStreamWriter) {
+        val svc = AgentAccessibilityService.instance
+        if (svc == null) {
+            respond(writer, 503, """{"error":"accessibility service not available"}""")
+            return
+        }
+        val bmp = svc.captureScreen()
+        if (bmp == null) {
+            respond(writer, 500, """{"error":"capture failed (needs API 34+ / accessibility)"}""")
+            return
+        }
+        try {
+            val baos = java.io.ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.PNG, 90, baos)
+            bmp.recycle()
+            val bytes = baos.toByteArray()
+            val header = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n" +
+                "Content-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
+            rawOut.write(header.toByteArray(Charsets.UTF_8))
+            rawOut.write(bytes)
+            rawOut.flush()
+        } catch (e: Exception) {
+            respond(writer, 500, """{"error":"encode failed: ${e.message?.replace("\"","'")}"}""")
+        }
+    }
+
     private fun handleScreenshot(rawOut: OutputStream, writer: OutputStreamWriter, fullPath: String) {
         // GET /screenshot?path=<URL-encoded absolute path on phone>
         // Replaces `adb pull` for the Mac-side consumer when running in direct-WiFi mode.
@@ -1053,9 +1136,17 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
     // provisioning (VPN consent + `appops set net.typeblog.socks ACTIVATE_VPN allow`)
     // still happens once per phone over ADB — not per run.
 
-    /** Fire SocksDroid's ACTION_START_VPN from inside the app (no per-run ADB). */
+    /** Fire SocksDroid's ACTION_START_VPN from inside the app (no per-run ADB).
+     *
+     *  PER-APP routing is the key to LAN control survival: SocksDroid's SOCKSROUTE only
+     *  accepts "all"/"non_chn" (there is NO bypass-LAN route value), so a full-device VPN
+     *  black-holes the Mac<->phone HTTP control socket. Instead we enable per-app mode and
+     *  route ONLY `appList` (Chrome) through the tunnel (appBypass=false = "proxy only these").
+     *  The agent process and everything else stay on the real Wi-Fi, so the control channel
+     *  never goes through the VPN. Chrome is the only thing that needs the localized exit IP. */
     private fun startSocksDroid(
-        host: String, port: Int, dns: String, route: String, uname: String, passwd: String
+        host: String, port: Int, dns: String, route: String, uname: String, passwd: String,
+        perApp: Boolean = true, appBypass: Boolean = false, appList: String = "com.android.chrome"
     ): Boolean {
         val ctx = AgentAccessibilityService.instance ?: return false
         return try {
@@ -1067,9 +1158,17 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 putExtra("SOCKSPASSWD", passwd)
                 putExtra("SOCKSDNS", dns)
                 putExtra("SOCKSROUTE", route)
+                putExtra("SOCKSPERAPP", perApp)
+                putExtra("SOCKSAPPBYPASS", appBypass)
+                // SocksDroid reads SOCKSAPPLIST via getStringArrayExtra → MUST be a String[],
+                // not a String (a String is read as null → empty allow-list → routes EVERYTHING,
+                // which black-holes the LAN control channel). Split the CSV/space list to an array.
+                putExtra("SOCKSAPPLIST",
+                    appList.split(Regex("[,\\s]+")).filter { it.isNotBlank() }.toTypedArray())
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             ctx.startActivity(intent)
+            Log.d("DeviceAgent", "startSocksDroid perApp=$perApp bypass=$appBypass apps=$appList route=$route")
             true
         } catch (e: Exception) {
             Log.e("DeviceAgent", "startSocksDroid failed: ${e.message}")
@@ -1152,13 +1251,16 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             return
         }
         val dns = p.optString("dns", "8.8.8.8")
-        // bypass-lan keeps the LAN (192.168/10/172 private ranges) OFF the tunnel so the
-        // Mac<->phone HTTP control channel survives while the VPN is up. route:"all" would
-        // capture the control socket and make the phone unreachable mid-job (the old ADB
-        // daily got away with "all" because its control plane was the ADB transport, not Wi-Fi).
-        val route = p.optString("route", "bypass-lan")
+        // SOCKSROUTE only accepts "all"/"non_chn" — there is NO bypass-LAN value, so a
+        // full-device VPN black-holes the Wi-Fi control channel. We keep route="all" and
+        // instead use PER-APP mode (below) to route only Chrome, which keeps the agent's
+        // control socket on the real LAN. Override appList to proxy more/other apps.
+        val route = p.optString("route", "all")
         val uname = p.optString("uname", p.optString("username", "anon"))
         val passwd = p.optString("passwd", "anon")
+        val perApp = p.optBoolean("per_app", true)
+        val appBypass = p.optBoolean("app_bypass", false)
+        val appList = p.optString("app_list", "com.android.chrome")
 
         if (AgentAccessibilityService.instance == null) {
             respond(writer, 503, """{"error":"accessibility/app context not available"}""")
@@ -1166,7 +1268,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         }
 
         val t0 = System.currentTimeMillis()
-        val started = startSocksDroid(host, port, dns, route, uname, passwd)
+        val started = startSocksDroid(host, port, dns, route, uname, passwd, perApp, appBypass, appList)
 
         // Poll tun0 up to ~12s (mirror of the Mac's wait_tunnel local check).
         var tunUp = false
@@ -1178,8 +1280,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 if (t.first) { tunUp = true; tunAddr = t.second; break }
             }
         }
-        // Egress check proves traffic actually flows through the chain (not just tun0 has an IP).
-        val egress = if (tunUp) fetchEgressIp() else null
+        // Egress check: under per-app routing the AGENT is NOT tunneled (only the proxied
+        // apps are), so this reflects the phone's REAL IP, not the Decodo exit — it proves
+        // the VPN is up without disturbing it. Verify the LOCALIZED exit via Chrome's SERP.
+        val egress = if (tunUp && !perApp) fetchEgressIp() else null
 
         val resp = JSONObject().apply {
             put("ok", started && tunUp)
@@ -1187,6 +1291,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             put("tun0_up", tunUp)
             put("tun0_addr", tunAddr ?: "")
             put("egress_ip", egress ?: "")
+            put("per_app", perApp)
+            put("app_list", appList)
+            put("egress_note", if (perApp) "per-app: agent untunneled; verify exit IP via Chrome SERP" else "")
             put("proxy", JSONObject().apply {
                 put("host", host); put("port", port); put("dns", dns); put("route", route)
             })
@@ -1327,13 +1434,25 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             val targetDomain = job.optString("targetDomain", "")
                 .ifBlank { job.optString("bizUrl", "") }
                 .let { if (it.isBlank() || it == "null") null else it }
+            val location = canonicalizeLocation(
+                job.optString("location", "").let { if (it == "null") "" else it }
+            )
+            val engage = job.optBoolean("engage", false) ||
+                job.optString("mode", "").equals("daily", ignoreCase = true)
+            val targetName = job.optString("targetName", "")
+                .ifBlank { job.optString("businessName", "") }
+                .let { if (it.isBlank() || it == "null") null else it }
+            val (seoLat, seoLng) = parseGps(job)
             val result = SessionResult(platform = "google", status = "running", type = "seo")
             lastResult.set(result)
-            executeGoogleSerpStatic(result, flowEngine, keyword, targetDomain)
+            executeGoogleSerpStatic(result, flowEngine, keyword, targetDomain, location, engage, targetName, seoLat, seoLng)
             return JSONObject().apply {
                 put("status", result.status)
                 put("type", "seo")
                 put("keyword", keyword)
+                put("engaged", result.backlinkClicked)
+                put("backlink_clicked", result.backlinkClicked)
+                put("backlink_domain", result.backlinkDomain ?: "")
                 put("tun0_up", tunUp)
                 put("egress_ip", egress ?: "")
                 put("gps_set", gpsSet)

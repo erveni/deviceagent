@@ -1729,6 +1729,181 @@ class FlowEngine(private val s: AgentAccessibilityService) {
     }
 
     /**
+     * Set the device's mock GPS to lat/lng via LocationManager test providers, so the
+     * SERP gets a street-level location signal on top of the proxy IP. Requires one-time
+     * provisioning: `appops set com.deviceagent android:mock_location allow` + ACCESS_FINE_LOCATION.
+     * Best-effort: returns false (and the flow continues IP-only) if mock location isn't allowed.
+     */
+    fun setMockLocation(lat: Double, lng: Double): Boolean {
+        return try {
+            val lm = s.getSystemService(android.content.Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+            var any = false
+            for (provider in listOf(
+                android.location.LocationManager.GPS_PROVIDER,
+                android.location.LocationManager.NETWORK_PROVIDER
+            )) {
+                try {
+                    lm.addTestProvider(
+                        provider, false, false, false, false, true, true, true,
+                        android.location.Criteria.POWER_LOW, android.location.Criteria.ACCURACY_FINE
+                    )
+                } catch (_: Exception) { /* may already exist */ }
+                try { lm.setTestProviderEnabled(provider, true) } catch (_: Exception) {}
+                val loc = android.location.Location(provider).apply {
+                    latitude = lat
+                    longitude = lng
+                    accuracy = 5f
+                    time = System.currentTimeMillis()
+                    elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+                    altitude = 10.0
+                    bearing = 0f
+                    speed = 0f
+                }
+                try { lm.setTestProviderLocation(provider, loc); any = true }
+                catch (e: Exception) { s.log("setTestProviderLocation($provider): ${e.message}") }
+            }
+            s.log("mock GPS set to $lat,$lng (any=$any)")
+            any
+        } catch (e: Exception) {
+            s.log("setMockLocation failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Daily SEO engagement step: after the rank has been measured, find the target's
+     * Google SERP listing, click it, then dwell/scroll on the destination page.
+     * Organic links are matched by domain/targetUrl first. If no organic URL is
+     * visible, fall back to the local-pack card name inferred from the target domain.
+     */
+    fun clickSerpTargetAndDwell(
+        targetDomain: String?,
+        targetName: String? = null,
+        maxSwipes: Int = 10
+    ): Boolean {
+        if (targetDomain.isNullOrBlank()) {
+            s.log("SERP engagement skipped: no target domain")
+            return false
+        }
+        s.log("── SERP ENGAGE: click target listing \"$targetDomain\" ──")
+        ensureChromeForeground()
+        val domain = hostOf(targetDomain)
+        val brand = domain.substringBefore('.').replace(Regex("[^a-z0-9]"), "")
+        val nameKey = (targetName ?: "").replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+
+        fun clickCandidate(node: android.view.accessibility.AccessibilityNodeInfo, label: String): Boolean {
+            val r = android.graphics.Rect()
+            node.getBoundsInScreen(r)
+            val actionOk = s.clickNode(node)
+            if (!actionOk) s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+            node.recycle()
+            s.log("SERP engagement clicked $label at $r (action=$actionOk)")
+            Thread.sleep(4500)
+            dwellOnCurrentPage()
+            return true
+        }
+
+        for (pass in 1..maxSwipes) {
+            findSerpOrganicClickTarget(domain)?.let { return clickCandidate(it, "organic domain") }
+            findSerpLocalClickTarget(brand, nameKey)?.let { return clickCandidate(it, "local pack card") }
+            s.gestureSwipe(
+                s.screenWidth() - 3f,
+                s.screenHeight() * 0.72f,
+                s.screenWidth() - 3f,
+                s.screenHeight() * 0.72f - 460f,
+                520
+            )
+            Thread.sleep(1200)
+            s.log("SERP engagement scan swipe $pass/$maxSwipes")
+        }
+        s.log("SERP engagement target not found: $targetDomain")
+        return false
+    }
+
+    private fun dwellOnCurrentPage(scrolls: Int = 2, dwellMs: Long = 6500L) {
+        s.log("SERP engagement dwell on destination page")
+        val x = s.screenWidth() - 3f
+        val startY = s.screenHeight() * 0.72f
+        val endY = startY - 420f
+        for (i in 1..scrolls) {
+            s.gestureSwipe(x, startY, x, endY, 650)
+            Thread.sleep(1700)
+            s.log("SERP engagement destination scroll $i/$scrolls")
+        }
+        Thread.sleep(dwellMs)
+    }
+
+    private fun findSerpOrganicClickTarget(domain: String): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val found = findSerpOrganicClickTargetRec(root, domain)
+        root.recycle()
+        return found
+    }
+
+    private fun findSerpOrganicClickTargetRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        domain: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val text = node.text?.toString()?.lowercase() ?: ""
+        val cd = node.contentDescription?.toString()?.lowercase() ?: ""
+        val targetUrl = try {
+            node.extras?.getCharSequence("AccessibilityNodeInfo.targetUrl")?.toString()?.lowercase() ?: ""
+        } catch (_: Exception) { "" }
+        val matches = domain in text || domain in cd || domain in targetUrl
+        if (matches) {
+            val r = android.graphics.Rect()
+            node.getBoundsInScreen(r)
+            if (r.top > 170 && r.bottom < s.screenHeight() - 80) {
+                return android.view.accessibility.AccessibilityNodeInfo.obtain(node)
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findSerpOrganicClickTargetRec(child, domain)
+            if (found != null) { child.recycle(); return found }
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findSerpLocalClickTarget(
+        brand: String,
+        nameKey: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        if (brand.length < 4 && nameKey.length < 4) return null
+        val root = s.rootInActiveWindow ?: return null
+        val found = findSerpLocalClickTargetRec(root, brand, nameKey)
+        root.recycle()
+        return found
+    }
+
+    private fun findSerpLocalClickTargetRec(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        brand: String,
+        nameKey: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val text = node.text?.toString() ?: ""
+        val cd = node.contentDescription?.toString() ?: ""
+        val hay = (text + " " + cd).replace(Regex("[^A-Za-z0-9]"), "").lowercase()
+        val matches = (brand.length >= 4 && brand in hay) || (nameKey.length >= 4 && nameKey in hay)
+        if (matches) {
+            val r = android.graphics.Rect()
+            node.getBoundsInScreen(r)
+            if (r.top > 170 && r.bottom < s.screenHeight() - 80) {
+                return android.view.accessibility.AccessibilityNodeInfo.obtain(node)
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findSerpLocalClickTargetRec(child, brand, nameKey)
+            if (found != null) { child.recycle(); return found }
+            child.recycle()
+        }
+        return null
+    }
+
+    /**
      * Parse the currently-rendered mobile Google SERP into SerpApi-like structured data:
      * ordered organic results (ads excluded), the local/Maps pack, and an ad count.
      * Off-screen SERP nodes only materialise after layout, so callers should scroll the

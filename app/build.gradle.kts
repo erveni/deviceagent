@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 20
-        versionName = "0.9.9-seo"
+        versionCode = 24
+        versionName = "0.13.0-netstate"
     }
 
     buildTypes {
