@@ -754,6 +754,26 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             (responseText.contains("Welcome back", ignoreCase = true) && hits >= 1)
     }
 
+    /**
+     * True when the captured text is ChatGPT's EMPTY landing page (the anonymous
+     * "What's on the agenda / your mind" composer) rather than an answer — i.e. the
+     * prompt was never actually submitted. submit() and waitForGeneration() both
+     * false-positive on the landing (the >200-char footer is stable), so the capture
+     * "completes" with landing chrome. Detect it and FAIL loudly so we never record a
+     * blank landing as a valid result (or upload it to S3). Apostrophes vary (curly vs
+     * straight), so match on apostrophe-free substrings.
+     */
+    fun isChatLandingPage(responseText: String): Boolean {
+        val t = responseText
+        val greeting = t.contains("on the agenda today", true) ||
+            t.contains("on your mind today", true) ||
+            t.contains("How can I help", true) ||
+            t.contains("Ready when you are", true)
+        val emptyComposer = t.contains("Ask anything", true)
+        // A real answer is long and dominated by content, not by landing chrome.
+        return greeting && emptyComposer && t.length < 600
+    }
+
     /** Popups that appear ASYNCHRONOUSLY over the page mid-capture (e.g. Google's
      *  "See results closer to you?" — observed popping up AFTER dismiss_serp_dialogs
      *  already ran, covering the map pack in every frame). Cheap enough to call

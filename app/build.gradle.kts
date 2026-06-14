@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 30
-        versionName = "0.15.4-healthver"
+        versionCode = 31
+        versionName = "0.15.5-chatgpt-landingguard"
     }
 
     buildTypes {

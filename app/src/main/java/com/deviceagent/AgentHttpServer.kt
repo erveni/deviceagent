@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.15.4-healthver"
-        const val APP_VERSION_CODE = 30
+        const val APP_VERSION_NAME = "0.15.5-chatgpt-landingguard"
+        const val APP_VERSION_CODE = 31
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
@@ -414,6 +414,18 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     pr.error = "login wall — needs fresh IP"
                     result.status = "error"
                     result.steps.add("[$plat] LOGIN WALL detected — retryable")
+                    return
+                }
+
+                // Anonymous ChatGPT: the prompt sometimes never submits and the capture
+                // grabs the empty landing page. Both submit() and waitForGeneration()
+                // false-positive on it, so guard HERE — never report a blank landing as a
+                // valid answer (it would otherwise upload to S3 as a bogus result).
+                if (plat == "chatgpt" && flowEngine.isChatLandingPage(pr.responseText ?: "")) {
+                    pr.status = "error"
+                    pr.error = "chatgpt landing page captured — prompt not submitted (anonymous; needs login)"
+                    result.status = "error"
+                    result.steps.add("[$plat] LANDING PAGE captured — prompt never submitted")
                     return
                 }
 
