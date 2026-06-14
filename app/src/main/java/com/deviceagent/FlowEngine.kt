@@ -1794,6 +1794,8 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         s.log("── WAIT FOR GENERATION ──")
         val start = System.currentTimeMillis()
         val timeout = timeoutSec * 1000L
+        var lastLen = -1
+        var stableSince = 0L
         while (System.currentTimeMillis() - start < timeout) {
             Thread.sleep(3000)
             val stopBtn = s.findNode(contentDesc = "Stop streaming", timeoutMs = 500)
@@ -1801,16 +1803,34 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                 ?: s.findNode(contentDesc = "Stop response", timeoutMs = 500)
             if (stopBtn != null) {
                 s.log("Still generating...")
+                lastLen = -1; stableSince = 0L          // reset stability while streaming
                 continue
             }
+            // Logged-in path: the answer toolbar (Copy/Read aloud/…) confirms completion.
             val hasContent = s.findNode(contentDesc = "Copy", timeoutMs = 500) != null
                 || s.findNode(contentDesc = "Share", timeoutMs = 500) != null
                 || s.findNode(contentDesc = "Read aloud", timeoutMs = 500) != null
                 || s.findNode(contentDesc = "Good response", timeoutMs = 500) != null
                 || s.findNode(contentDesc = "Bad response", timeoutMs = 500) != null
             if (hasContent) {
-                s.log("Generation complete")
+                s.log("Generation complete (toolbar)")
                 return true
+            }
+            // Anonymous/neutral path (CitedLogic fresh sessions): the toolbar buttons never
+            // appear, so fall back to "the on-screen answer has STOPPED changing". Once a real
+            // answer (>200 chars) holds the same length for ~6s, generation is done. This is why
+            // anonymous chatgpt was timing out — it answers, but shows no Copy/Read-aloud button.
+            val len = getResponseText().length
+            if (len > 200) {
+                if (len == lastLen) {
+                    if (stableSince == 0L) stableSince = System.currentTimeMillis()
+                    else if (System.currentTimeMillis() - stableSince > 6000) {
+                        s.log("Generation complete (text stabilized at $len chars)")
+                        return true
+                    }
+                } else {
+                    lastLen = len; stableSince = 0L
+                }
             }
         }
         s.log("Timeout waiting for generation")

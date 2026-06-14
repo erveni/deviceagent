@@ -334,7 +334,15 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     // Dismiss any popup that appears WITH the answer (ChatGPT pops a
                     // "Share your precise location" card post-generation that covers
                     // the response), then let the answer fully render.
-                    step("dismiss_popups2") { flowEngine.dismissPlatformPopups(plat); true }
+                    // ChatGPT (anonymous): use the TARGETED location-card dismiss only. The full
+                    // dismissPlatformPopups list clicks "Close"/"Stay logged out", which on an
+                    // anonymous chat RESETS it to the landing page → the screenshot would catch an
+                    // empty "Ask anything" box. Other platforms keep the full dismissal.
+                    step("dismiss_popups2") {
+                        if (plat == "chatgpt") flowEngine.dismissMidCapturePopup()
+                        else flowEngine.dismissPlatformPopups(plat)
+                        true
+                    }
                     Thread.sleep(if (plat == "chatgpt") 3500L else 1500L)
                 }
                 // Capture the FULL answer as a series of frames while scrolling DOWN
@@ -959,17 +967,25 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
     }
 
     private fun readTunInterface(): Pair<Boolean, String?> {
-        // /proc/net/dev tells us tun0 exists but not its IPv4 — Android blocks
-        // ifconfig from non-root. Fall back to NetworkInterface API.
+        // Detect a FULL-DEVICE VPN tunnel (NordVPN) — which is what the maps/chat egress
+        // checks care about. NordVPN lands on tun1/nordlynx/wg with a routable IP (e.g.
+        // 10.5.0.x), NOT "tun0": tun0 is the SocksDroid per-app tunnel (26.26.26.x) used by
+        // the SEO feature. The old "name == tun0" check missed NordVPN entirely (reported
+        // "down" while NordVPN was up on tun1). So scan all VPN-ish interfaces and ignore the
+        // SocksDroid 26.26.26.0/24 range. Android blocks ifconfig from non-root, so use the
+        // NetworkInterface API.
         return try {
             val ifaces = NetworkInterface.getNetworkInterfaces() ?: return false to null
             for (iface in ifaces) {
-                if (iface.name != "tun0") continue
-                if (!iface.isUp) return false to null
-                val addr = iface.inetAddresses.toList()
-                    .firstOrNull { !it.isLoopbackAddress && !(it.hostAddress?.contains(":") ?: false) }
-                    ?.hostAddress
-                return true to addr
+                val name = iface.name ?: continue
+                if (!(name.startsWith("tun") || name.startsWith("nordlynx") || name.startsWith("wg"))) continue
+                if (!iface.isUp) continue
+                val addr = iface.inetAddresses.toList().firstOrNull {
+                    !it.isLoopbackAddress && !it.isLinkLocalAddress &&
+                        !(it.hostAddress?.contains(":") ?: false) &&
+                        !(it.hostAddress?.startsWith("26.26.26.") ?: false)  // skip SocksDroid per-app
+                }?.hostAddress
+                if (addr != null) return true to addr
             }
             false to null
         } catch (_: Exception) {

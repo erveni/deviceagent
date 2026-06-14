@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 21
-        versionName = "0.9.5-nordvpn"
+        versionCode = 29
+        versionName = "0.15.3-chatgpt-nopopup-reset"
     }
 
     buildTypes {
