@@ -20,11 +20,18 @@ TOKEN = os.environ["EXECUTOR_TOKEN"]
 DATE = os.environ.get("DATE", "2026-06-08")
 SCOPE = os.environ.get("SCOPE", "never_ranked")
 PLATFORMS = 3
-KW_IDS_OUT = f"/tmp/ranking_kw_ids_{DATE}.json"
+# SNAP_DIR lets the dashboard preview a due-set into an isolated dir instead of
+# clobbering the /tmp/*_admin.json snapshots a live run reads. Defaults to /tmp
+# so the runner (run_ranking_auto.sh) behaves exactly as before.
+SNAP_DIR = os.environ.get("SNAP_DIR", "/tmp")
+os.makedirs(SNAP_DIR, exist_ok=True)
+KW_IDS_OUT = f"{SNAP_DIR}/ranking_kw_ids_{DATE}.json"
 
 
 def get(path):
-    req = urllib.request.Request(f"{ADMIN}{path}", headers={"Authorization": f"Bearer {TOKEN}"})
+    # AEOAdmin authenticates executor calls via X-Executor-Token; the old
+    # `Authorization: Bearer` path now 401s (matches build_daily_plan.py).
+    req = urllib.request.Request(f"{ADMIN}{path}", headers={"X-Executor-Token": TOKEN})
     with urllib.request.urlopen(req, timeout=90) as r:
         return json.load(r)
 
@@ -54,8 +61,8 @@ except Exception:
 
 kws_active = [k for k in kws_all if active(k)]
 # refresh the snapshots the runner reads
-for path, payload in [("/tmp/biz_admin.json", bizs), ("/tmp/kw_admin.json", kws_active),
-                      ("/tmp/clients_admin.json", clients), ("/tmp/rr_admin.json", rr)]:
+for path, payload in [(f"{SNAP_DIR}/biz_admin.json", bizs), (f"{SNAP_DIR}/kw_admin.json", kws_active),
+                      (f"{SNAP_DIR}/clients_admin.json", clients), (f"{SNAP_DIR}/rr_admin.json", rr)]:
     json.dump(payload, open(path, "w"))
 
 cutoff = dt.datetime.fromisoformat(f"{DATE}T00:00:00+00:00") - dt.timedelta(days=14)
