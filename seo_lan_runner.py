@@ -28,6 +28,7 @@ Client config (SEO or AEO catalog shape) + a `phone_ip` per client:
     "keywords":[{"keyword":"bilingual childcare San Francisco"}],
     "phone_ip":"192.168.254.101"}]
 """
+import functools
 import json
 import os
 import subprocess
@@ -52,6 +53,28 @@ COUNTRY = os.environ.get("SIGNAL_COUNTRY", "us")
 # We do NOT POST /proxy/start: that fires SocksDroid's AdbStartActivity, which rebuilds the
 # profile from intent extras WITHOUT per-app -> full-route -> black-holes LAN control.
 VPN_PERSISTENT = os.environ.get("SIGNAL_VPN_PERSISTENT", "1") == "1"
+# Where per-run result JSON is written (the dashboard reads these).
+RUNS_DIR = os.environ.get("SIGNAL_RUNS_DIR", os.path.join(HERE, "seo_runs"))
+
+
+def _slug(s):
+    return "".join(c.lower() if c.isalnum() else "-" for c in (s or "")).strip("-")[:60] or "client"
+
+
+def _persist_run(record: dict):
+    """Write one client's run result to seo_runs/<date>/<slug>_<unixts>.json — the
+    machine-readable record the dashboard surfaces. Best-effort; never breaks a run."""
+    try:
+        day = time.strftime("%Y-%m-%d", time.gmtime(record.get("started_at") or time.time()))
+        d = os.path.join(RUNS_DIR, day)
+        os.makedirs(d, exist_ok=True)
+        ts = int(record.get("finished_at") or time.time())
+        path = os.path.join(d, f"{_slug(record.get('client'))}_{ts}.json")
+        with open(path, "w") as f:
+            json.dump(record, f, indent=2)
+        print(f"  run record → {path}", flush=True)
+    except Exception as e:
+        print(f"  [warn] persist failed: {type(e).__name__}: {e}", flush=True)
 SESSION_TIMEOUT = int(os.environ.get("SIGNAL_SESSION_TIMEOUT", "220"))
 # query-retries doubles as the captcha rotation budget (each rotation = fresh exit IP).
 QUERY_RETRIES = int(os.environ.get("SIGNAL_QUERY_RETRIES", "3"))
@@ -147,6 +170,41 @@ def _start_proxy(phone_ip, relay_port):
     return ps
 
 
+@functools.lru_cache(maxsize=1)
+def _our_real_ip():
+    """The Mac's REAL public IP (direct, no proxy). The phone's Chrome must NEVER show this."""
+    try:
+        cp = subprocess.run(["curl", "-sS", "--max-time", "8", "-4", "https://api.ipify.org"],
+                            capture_output=True, text=True, timeout=12)
+        return cp.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _assert_chrome_egress_safe(phone_ip, h):
+    """HARD SAFETY GATE — nothing runs until the phone's Chrome is PROVEN to egress the proxy,
+    not our real IP. Drives Chrome to an IP echo (GET /egress_check) and aborts the client if:
+      - Chrome's egress IP can't be read (refuse to run blind), or
+      - it equals our real IP (a LEAK — proxy not active), or
+      - it doesn't match the gost exit IP (Chrome not routed through our proxy; warn).
+    """
+    real = _our_real_ip()
+    resp = _http(phone_ip, "/egress_check", timeout=45)
+    chrome_ip = (resp.get("chrome_egress_ip") or "").strip()
+    if not resp.get("readable") or not chrome_ip:
+        raise RuntimeError("ABORT: could not read Chrome's egress IP — refusing to run blind")
+    if real and chrome_ip == real:
+        raise RuntimeError(f"ABORT: LEAK — Chrome is egressing our REAL IP {real}! "
+                           f"Proxy is NOT active. No job will run.")
+    exit_ip = h.get("exit_ip")
+    if exit_ip and chrome_ip != exit_ip:
+        print(f"  ⚠ Chrome egress {chrome_ip} != gost exit {exit_ip} (sticky-session drift?) — "
+              f"continuing since it's not our real IP", flush=True)
+    print(f"  ✓ PROXY VERIFIED: Chrome egress={chrome_ip} — NOT our real IP ({real or 'unknown'})",
+          flush=True)
+    return chrome_ip
+
+
 def _exit_geo():
     """Geolocate the current gost exit IP (Mac -> gost -> Decodo), IPv4 only via ip-api."""
     try:
@@ -229,6 +287,8 @@ def run_client(c: dict) -> dict:
     h = _bring_up_gost(geo)
     print(f"  relay_port={h['relay_port']}", flush=True)
     results = []
+    started_at = time.time()
+    verified_egress = None
     try:
         # UPDATE 1 — localization guard: confirm the exit IP is in the client's city/state,
         # rotating fresh IPs until it is. Never run a job from the wrong geo.
@@ -246,10 +306,14 @@ def run_client(c: dict) -> dict:
                                    "on (profile + Connect-on-Boot); Chrome would egress the real IP")
             print(f"  per-app VPN up (tun0={net.get('tun0_addr')}); "
                   f"Chrome egresses via MAC:{h['relay_port']}", flush=True)
+            # HARD SAFETY GATE — prove Chrome egresses the proxy, not our real IP, before any job.
+            verified_egress = _assert_chrome_egress_safe(phone_ip, h)
         else:
             ps = _start_proxy(phone_ip, h["relay_port"])
             print(f"  /proxy/start ok={ps.get('ok')} tun0_up={ps.get('tun0_up')} "
                   f"per_app={ps.get('per_app')} — LAN control intact", flush=True)
+            # HARD SAFETY GATE — prove Chrome egresses the proxy, not our real IP, before any job.
+            verified_egress = _assert_chrome_egress_safe(phone_ip, h)
 
         for kw in keywords:
             body = {"type": "seo", "keyword": kw, "targetDomain": domain,
@@ -278,7 +342,8 @@ def run_client(c: dict) -> dict:
                 print("    blocked/captcha → rotating to a fresh localized exit IP…", flush=True)
                 _rotate_gost(h, geo)
                 _ensure_localized(h, geo, name)
-            results.append({"keyword": kw, "clicked": clicked})
+            results.append({"keyword": kw, "clicked": clicked, "status": status,
+                            "exit_ip": h.get("exit_ip"), "attempts": attempt + 1})
     finally:
         if not VPN_PERSISTENT:
             try:
@@ -288,7 +353,16 @@ def run_client(c: dict) -> dict:
         _teardown_gost(h)
         print("  gost/relay down (persistent VPN left up)" if VPN_PERSISTENT
               else "  tunnel down", flush=True)
-    return {"client": name, "results": results}
+    record = {
+        "client": name, "location": location, "domain": domain, "phone_ip": phone_ip,
+        "geo_pin": _build_geo_suffix(geo) or "(random)",
+        "verified_chrome_egress": verified_egress,   # the proxy-safety proof for this run
+        "results": results,
+        "clicks": sum(1 for r in results if r["clicked"]),
+        "started_at": started_at, "finished_at": time.time(),
+    }
+    _persist_run(record)
+    return record
 
 
 def main():

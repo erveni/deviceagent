@@ -521,6 +521,18 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 path == "/health" || path == "/health/" -> {
                     handleHealth(writer)
                 }
+                path == "/egress_check" || path == "/egress_check/" -> {
+                    // SAFETY: drive Chrome to an IP echo and report its ACTUAL egress IP, so the
+                    // runner can prove Chrome leaves via the proxy (not the device's real IP)
+                    // BEFORE running any job. Takes ~10s (loads a page).
+                    val ip = flowEngine.chromeEgressIp()
+                    val tun = readTunInterface()
+                    respond(writer, 200, JSONObject().apply {
+                        put("chrome_egress_ip", ip ?: "")
+                        put("readable", ip != null)
+                        put("tun0_up", tun.first)
+                    }.toString())
+                }
                 path == "/netstate" || path == "/netstate/" -> {
                     // Read-only VPN health: does the per-app tunnel interface exist + have an IP.
                     // Lets the LAN runner detect a DROPPED VPN (Chrome would egress the real IP)

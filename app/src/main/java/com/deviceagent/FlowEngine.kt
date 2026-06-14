@@ -1131,6 +1131,27 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return text
     }
 
+    /**
+     * SAFETY: read Chrome's ACTUAL public egress IP by loading a plain-text IP echo.
+     * This is what the world sees from Chrome — through the per-app VPN if it's working,
+     * or the device's REAL IP if the tunnel is misconfigured/down. The runner compares this
+     * to the Mac's real IP and aborts on a match (a leak), so no job ever runs from our own IP.
+     * Returns the IPv4 string, or null if it couldn't be read.
+     */
+    fun chromeEgressIp(): String? {
+        s.log("── CHROME EGRESS CHECK ──")
+        ensureChromeForeground()
+        s.navigateToUrl("https://api.ipify.org")
+        Thread.sleep(6000)
+        val ipRe = Regex("\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b")
+        repeat(3) {
+            ipRe.find(getResponseText())?.let { s.log("Chrome egress IP = ${it.value}"); return it.value }
+            Thread.sleep(2500)
+        }
+        s.log("Chrome egress IP: not readable")
+        return null
+    }
+
     private fun collectTextNodes(
         node: android.view.accessibility.AccessibilityNodeInfo,
         sb: StringBuilder,
