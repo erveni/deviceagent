@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.5-nordvpn"
-        const val APP_VERSION_CODE = 21
+        const val APP_VERSION_NAME = "0.15.4-healthver"
+        const val APP_VERSION_CODE = 30
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
