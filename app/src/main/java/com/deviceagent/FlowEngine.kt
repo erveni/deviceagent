@@ -304,7 +304,9 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             s.log("[B] Text NOT set, going to paste...")
         }
 
-        // Step C: Set clipboard & paste
+        // Step C: Set clipboard & paste. Clear the field first so a partial Step-B
+        // set-text doesn't get a paste appended on top of it (double-prompt bug).
+        if (inputNode != null) s.setTextOnNode(inputNode, "")
         s.setClipboard(text)
         Thread.sleep(150)
 
@@ -387,39 +389,47 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     // ── submit ──
 
+    private fun isGenerating(): Boolean =
+        s.findNode(contentDesc = "Stop streaming", timeoutMs = 400) != null ||
+        s.findNode(contentDesc = "Stop generating", timeoutMs = 400) != null ||
+        s.findNode(contentDesc = "Stop response", timeoutMs = 400) != null
+
     fun submit(): Boolean {
         s.log("── SUBMIT ──")
         ensureChromeForeground()
-        val submitSelectors = listOf(
-            "Submit" to "cd",
-            "Send message" to "cd",
-            "Send prompt" to "cd",
-            "Send" to "text",
-            "Go" to "cd"
-        )
-        // Two passes: prefer clickable, then any match
-        for (pass in 1..2) {
-            for ((label, type) in submitSelectors) {
-                val node = if (type == "cd") {
-                    s.findNode(contentDesc = label, timeoutMs = 2000)
-                } else {
-                    s.findNode(text = label, timeoutMs = 2000)
-                }
-                if (node != null) {
-                    val clicked = s.clickNode(node)
-                    if (clicked) {
-                        s.log("Clicked submit: $label (pass $pass)")
-                        Thread.sleep(1000)
-                        return true
-                    }
-                    s.log("Found '$label' but click failed, trying next...")
-                }
+        if (isGenerating()) { s.log("Already generating — not submitting"); return true }
+        // The paste leaves the soft keyboard UP, which floats the input bar (and the ↑
+        // send button) up above the keyboard — so a bottom-of-screen tap lands on the
+        // keyboard and misses. Dismiss the keyboard first so the input bar settles back
+        // to the bottom at the predictable position.
+        s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+        Thread.sleep(800)
+        // 1. Semantic ACTION_CLICK on a labelled send button. Works for ChatGPT /
+        //    Perplexity (and logged-in Gemini). Try once, then check if it actually
+        //    started generating.
+        val selectors = listOf("Send message", "Submit", "Send prompt", "Send", "Go")
+        for (label in selectors) {
+            val node = s.findNode(contentDesc = label, timeoutMs = 1000)
+                ?: s.findNode(text = label, timeoutMs = 400)
+            if (node != null) {
+                val ok = s.clickNode(node); node.recycle()
+                s.log("Submit: ACTION_CLICK '$label' -> $ok")
+                Thread.sleep(1500)
+                break
             }
-            Thread.sleep(500)
         }
-        // Fallback: tap bottom-right corner (Perplexity submit button area)
-        s.gestureTap(s.screenWidth() - 60f, s.screenHeight() * 0.82f)
-        s.log("Fallback tap for submit (bottom-right)")
+        // 2. If still not generating, the semantic click didn't register (Gemini's web
+        //    ↑ button). DO NOT tap the node's getBoundsInScreen() — Chrome reports web
+        //    accessibility bounds in a web-scaled space (wrong Y, e.g. 934 vs real
+        //    1480), so that tap misses. Physical screen coords ARE reliable: the send
+        //    button sits at the bottom-right of the input bar (~0.864w, 0.925h).
+        //    The isGenerating() guards keep this to a SINGLE effective send so we never
+        //    tap the STOP button (which replaces send at the same spot during gen).
+        if (!isGenerating()) {
+            s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
+            s.log("Submit: physical-ratio tap (${(s.screenWidth() * 0.864f).toInt()},${(s.screenHeight() * 0.925f).toInt()})")
+            Thread.sleep(1500)
+        }
         return true
     }
 
@@ -1082,12 +1092,18 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         s.log("── WAIT FOR GENERATION ──")
         val start = System.currentTimeMillis()
         val timeout = timeoutSec * 1000L
+        // New logged-out Gemini (3.5) produces an answer then RESETS to the welcome
+        // screen, stripping the Copy/Share action buttons — so "buttons appeared" is no
+        // longer a reliable completion signal. Track whether we ever saw streaming; once
+        // the Stop button clears after a streaming phase, the answer was produced.
+        var sawStreaming = false
         while (System.currentTimeMillis() - start < timeout) {
-            Thread.sleep(3000)
+            Thread.sleep(1500)
             val stopBtn = s.findNode(contentDesc = "Stop streaming", timeoutMs = 500)
                 ?: s.findNode(contentDesc = "Stop generating", timeoutMs = 500)
                 ?: s.findNode(contentDesc = "Stop response", timeoutMs = 500)
             if (stopBtn != null) {
+                sawStreaming = true
                 s.log("Still generating...")
                 continue
             }
@@ -1095,7 +1111,13 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                 || s.findNode(contentDesc = "Share", timeoutMs = 500) != null
                 || s.findNode(contentDesc = "Read aloud", timeoutMs = 500) != null
             if (hasContent) {
-                s.log("Generation complete")
+                s.log("Generation complete (action buttons)")
+                return true
+            }
+            // New logged-out Gemini: it streamed, the Stop button is now gone, but the
+            // action buttons were wiped by the reset — still count it as complete.
+            if (sawStreaming) {
+                s.log("Generation complete (stop cleared, buttons wiped by reset)")
                 return true
             }
         }

@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 18
-        versionName = "0.9.2-maps-nearme"
+        versionCode = 25
+        versionName = "0.9.7-gemini-send-fix"
     }
 
     buildTypes {
