@@ -82,6 +82,12 @@ clients = api("/api/clients")
 active_client_ids = {c["id"] for c in clients if active(c)}
 excluded_biz_ids = {bid for bid, b in biz_by_id.items()
                     if (b.get("name") or b.get("businessName") or "") in EXCLUDED_BIZ_NAMES}
+# Optional campaign exclusion by aeo_plan_id — e.g. Free-Trial plans are ranking-only
+# and must NOT run in daily (per user). File = JSON list of plan ids to skip.
+_excl_plan_file = os.environ.get("EXCLUDE_PLAN_IDS_FILE", "/tmp/exclude_plan_ids.json")
+excluded_plan_ids = set(json.load(open(_excl_plan_file))) if os.path.exists(_excl_plan_file) else set()
+if excluded_plan_ids:
+    print(f"excluding {len(excluded_plan_ids)} campaigns (e.g. Free-Trial) from daily")
 
 # collect active keywords with their campaign/location
 items = []   # dict(kw, biz, campaign)
@@ -93,6 +99,8 @@ for k in kws:
     if not b or not active(b) or b.get("clientId") not in active_client_ids:
         continue
     if bid in excluded_biz_ids:
+        continue
+    if k.get("aeoPlanId") in excluded_plan_ids:
         continue
     items.append({"kw": k, "biz": b, "bid": bid,
                   "campaign": k.get("campaignName") or f"biz{bid}"})

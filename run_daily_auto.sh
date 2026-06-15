@@ -34,8 +34,14 @@ echo "[daily ${DATE}] plan jobs: $(python3 -c "import json;print(json.load(open(
 
 pkill -f "gost -C"; pkill -f sni_relay.py; sleep 1
 pgrep -f reconnect_watcher >/dev/null || nohup ./reconnect_watcher.sh >/tmp/rw.log 2>&1 &
-echo "[daily ${DATE}] base run..." | tee -a "$LOG"
-python3 -u run_rolling_plan.py "$PLAN" >>"$LOG" 2>&1
+# SKIP_BASE=1 resumes an interrupted run: skip the full-plan base wave so the retry
+# loop runs ONLY the REMAIN set (already-successful pairs are preserved, not redone).
+if [ "${SKIP_BASE:-0}" = "1" ]; then
+  echo "[daily ${DATE}] SKIP_BASE=1 — resuming from saved results (no base wave)" | tee -a "$LOG"
+else
+  echo "[daily ${DATE}] base run..." | tee -a "$LOG"
+  python3 -u run_rolling_plan.py "$PLAN" >>"$LOG" 2>&1
+fi
 
 prev=-1; stable=0; cnt=0
 for round in $(seq 1 60); do
