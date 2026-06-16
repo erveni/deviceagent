@@ -580,48 +580,70 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         s.findNode(contentDesc = "Stop generating", timeoutMs = 400) != null ||
         s.findNode(contentDesc = "Stop response", timeoutMs = 400) != null
 
+    private val sendSelectors = listOf("Send message", "Submit", "Send prompt", "Send", "Go")
+
+    /** Find the current send button node (by contentDesc then text), or null if gone. */
+    private fun findSendNode(): android.view.accessibility.AccessibilityNodeInfo? {
+        for (label in sendSelectors) {
+            val n = s.findNode(contentDesc = label, timeoutMs = 300)
+                ?: s.findNode(text = label, timeoutMs = 200)
+            if (n != null) return n
+        }
+        return null
+    }
+
+    /** True once the prompt has been sent: the send button is gone OR generation started. */
+    private fun didSend(): Boolean {
+        if (isGenerating()) return true
+        val n = findSendNode()
+        if (n == null) return true
+        n.recycle()
+        return false
+    }
+
     fun submit(): Boolean {
         s.log("── SUBMIT ──")
         ensureChromeForeground()
         if (isGenerating()) { s.log("Already generating — not submitting"); return true }
-        // 1. Preferred path: semantic ACTION_CLICK on a labelled send button. Works for
-        //    ChatGPT / Perplexity AND the new logged-out Gemini ("Send message").
-        //    ACTION_CLICK targets the node directly, so the soft keyboard's position is
-        //    irrelevant — we do NOT need to dismiss it (a stray GLOBAL_ACTION_BACK can
-        //    navigate the Chrome page away). If the click lands, RETURN immediately: a
-        //    second tap here would hit the STOP button (it replaces send at the same
-        //    spot once generation starts) and cancel the answer — the "it goes back to
-        //    the paste screen" bug.
-        val selectors = listOf("Send message", "Submit", "Send prompt", "Send", "Go")
-        for (label in selectors) {
-            val node = s.findNode(contentDesc = label, timeoutMs = 1000)
-                ?: s.findNode(text = label, timeoutMs = 400)
-            if (node != null) {
-                val r = android.graphics.Rect()
-                node.getBoundsInScreen(r)
-                node.recycle()
-                s.log("Submit: node '$label' bounds=$r center=(${r.centerX()},${r.centerY()}) screen=${s.screenWidth()}x${s.screenHeight()}")
-                // ACTION_CLICK on Gemini's web send button returns true but does NOT
-                // actually send. A real touch at the node's on-screen center does.
-                if (r.width() > 0 && r.height() > 0 &&
-                    r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
-                    s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
-                    s.log("Submit: gesture-tapped '$label' bounds center")
-                    Thread.sleep(1500)
-                    return true
-                }
-                s.log("Submit: '$label' bounds off-screen/empty — trying next selector")
+
+        val node = findSendNode()
+        if (node == null) {
+            // No labelled send node — keyboard may be covering it. Dismiss + physical tap.
+            s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+            Thread.sleep(600)
+            if (!isGenerating()) {
+                s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
+                s.log("Submit: no node — physical-ratio fallback tap")
+                Thread.sleep(1200)
             }
+            return true
         }
-        // 2. Fallback ONLY when no send node was clickable. Here the soft keyboard may be
-        //    covering the send button, so dismiss it first, then physical-ratio tap the
-        //    bottom-right of the input bar (~0.864w, 0.925h). Guarded by isGenerating()
-        //    so we never tap once a generation is already running.
+        val r = android.graphics.Rect(); node.getBoundsInScreen(r)
+        s.log("Submit: node bounds=$r center=(${r.centerX()},${r.centerY()})")
+
+        // 1) ACTION_CLICK first — reliable for ChatGPT / Perplexity web buttons.
+        s.clickNode(node); node.recycle()
+        Thread.sleep(1500)
+        if (didSend()) { s.log("Submit: sent via ACTION_CLICK"); return true }
+
+        // 2) Not sent (Gemini's web button returns true from ACTION_CLICK but doesn't
+        //    actually send) — gesture-tap the node's real on-screen center. We only get
+        //    here when the send button is STILL present (didSend()==false), so there is
+        //    no STOP button to accidentally cancel.
+        if (r.width() > 0 && r.height() > 0 &&
+            r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
+            s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+            s.log("Submit: gesture-tapped bounds center")
+            Thread.sleep(1500)
+            if (didSend()) return true
+        }
+
+        // 3) Last resort: dismiss keyboard + physical-ratio tap (only if still not sent).
         s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
         Thread.sleep(600)
-        if (!isGenerating()) {
+        if (!didSend()) {
             s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
-            s.log("Submit: physical-ratio fallback tap (${(s.screenWidth() * 0.864f).toInt()},${(s.screenHeight() * 0.925f).toInt()})")
+            s.log("Submit: physical-ratio fallback tap")
             Thread.sleep(1200)
         }
         return true

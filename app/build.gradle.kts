@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 33
-        versionName = "0.9.15-clear-daily-only"
+        versionCode = 34
+        versionName = "0.9.16-submit-robust"
     }
 
     buildTypes {
