@@ -601,51 +601,61 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return false
     }
 
-    fun submit(): Boolean {
-        s.log("── SUBMIT ──")
+    fun submit(platform: String = ""): Boolean {
+        s.log("── SUBMIT (${platform.ifBlank { "?" }}) ──")
         ensureChromeForeground()
         if (isGenerating()) { s.log("Already generating — not submitting"); return true }
 
-        val node = findSendNode()
-        if (node == null) {
-            // No labelled send node — keyboard may be covering it. Dismiss + physical tap.
+        // ── GEMINI: ACTION_CLICK reports success but does NOT actually send on the new
+        // logged-out web UI, so tap the send button's real on-screen center. ──
+        if (platform.lowercase() == "gemini") {
+            val node = findSendNode()
+            if (node == null) {
+                s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                Thread.sleep(600)
+                if (!isGenerating()) { s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f); Thread.sleep(1200) }
+                return true
+            }
+            val r = android.graphics.Rect(); node.getBoundsInScreen(r)
+            s.clickNode(node); node.recycle()
+            Thread.sleep(1200)
+            if (didSend()) { s.log("Submit[gemini]: sent via ACTION_CLICK"); return true }
+            if (r.width() > 0 && r.height() > 0 &&
+                r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
+                s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+                s.log("Submit[gemini]: gesture-tapped bounds center (${r.centerX()},${r.centerY()})")
+                Thread.sleep(1200)
+                if (didSend()) return true
+            }
             s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
             Thread.sleep(600)
-            if (!isGenerating()) {
-                s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
-                s.log("Submit: no node — physical-ratio fallback tap")
-                Thread.sleep(1200)
-            }
+            if (!didSend()) { s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f); Thread.sleep(1200) }
             return true
         }
-        val r = android.graphics.Rect(); node.getBoundsInScreen(r)
-        s.log("Submit: node bounds=$r center=(${r.centerX()},${r.centerY()})")
 
-        // 1) ACTION_CLICK first — reliable for ChatGPT / Perplexity web buttons.
-        s.clickNode(node); node.recycle()
-        Thread.sleep(1500)
-        if (didSend()) { s.log("Submit: sent via ACTION_CLICK"); return true }
-
-        // 2) Not sent (Gemini's web button returns true from ACTION_CLICK but doesn't
-        //    actually send) — gesture-tap the node's real on-screen center. We only get
-        //    here when the send button is STILL present (didSend()==false), so there is
-        //    no STOP button to accidentally cancel.
-        if (r.width() > 0 && r.height() > 0 &&
-            r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
-            s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
-            s.log("Submit: gesture-tapped bounds center")
-            Thread.sleep(1500)
-            if (didSend()) return true
+        // ── ChatGPT / Perplexity (PROVEN original path): semantic ACTION_CLICK on the
+        // labelled send button. Works regardless of the node's (often degenerate) web
+        // bounds — Perplexity's send button reports zero-height bounds, so any coordinate
+        // tap misses; ACTION_CLICK does not. Two passes, return on first successful click. ──
+        val selectors = listOf(
+            "Submit" to "cd", "Send message" to "cd", "Send prompt" to "cd",
+            "Send" to "text", "Go" to "cd"
+        )
+        for (pass in 1..2) {
+            for ((label, type) in selectors) {
+                val node = if (type == "cd") s.findNode(contentDesc = label, timeoutMs = 2000)
+                           else s.findNode(text = label, timeoutMs = 2000)
+                if (node != null) {
+                    val clicked = s.clickNode(node); node.recycle()
+                    if (clicked) { s.log("Submit: ACTION_CLICK '$label' (pass $pass)"); Thread.sleep(1000); return true }
+                    s.log("Submit: found '$label' but click failed, next…")
+                }
+            }
+            Thread.sleep(500)
         }
-
-        // 3) Last resort: dismiss keyboard + physical-ratio tap (only if still not sent).
-        s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
-        Thread.sleep(600)
-        if (!didSend()) {
-            s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
-            s.log("Submit: physical-ratio fallback tap")
-            Thread.sleep(1200)
-        }
+        // Fallback: bottom-right corner (Perplexity submit button area).
+        s.gestureTap(s.screenWidth() - 60f, s.screenHeight() * 0.82f)
+        s.log("Submit: bottom-right fallback tap")
         return true
     }
 

@@ -18,7 +18,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.17-fullclear-everywhere"
+        const val APP_VERSION_NAME = "0.9.18-submit-perplexity-fix"
         const val APP_VERSION_CODE = 18
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
@@ -85,7 +85,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     result.status = "error"; result.error = "input failed"; return
                 }
                 Thread.sleep(300)
-                step("submit") { flowEngine.submit() }
+                step("submit") { flowEngine.submit(platform) }
                 // TEST MODE: stop right after submit so we can eyeball whether
                 // generation actually starts and STAYS (no back-nav to the paste state).
                 if (stopAfter == "submit") {
@@ -197,7 +197,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         pr.status = "error"; pr.error = "input failed"; continue
                     }
                     Thread.sleep(300)
-                    step("submit") { flowEngine.submit() }
+                    step("submit") { flowEngine.submit(platform) }
                     // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
                     // waste the window on a long pre-wait.
                     Thread.sleep(if (platform == "gemini") 400 else 2000)
@@ -330,7 +330,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         pr.status = "error"; pr.error = "input failed"; result.status = "error"; return
                     }
                     Thread.sleep(300)
-                    step("submit") { flowEngine.submit() }
+                    step("submit") { flowEngine.submit(plat) }
                     Thread.sleep(2000)
                     if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
                         pr.status = "error"; pr.error = "generation timeout"; result.status = "error"; return
