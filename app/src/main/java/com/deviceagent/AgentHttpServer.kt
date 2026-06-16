@@ -18,7 +18,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.2-maps-nearme"
+        const val APP_VERSION_NAME = "0.9.11-gemini-ranking"
         const val APP_VERSION_CODE = 18
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
@@ -54,7 +54,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             platform: String,
             prompt: String,
             followUp: String?,
-            backlinkDomain: String?
+            backlinkDomain: String?,
+            stopAfter: String? = null
         ) {
             fun step(name: String, block: () -> Boolean): Boolean {
                 result.steps.add("$name...")
@@ -81,9 +82,28 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 }
                 Thread.sleep(300)
                 step("submit") { flowEngine.submit() }
-                Thread.sleep(2000)
+                // TEST MODE: stop right after submit so we can eyeball whether
+                // generation actually starts and STAYS (no back-nav to the paste state).
+                if (stopAfter == "submit") {
+                    result.status = "completed"; result.error = "STOPPED_AFTER_SUBMIT"; return
+                }
+                // Gemini's logged-out chat wipes ~3s after the answer renders, so poll
+                // quickly instead of burning the window on a long pre-wait.
+                Thread.sleep(if (platform.lowercase() == "gemini") 400 else 2000)
                 if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
                     result.status = "error"; result.error = "generation timeout"; return
+                }
+                if (platform.lowercase() == "gemini") {
+                    // RACE THE WINDOW: logged-out Gemini wipes the chat ~3s after the
+                    // answer renders, so click the embedded backlink IMMEDIATELY — it's an
+                    // inline "Visit <business>" link, found offscreen via targetUrl, so no
+                    // slow scroll/Sources carousel. Generation completing already counts as
+                    // success; the backlink is the bonus we now grab inside the window.
+                    if (!backlinkDomain.isNullOrBlank()) {
+                        result.backlinkClicked = step("backlink") { flowEngine.clickBacklink(backlinkDomain, platform) }
+                    }
+                    result.status = "completed"
+                    return
                 }
                 // ChatGPT: click backlink BEFORE scroll (links at top of response).
                 // Wait a moment for response to fully render before searching.
@@ -173,41 +193,56 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     }
                     Thread.sleep(300)
                     step("submit") { flowEngine.submit() }
-                    Thread.sleep(2000)
+                    // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
+                    // waste the window on a long pre-wait.
+                    Thread.sleep(if (platform == "gemini") 400 else 2000)
                     if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
                         pr.status = "error"; pr.error = "generation timeout"; continue
                     }
-                    // 200-word capped response — 6 scrolls covers the full response
-                    // and lands on the [RANK: X/Y] line near the end. Saves ~17s vs 12.
-                    step("scroll") { flowEngine.scrollResponse(6) }
-                    Thread.sleep(1000)
-                    // Capture full LLM response text once; reuse for rank scan + audit log.
-                    val responseText = flowEngine.getResponseText()
-                    val (pos, total) = flowEngine.extractRankingFromText(responseText)
-                    pr.rankingPosition = pos
-                    pr.rankingTotal = total
-                    pr.responseText = responseText
 
-                    // Capture screenshot — saved to phone-side scoped dir and
-                    // ALSO base64-encoded inline so the Mac dispatcher can write
-                    // the file locally without an `adb pull` round-trip. Falls
-                    // back to the path-only behaviour when the file can't be
-                    // read back (caller will adb-pull as before).
-                    val ssName = "audit_${platform}_${System.currentTimeMillis()}"
-                    val ssPath = try { flowEngine.saveScreenshot(ssName) } catch (e: Exception) { null }
-                    pr.screenshotPath = ssPath
-                    if (!ssPath.isNullOrBlank()) {
-                        pr.screenshotB64 = try {
-                            val bytes = File(ssPath).readBytes()
-                            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                        } catch (e: Exception) {
-                            Log.w("DeviceAgent", "screenshot b64 encode failed for $ssPath: ${e.message}")
-                            null
+                    // Capture text + rank + screenshot. Factored so the Gemini path can
+                    // run it the INSTANT generation completes (racing the wipe), while
+                    // the others scroll to the rank line first for a cleaner screenshot.
+                    fun capture() {
+                        // Screenshot FIRST — it's the time-critical visual. On logged-out
+                        // Gemini the answer is wiped ~3s after it renders, so grab the
+                        // picture before anything else (text-from-a11y is fast and runs
+                        // after). Saved to phone-side scoped dir AND base64-inlined so the
+                        // Mac dispatcher writes it locally without an `adb pull`.
+                        val ssName = "audit_${platform}_${System.currentTimeMillis()}"
+                        val ssPath = try { flowEngine.saveScreenshot(ssName) } catch (e: Exception) { null }
+                        pr.screenshotPath = ssPath
+                        if (!ssPath.isNullOrBlank()) {
+                            pr.screenshotB64 = try {
+                                val bytes = File(ssPath).readBytes()
+                                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                            } catch (e: Exception) {
+                                Log.w("DeviceAgent", "screenshot b64 encode failed for $ssPath: ${e.message}")
+                                null
+                            }
                         }
+                        // Full response text comes from the a11y tree (all of it, even
+                        // off-screen) — no scroll required to read the [RANK: X/Y] line.
+                        val responseText = flowEngine.getResponseText()
+                        val (pos, total) = flowEngine.extractRankingFromText(responseText)
+                        pr.rankingPosition = pos
+                        pr.rankingTotal = total
+                        pr.responseText = responseText
+                    }
+
+                    if (platform == "gemini") {
+                        // RACE THE WINDOW: capture immediately, before the wipe. A 6-swipe
+                        // scroll (≈6-12s) would run past it and screenshot a blank welcome.
+                        capture()
+                    } else {
+                        // ChatGPT / Perplexity persist — scroll to the rank line first.
+                        step("scroll") { flowEngine.scrollResponse(6) }
+                        Thread.sleep(1000)
+                        capture()
                     }
 
                     pr.status = "completed"
-                    result.steps.add("[$platform] ranking: $pos / $total  ss=$ssPath")
+                    result.steps.add("[$platform] ranking: ${pr.rankingPosition} / ${pr.rankingTotal}  ss=${pr.screenshotPath}")
                 } catch (e: Exception) {
                     pr.status = "error"
                     pr.error = e.message
@@ -504,6 +539,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val prompt = json.optString("prompt", "").let { if (it == "null") "" else it }
         val followUp = json.optString("followUp", "").let { if (it.isBlank() || it == "null") null else it }
         val backlinkDomain = json.optString("backlinkDomain", "").let { if (it.isBlank()) null else it }
+        val stopAfter = json.optString("stopAfter", "").let { if (it.isBlank() || it == "null") null else it }
 
         if (prompt.isBlank()) {
             respond(writer, 400, """{"error":"prompt is required"}""")
@@ -521,7 +557,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         )
         lastResult.set(result)
 
-        executeSession(result, platform, prompt, followUp, backlinkDomain)
+        executeSession(result, platform, prompt, followUp, backlinkDomain, stopAfter)
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -657,9 +693,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         platform: String,
         prompt: String,
         followUp: String?,
-        backlinkDomain: String?
+        backlinkDomain: String?,
+        stopAfter: String? = null
     ) {
-        executeSessionStatic(result, flowEngine, platform, prompt, followUp, backlinkDomain)
+        executeSessionStatic(result, flowEngine, platform, prompt, followUp, backlinkDomain, stopAfter)
     }
 
     fun executeCaptureSession(

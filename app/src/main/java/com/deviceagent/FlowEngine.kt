@@ -398,37 +398,45 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         s.log("── SUBMIT ──")
         ensureChromeForeground()
         if (isGenerating()) { s.log("Already generating — not submitting"); return true }
-        // The paste leaves the soft keyboard UP, which floats the input bar (and the ↑
-        // send button) up above the keyboard — so a bottom-of-screen tap lands on the
-        // keyboard and misses. Dismiss the keyboard first so the input bar settles back
-        // to the bottom at the predictable position.
-        s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
-        Thread.sleep(800)
-        // 1. Semantic ACTION_CLICK on a labelled send button. Works for ChatGPT /
-        //    Perplexity (and logged-in Gemini). Try once, then check if it actually
-        //    started generating.
+        // 1. Preferred path: semantic ACTION_CLICK on a labelled send button. Works for
+        //    ChatGPT / Perplexity AND the new logged-out Gemini ("Send message").
+        //    ACTION_CLICK targets the node directly, so the soft keyboard's position is
+        //    irrelevant — we do NOT need to dismiss it (a stray GLOBAL_ACTION_BACK can
+        //    navigate the Chrome page away). If the click lands, RETURN immediately: a
+        //    second tap here would hit the STOP button (it replaces send at the same
+        //    spot once generation starts) and cancel the answer — the "it goes back to
+        //    the paste screen" bug.
         val selectors = listOf("Send message", "Submit", "Send prompt", "Send", "Go")
         for (label in selectors) {
             val node = s.findNode(contentDesc = label, timeoutMs = 1000)
                 ?: s.findNode(text = label, timeoutMs = 400)
             if (node != null) {
-                val ok = s.clickNode(node); node.recycle()
-                s.log("Submit: ACTION_CLICK '$label' -> $ok")
-                Thread.sleep(1500)
-                break
+                val r = android.graphics.Rect()
+                node.getBoundsInScreen(r)
+                node.recycle()
+                s.log("Submit: node '$label' bounds=$r center=(${r.centerX()},${r.centerY()}) screen=${s.screenWidth()}x${s.screenHeight()}")
+                // ACTION_CLICK on Gemini's web send button returns true but does NOT
+                // actually send. A real touch at the node's on-screen center does.
+                if (r.width() > 0 && r.height() > 0 &&
+                    r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
+                    s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+                    s.log("Submit: gesture-tapped '$label' bounds center")
+                    Thread.sleep(1500)
+                    return true
+                }
+                s.log("Submit: '$label' bounds off-screen/empty — trying next selector")
             }
         }
-        // 2. If still not generating, the semantic click didn't register (Gemini's web
-        //    ↑ button). DO NOT tap the node's getBoundsInScreen() — Chrome reports web
-        //    accessibility bounds in a web-scaled space (wrong Y, e.g. 934 vs real
-        //    1480), so that tap misses. Physical screen coords ARE reliable: the send
-        //    button sits at the bottom-right of the input bar (~0.864w, 0.925h).
-        //    The isGenerating() guards keep this to a SINGLE effective send so we never
-        //    tap the STOP button (which replaces send at the same spot during gen).
+        // 2. Fallback ONLY when no send node was clickable. Here the soft keyboard may be
+        //    covering the send button, so dismiss it first, then physical-ratio tap the
+        //    bottom-right of the input bar (~0.864w, 0.925h). Guarded by isGenerating()
+        //    so we never tap once a generation is already running.
+        s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+        Thread.sleep(600)
         if (!isGenerating()) {
             s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
-            s.log("Submit: physical-ratio tap (${(s.screenWidth() * 0.864f).toInt()},${(s.screenHeight() * 0.925f).toInt()})")
-            Thread.sleep(1500)
+            s.log("Submit: physical-ratio fallback tap (${(s.screenWidth() * 0.864f).toInt()},${(s.screenHeight() * 0.925f).toInt()})")
+            Thread.sleep(1200)
         }
         return true
     }
@@ -544,13 +552,42 @@ class FlowEngine(private val s: AgentAccessibilityService) {
     fun clickBacklink(domain: String, platform: String = "gemini"): Boolean {
         s.log("── BACKLINK [$platform]: search for \"$domain\" ──")
         ensureChromeForeground()
-        Thread.sleep(1000)
 
         // ── ChatGPT: links are embedded as clickable elements in the response text ──
         if (platform.lowercase() == "chatgpt") {
+            Thread.sleep(1000)
             return clickBacklinkChatGPT(domain)
         }
 
+        // ── Gemini (logged out): the answer embeds inline "Visit <business>" website
+        // links, NOT a Sources carousel. Click the embedded link directly —
+        // findNodeByTargetUrl works on offscreen nodes (no scroll needed) and is fast
+        // enough to beat the ~3s logged-out wipe. The Sources-panel path below stays as
+        // a fallback for signed-in Gemini (which does render a Sources carousel).
+        if (platform.lowercase() == "gemini") {
+            val ghint = domain.substringBefore(".")
+            for (attempt in 1..3) {
+                val link = findNodeByTargetUrl(domain) ?: findClickableWithUrl(domain, ghint)
+                if (link != null) {
+                    val url = link.extras?.getString("AccessibilityNodeInfo.targetUrl") ?: ""
+                    s.log("Gemini embedded backlink FOUND -> $url")
+                    val clicked = link.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+                    link.recycle()
+                    s.log("Gemini embedded backlink ACTION_CLICK -> $clicked")
+                    Thread.sleep(3000)
+                    browseBacklinkPage()
+                    return true
+                }
+                Thread.sleep(400)
+            }
+            // Logged-out Gemini has no Sources carousel and the chat is wiped within
+            // ~3s, so the slow Sources fallback below can't help — give up fast instead
+            // of burning ~20s per job on a screen that's already gone.
+            s.log("Gemini embedded link not found — skipping (logged-out, no Sources panel)")
+            return false
+        }
+
+        Thread.sleep(1000)
         // Step 1: Open the sources/links panel
         var isCarousel = false
         val linksTab = s.findNode(text = "Links", timeoutMs = 2000)
@@ -855,9 +892,10 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             val txt = node.text?.toString()?.take(80) ?: ""
             val cd = node.contentDescription?.toString()?.take(80) ?: ""
             val cls = node.className?.toString()?.split(".")?.lastOrNull() ?: ""
+            val url = node.extras?.getString("AccessibilityNodeInfo.targetUrl")?.take(80) ?: ""
             val rect = android.graphics.Rect()
             node.getBoundsInScreen(rect)
-            sb.appendLine("  ".repeat(depth) + "[C] $cls text=\"$txt\" cd=\"$cd\" y=${rect.top}")
+            sb.appendLine("  ".repeat(depth) + "[C] $cls text=\"$txt\" cd=\"$cd\" url=\"$url\" y=${rect.top}")
         }
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let { dumpClickableRecursive(it, depth + 1, sb) }
@@ -1096,20 +1134,22 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         // screen, stripping the Copy/Share action buttons — so "buttons appeared" is no
         // longer a reliable completion signal. Track whether we ever saw streaming; once
         // the Stop button clears after a streaming phase, the answer was produced.
+        // Poll FAST: logged-out Gemini wipes the answer ~3s after it finishes, so we must
+        // detect completion within a few hundred ms and let the caller act immediately.
         var sawStreaming = false
         while (System.currentTimeMillis() - start < timeout) {
-            Thread.sleep(1500)
-            val stopBtn = s.findNode(contentDesc = "Stop streaming", timeoutMs = 500)
-                ?: s.findNode(contentDesc = "Stop generating", timeoutMs = 500)
-                ?: s.findNode(contentDesc = "Stop response", timeoutMs = 500)
+            Thread.sleep(400)
+            val stopBtn = s.findNode(contentDesc = "Stop streaming", timeoutMs = 150)
+                ?: s.findNode(contentDesc = "Stop generating", timeoutMs = 150)
+                ?: s.findNode(contentDesc = "Stop response", timeoutMs = 150)
             if (stopBtn != null) {
                 sawStreaming = true
                 s.log("Still generating...")
                 continue
             }
-            val hasContent = s.findNode(contentDesc = "Copy", timeoutMs = 500) != null
-                || s.findNode(contentDesc = "Share", timeoutMs = 500) != null
-                || s.findNode(contentDesc = "Read aloud", timeoutMs = 500) != null
+            val hasContent = s.findNode(contentDesc = "Copy", timeoutMs = 150) != null
+                || s.findNode(contentDesc = "Share", timeoutMs = 150) != null
+                || s.findNode(contentDesc = "Read aloud", timeoutMs = 150) != null
             if (hasContent) {
                 s.log("Generation complete (action buttons)")
                 return true
