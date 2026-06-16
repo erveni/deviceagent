@@ -18,34 +18,67 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         Thread.sleep(400)
         s.openAppDetails(pkg)
         Thread.sleep(2500)
-        // 1) Tap "Storage & cache" / "Storage" to reach the storage page.
-        val storage = s.findNode(text = "Storage & cache", timeoutMs = 4000)
-            ?: s.findNode(text = "Storage and cache", timeoutMs = 1500)
-            ?: s.findNode(text = "Storage usage", timeoutMs = 1500)
-            ?: s.findNode(text = "Storage", timeoutMs = 1500)
+        // 1) Tap the "Storage & Cache" / "Storage" entry. Label CASE + wording vary by
+        // OEM ("Storage & cache" on Tecno, "Storage & Cache" on Transsion W-series, etc.)
+        // so match case-insensitively by substring rather than exact text.
+        var storage: android.view.accessibility.AccessibilityNodeInfo? = null
+        for (attempt in 1..4) {
+            storage = findNodeContaining("storage")
+            if (storage != null) break
+            Thread.sleep(1000)
+        }
         if (storage == null) { s.log("[clear] Storage entry not found"); return false }
-        // The label TextView may not be clickable itself — click its clickable ancestor.
         clickSelfOrParent(storage); storage.recycle()
         Thread.sleep(1800)
-        // 2) Tap "Clear storage" / "Clear data".
-        val clearBtn = s.findNode(text = "Clear storage", timeoutMs = 4000)
-            ?: s.findNode(text = "Clear data", timeoutMs = 1500)
-            ?: s.findNode(text = "CLEAR STORAGE", timeoutMs = 1000)
-            ?: s.findNode(text = "CLEAR DATA", timeoutMs = 1000)
+        // 2) Tap "Clear storage" / "Clear data" (case-insensitive substring).
+        var clearBtn: android.view.accessibility.AccessibilityNodeInfo? = null
+        for (attempt in 1..4) {
+            clearBtn = findNodeContaining("clear storage") ?: findNodeContaining("clear data")
+            if (clearBtn != null) break
+            Thread.sleep(800)
+        }
         if (clearBtn == null) { s.log("[clear] Clear button not found"); return false }
         clickSelfOrParent(clearBtn); clearBtn.recycle()
         Thread.sleep(1200)
-        // 3) Confirm the dialog ("OK" / "Delete").
+        // 3) Confirm the dialog ("OK" / "Delete" / "Clear").
         val ok = s.findNode(text = "OK", timeoutMs = 3000)
-            ?: s.findNode(text = "Ok", timeoutMs = 1000)
-            ?: s.findNode(text = "Delete", timeoutMs = 1000)
-            ?: s.findNode(text = "Clear", timeoutMs = 1000)
+            ?: s.findNode(text = "Ok", timeoutMs = 800)
+            ?: s.findNode(text = "Delete", timeoutMs = 800)
+            ?: findNodeContaining("ok")
+            ?: findNodeContaining("delete")
         if (ok != null) { clickSelfOrParent(ok); ok.recycle(); s.log("[clear] confirmed") }
         else s.log("[clear] no confirm dialog (some OEMs clear immediately)")
         Thread.sleep(1500)
         s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
         Thread.sleep(400)
         return true
+    }
+
+    /** Find the first node whose text OR contentDescription contains [needle] (case-insensitive). */
+    private fun findNodeContaining(needle: String): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val n = needle.lowercase()
+        val hit = findContainingRecursive(root, n)
+        root.recycle()
+        return hit
+    }
+
+    private fun findContainingRecursive(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        needle: String
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val t = node.text?.toString()?.lowercase() ?: ""
+        val cd = node.contentDescription?.toString()?.lowercase() ?: ""
+        if (t.contains(needle) || cd.contains(needle)) {
+            return android.view.accessibility.AccessibilityNodeInfo.obtain(node)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val r = findContainingRecursive(child, needle)
+            if (r != null) { child.recycle(); return r }
+            child.recycle()
+        }
+        return null
     }
 
     /** Click a node, or its nearest clickable ancestor if the node itself isn't clickable. */
@@ -59,29 +92,31 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         s.clickNode(node) // fall back to ACTION_CLICK on the original
     }
 
-    fun resetChrome(): Boolean {
-        s.log("── RESET CHROME ──")
-        // Full app-data wipe FIRST (pm-clear equivalent) — required so logged-out Gemini
-        // persists the conversation. Falls through to the legacy in-app clear if this
-        // Settings flow can't be driven on a given OEM.
-        val cleared = try { clearChromeData() } catch (e: Exception) { s.log("[clear] ex: ${e.message}"); false }
-        s.log("clearChromeData -> $cleared")
+    /**
+     * @param fullClear when true, do a FULL Chrome app-data wipe (pm-clear equivalent) so
+     *   logged-out Gemini PERSISTS the conversation — required for the DAILY backlink click.
+     *   When false (default), use the lighter in-app "Delete browsing data" — enough for
+     *   RANKING (screenshot-first captures the answer inside the pre-wipe window) and far
+     *   more robust under the residential proxy (the full clear triggers Chrome's first-run
+     *   experience + cold page loads, which are fragile behind a proxy).
+     */
+    fun resetChrome(fullClear: Boolean = false): Boolean {
+        s.log("── RESET CHROME (fullClear=$fullClear) ──")
 
-        if (cleared) {
-            // Full wipe done. Chrome is now at first-run — dismiss the FRE (Stay signed
-            // out / notifications / privacy dialogs) and we're ready. The legacy in-app
-            // "Delete browsing data" below is REDUNDANT after a full clear and would
-            // re-introduce stale state + ~20s, so skip it.
-            s.navigateToUrl("https://www.google.com")
-            Thread.sleep(5000)
-            dismissChromeFre()
-            dismissFreInline()
-            Thread.sleep(500)
-            s.log("Chrome reset done (full clear)")
-            return true
+        if (fullClear) {
+            val cleared = try { clearChromeData() } catch (e: Exception) { s.log("[clear] ex: ${e.message}"); false }
+            s.log("clearChromeData -> $cleared")
+            if (cleared) {
+                // Chrome is now at first-run — dismiss the FRE robustly (it appears slowly
+                // under a proxy) before returning.
+                dismissChromeFreRobust()
+                s.log("Chrome reset done (full clear)")
+                return true
+            }
+            s.log("[clear] full clear failed — falling back to in-app delete")
         }
 
-        // ── Fallback: full clear couldn't be driven — use the legacy in-app delete. ──
+        // ── Light reset: legacy in-app "Delete browsing data" (v29 behaviour). ──
         // Pre-cleanup
         s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
         Thread.sleep(300)
@@ -142,6 +177,45 @@ class FlowEngine(private val s: AgentAccessibilityService) {
     }
 
     // ── FRE dismissal ──
+
+    /**
+     * Robustly dismiss the first-run experience that appears after a FULL Chrome clear:
+     * "Make Chrome your own" (Stay signed out) → notifications ("No thanks") → privacy
+     * dialogs. Under a residential proxy these appear slowly, so poll for ~40s and keep
+     * tapping any known FRE button (case-insensitive) until an input field is reachable.
+     */
+    private fun dismissChromeFreRobust() {
+        s.log("── DISMISS CHROME FRE (robust) ──")
+        s.navigateToUrl("https://www.google.com")
+        val buttons = listOf(
+            "stay signed out", "use without an account", "no thanks", "not now",
+            "maybe later", "got it", "accept & continue", "skip", "no, thanks",
+            "continue", "next", "ok", "i agree", "accept all", "reject all"
+        )
+        val deadline = System.currentTimeMillis() + 40_000
+        var idle = 0
+        while (System.currentTimeMillis() < deadline) {
+            // Done as soon as a real input/search field is present.
+            val input = s.findInputField(hintText = null, timeoutMs = 800)
+            if (input != null) { input.recycle(); s.log("FRE done — input field reachable"); return }
+            var tapped = false
+            for (label in buttons) {
+                val n = findNodeContaining(label) ?: continue
+                val r = android.graphics.Rect(); n.getBoundsInScreen(r)
+                // FRE buttons live in the lower 60% of the screen; ignore page text matches.
+                if (r.centerY() > s.screenHeight() * 0.4) {
+                    clickSelfOrParent(n); n.recycle()
+                    s.log("FRE: tapped '$label'")
+                    tapped = true
+                    Thread.sleep(1200)
+                    break
+                }
+                n.recycle()
+            }
+            if (!tapped) { idle++; if (idle >= 6) break; Thread.sleep(1500) } else idle = 0
+        }
+        s.log("FRE robust dismissal finished")
+    }
 
     fun dismissChromeFre(): Boolean {
         s.log("── DISMISS CHROME FRE ──")

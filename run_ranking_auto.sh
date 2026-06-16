@@ -42,8 +42,14 @@ echo "[rank ${DATE}] kw-ids: $(python3 -c "import json;print(len(json.load(open(
 # 2) clean proxies, base run
 pkill -f "gost -C"; pkill -f sni_relay.py; sleep 1
 pgrep -f reconnect_watcher >/dev/null || nohup ./reconnect_watcher.sh >/tmp/rw.log 2>&1 &
-echo "[rank ${DATE}] base run…" | tee -a "$LOG"
-python3 -u run_ranking.py >>"$LOG" 2>&1
+# SKIP_BASE=1 resumes an interrupted run: skip the full base wave so the retry loop
+# runs ONLY the not-yet-good pairs (prior OCR-validated success+no_rank are preserved).
+if [ "${SKIP_BASE:-0}" = "1" ]; then
+  echo "[rank ${DATE}] SKIP_BASE=1 — resuming from saved results (no base wave)" | tee -a "$LOG"
+else
+  echo "[rank ${DATE}] base run…" | tee -a "$LOG"
+  python3 -u run_ranking.py >>"$LOG" 2>&1
+fi
 
 # 3) retry loop: only errors/ocr_no_answer re-run (success+no_rank terminal)
 prev=-1; stable=0; rem=0

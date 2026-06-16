@@ -18,7 +18,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.13-chrome-fullclear"
+        const val APP_VERSION_NAME = "0.9.15-clear-daily-only"
         const val APP_VERSION_CODE = 18
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
@@ -68,7 +68,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 return ok
             }
             try {
-                if (!step("reset_chrome") { flowEngine.resetChrome() }) {
+                // DAILY uses a FULL Chrome clear so logged-out Gemini persists the
+                // conversation long enough to click the backlink. (Audit/ranking below
+                // keep the lighter clear — they only need the screenshot.)
+                if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
                     result.status = "error"; result.error = "reset_chrome failed"; return
                 }
                 Thread.sleep(500)

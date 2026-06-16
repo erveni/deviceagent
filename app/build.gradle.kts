@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 31
-        versionName = "0.9.13-chrome-fullclear"
+        versionCode = 33
+        versionName = "0.9.15-clear-daily-only"
     }
 
     buildTypes {
