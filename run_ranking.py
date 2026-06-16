@@ -177,12 +177,35 @@ def _parse_address(addr: str) -> tuple[str, str, str]:
 
 _CITY_ST_RE = _re_addr.compile(r"([A-Za-z][A-Za-z .'\-]+),\s*([A-Z]{2})\b")
 
+# Full US state/territory name -> 2-letter code. Free-trial campaign addresses often
+# use the loose 'City, FullStateName' form (e.g. 'Brooklyn, New York') with no zip and
+# no 2-letter code, which _CITY_ST_RE can't match — map the name so geo still resolves.
+_STATE_NAME_TO_CODE = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+    "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+    "washington dc": "DC", "washington d.c.": "DC",
+}
+# 'City, Full State Name' (optionally trailing zip/country) — captures the full name.
+_CITY_STATENAME_RE = _re_addr.compile(
+    r"([A-Za-z][A-Za-z .'\-]+),\s*([A-Za-z]{3,}(?:\s+[A-Za-z]{3,})?)\b")
+
 
 def _parse_loc(addr: str) -> tuple[str, str, str]:
     """Resolve (city, state, zip) from a campaign/business address string.
-    Handles the full 'street, city, ST 12345' form AND the looser campaign forms
-    with no zip ('Tampa, FL (inferred from area code)', 'South Carolina 707,
-    Myrtle Beach, SC'). City+state alone is enough — the audit maps state -> zip."""
+    Handles the full 'street, city, ST 12345' form, the looser 'City, ST' forms,
+    AND 'City, FullStateName' (e.g. 'Brooklyn, New York') by mapping the full state
+    name to its code. City+state alone is enough — the audit maps state -> zip."""
     if not addr:
         return ("", "", "")
     city, state, zc = _parse_address(addr)
@@ -193,6 +216,11 @@ def _parse_loc(addr: str) -> tuple[str, str, str]:
     if matches:
         c, s = matches[-1]
         return (c.strip(), s.strip(), "")
+    # Fall back to 'City, FullStateName' → map the name to a 2-letter code.
+    for c, s in _CITY_STATENAME_RE.findall(cleaned):
+        code = _STATE_NAME_TO_CODE.get(s.strip().lower())
+        if code:
+            return (c.strip(), code, "")
     return ("", "", "")
 
 
