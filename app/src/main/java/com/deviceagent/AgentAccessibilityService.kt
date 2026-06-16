@@ -368,6 +368,20 @@ class AgentAccessibilityService : AccessibilityService() {
         log("Navigating to $url")
     }
 
+    // Open the system "App info" page for a package (used to clear its storage).
+    fun openAppDetails(pkg: String) {
+        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            android.net.Uri.parse("package:$pkg")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        }
+        startActivity(intent)
+        log("Opened App info for $pkg")
+    }
+
+    // Force-stop a package's processes (we are not device-owner, so this only stops
+    // OUR app's components; for Chrome we rely on Clear storage which also stops it).
+    fun packageName(): String = packageName
+
     // get screen dimensions
     fun screenWidth(): Int = resources.displayMetrics.widthPixels
     fun screenHeight(): Int = resources.displayMetrics.heightPixels

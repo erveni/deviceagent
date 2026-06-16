@@ -18,7 +18,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.11-gemini-ranking"
+        const val APP_VERSION_NAME = "0.9.13-chrome-fullclear"
         const val APP_VERSION_CODE = 18
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
@@ -55,7 +55,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             prompt: String,
             followUp: String?,
             backlinkDomain: String?,
-            stopAfter: String? = null
+            stopAfter: String? = null,
+            useIme: Boolean = false
         ) {
             fun step(name: String, block: () -> Boolean): Boolean {
                 result.steps.add("$name...")
@@ -77,7 +78,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 Thread.sleep(if (platform == "chatgpt") 6000L else 3000L)
                 step("dismiss_popups") { flowEngine.dismissPlatformPopups(platform); true }
                 Thread.sleep(500)
-                if (!step("input") { flowEngine.inputText(prompt) }) {
+                if (!step("input") { if (useIme) flowEngine.inputTextViaIme(prompt) else flowEngine.inputText(prompt) }) {
                     result.status = "error"; result.error = "input failed"; return
                 }
                 Thread.sleep(300)
@@ -540,6 +541,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val followUp = json.optString("followUp", "").let { if (it.isBlank() || it == "null") null else it }
         val backlinkDomain = json.optString("backlinkDomain", "").let { if (it.isBlank()) null else it }
         val stopAfter = json.optString("stopAfter", "").let { if (it.isBlank() || it == "null") null else it }
+        val useIme = json.optBoolean("useIme", false)
 
         if (prompt.isBlank()) {
             respond(writer, 400, """{"error":"prompt is required"}""")
@@ -557,7 +559,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         )
         lastResult.set(result)
 
-        executeSession(result, platform, prompt, followUp, backlinkDomain, stopAfter)
+        executeSession(result, platform, prompt, followUp, backlinkDomain, stopAfter, useIme)
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -694,9 +696,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         prompt: String,
         followUp: String?,
         backlinkDomain: String?,
-        stopAfter: String? = null
+        stopAfter: String? = null,
+        useIme: Boolean = false
     ) {
-        executeSessionStatic(result, flowEngine, platform, prompt, followUp, backlinkDomain, stopAfter)
+        executeSessionStatic(result, flowEngine, platform, prompt, followUp, backlinkDomain, stopAfter, useIme)
     }
 
     fun executeCaptureSession(

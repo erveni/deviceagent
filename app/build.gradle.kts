@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 29
-        versionName = "0.9.11-gemini-ranking"
+        versionCode = 31
+        versionName = "0.9.13-chrome-fullclear"
     }
 
     buildTypes {

@@ -4,9 +4,84 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     // ── chrome reset ──
 
+    /**
+     * Full Chrome app-data wipe via the system "App info → Storage → Clear storage" flow,
+     * driven by accessibility (no device-owner / root needed). This is equivalent to
+     * `pm clear com.android.chrome` and is STRONGER than the in-app "Delete browsing data":
+     * a full wipe yields a genuine first-run Chrome, and logged-out Gemini then PERSISTS
+     * the conversation (~17s+) instead of insta-deleting it (~7s) — long enough to click
+     * the daily backlink. Returns true if the Clear/OK buttons were tapped.
+     */
+    fun clearChromeData(pkg: String = "com.android.chrome"): Boolean {
+        s.log("── CLEAR CHROME DATA (pm-clear via Settings) ──")
+        s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+        Thread.sleep(400)
+        s.openAppDetails(pkg)
+        Thread.sleep(2500)
+        // 1) Tap "Storage & cache" / "Storage" to reach the storage page.
+        val storage = s.findNode(text = "Storage & cache", timeoutMs = 4000)
+            ?: s.findNode(text = "Storage and cache", timeoutMs = 1500)
+            ?: s.findNode(text = "Storage usage", timeoutMs = 1500)
+            ?: s.findNode(text = "Storage", timeoutMs = 1500)
+        if (storage == null) { s.log("[clear] Storage entry not found"); return false }
+        // The label TextView may not be clickable itself — click its clickable ancestor.
+        clickSelfOrParent(storage); storage.recycle()
+        Thread.sleep(1800)
+        // 2) Tap "Clear storage" / "Clear data".
+        val clearBtn = s.findNode(text = "Clear storage", timeoutMs = 4000)
+            ?: s.findNode(text = "Clear data", timeoutMs = 1500)
+            ?: s.findNode(text = "CLEAR STORAGE", timeoutMs = 1000)
+            ?: s.findNode(text = "CLEAR DATA", timeoutMs = 1000)
+        if (clearBtn == null) { s.log("[clear] Clear button not found"); return false }
+        clickSelfOrParent(clearBtn); clearBtn.recycle()
+        Thread.sleep(1200)
+        // 3) Confirm the dialog ("OK" / "Delete").
+        val ok = s.findNode(text = "OK", timeoutMs = 3000)
+            ?: s.findNode(text = "Ok", timeoutMs = 1000)
+            ?: s.findNode(text = "Delete", timeoutMs = 1000)
+            ?: s.findNode(text = "Clear", timeoutMs = 1000)
+        if (ok != null) { clickSelfOrParent(ok); ok.recycle(); s.log("[clear] confirmed") }
+        else s.log("[clear] no confirm dialog (some OEMs clear immediately)")
+        Thread.sleep(1500)
+        s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+        Thread.sleep(400)
+        return true
+    }
+
+    /** Click a node, or its nearest clickable ancestor if the node itself isn't clickable. */
+    private fun clickSelfOrParent(node: android.view.accessibility.AccessibilityNodeInfo) {
+        var n: android.view.accessibility.AccessibilityNodeInfo? = node
+        var depth = 0
+        while (n != null && depth < 6) {
+            if (n.isClickable) { s.clickNode(n); return }
+            n = n.parent; depth++
+        }
+        s.clickNode(node) // fall back to ACTION_CLICK on the original
+    }
+
     fun resetChrome(): Boolean {
         s.log("── RESET CHROME ──")
+        // Full app-data wipe FIRST (pm-clear equivalent) — required so logged-out Gemini
+        // persists the conversation. Falls through to the legacy in-app clear if this
+        // Settings flow can't be driven on a given OEM.
+        val cleared = try { clearChromeData() } catch (e: Exception) { s.log("[clear] ex: ${e.message}"); false }
+        s.log("clearChromeData -> $cleared")
 
+        if (cleared) {
+            // Full wipe done. Chrome is now at first-run — dismiss the FRE (Stay signed
+            // out / notifications / privacy dialogs) and we're ready. The legacy in-app
+            // "Delete browsing data" below is REDUNDANT after a full clear and would
+            // re-introduce stale state + ~20s, so skip it.
+            s.navigateToUrl("https://www.google.com")
+            Thread.sleep(5000)
+            dismissChromeFre()
+            dismissFreInline()
+            Thread.sleep(500)
+            s.log("Chrome reset done (full clear)")
+            return true
+        }
+
+        // ── Fallback: full clear couldn't be driven — use the legacy in-app delete. ──
         // Pre-cleanup
         s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
         Thread.sleep(300)
@@ -256,6 +331,43 @@ class FlowEngine(private val s: AgentAccessibilityService) {
     }
 
     // ── input text ──
+
+    /**
+     * Type [text] through the Agent IME's real [android.view.inputmethod.InputConnection]
+     * (commitText) — the genuine keyboard path. EXPERIMENT: tests whether logged-out
+     * Gemini stops deleting the conversation when input looks like real typing.
+     * Requires the Agent IME to be selected (adb shell ime set com.deviceagent/.AgentImeService).
+     */
+    fun inputTextViaIme(text: String): Boolean {
+        s.log("── INPUT TEXT (IME): \"${text.take(40)}...\" ──")
+        ensureChromeForeground()
+        Thread.sleep(800)
+        var inputNode = s.findInputField(hintText = null, timeoutMs = 5000)
+        if (inputNode == null) {
+            for (attempt in 1..4) {
+                Thread.sleep(1500)
+                inputNode = s.findInputField(hintText = null, timeoutMs = 2000)
+                if (inputNode != null) break
+            }
+        }
+        if (inputNode == null) inputNode = findPerplexityInput()
+        if (inputNode == null) { s.log("[IME] input field NOT FOUND"); return false }
+        val b = android.graphics.Rect(); inputNode.getBoundsInScreen(b); inputNode.recycle()
+        // Tap to focus → binds the (invisible) Agent IME's InputConnection to the field.
+        s.gestureTap(b.centerX().toFloat(), b.centerY().toFloat())
+        Thread.sleep(700)
+        if (!ImeBridge.awaitConnection(4000)) {
+            s.log("[IME] no InputConnection — Agent IME not selected? (adb ime set)")
+            return false
+        }
+        var ok = true
+        for (ch in text) {
+            if (!ImeBridge.commitText(ch.toString())) { ok = false; break }
+            Thread.sleep(25)   // mimic human typing cadence
+        }
+        s.log("[IME] committed ${text.length} chars ok=$ok")
+        return ok
+    }
 
     fun inputText(text: String): Boolean {
         s.log("── INPUT TEXT: \"${text.take(50)}...\" ──")
