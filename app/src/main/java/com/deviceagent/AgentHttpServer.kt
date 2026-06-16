@@ -18,7 +18,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.16-submit-robust"
+        const val APP_VERSION_NAME = "0.9.17-fullclear-everywhere"
         const val APP_VERSION_CODE = 18
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
@@ -182,7 +182,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     // Audit flow MATCHES daily exactly. Steps below are identical to
                     // executeSessionStatic — no audit-only guards, no platform-specific
                     // branches. If daily reliability holds, audit reliability holds.
-                    if (!step("reset_chrome") { flowEngine.resetChrome() }) {
+                    // Full clear everywhere (per directive) so Gemini persists for audit too.
+                    if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
                         pr.status = "error"; pr.error = "reset_chrome failed"; continue
                     }
                     Thread.sleep(500)
@@ -305,7 +306,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             }
 
             try {
-                if (!step("reset_chrome") { flowEngine.resetChrome() }) {
+                if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
                     pr.status = "error"; pr.error = "reset_chrome failed"; result.status = "error"; return
                 }
                 Thread.sleep(500)

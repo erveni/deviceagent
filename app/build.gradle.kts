@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 34
-        versionName = "0.9.16-submit-robust"
+        versionCode = 35
+        versionName = "0.9.17-fullclear-everywhere"
     }
 
     buildTypes {
