@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 36
-        versionName = "0.9.18-submit-perplexity-fix"
+        versionCode = 37
+        versionName = "0.9.19-ranking-proven-config"
     }
 
     buildTypes {

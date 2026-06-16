@@ -1352,22 +1352,23 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         // screen, stripping the Copy/Share action buttons — so "buttons appeared" is no
         // longer a reliable completion signal. Track whether we ever saw streaming; once
         // the Stop button clears after a streaming phase, the answer was produced.
-        // Poll FAST: logged-out Gemini wipes the answer ~3s after it finishes, so we must
-        // detect completion within a few hundred ms and let the caller act immediately.
+        // Poll at a forgiving cadence: on slow proxied pages, too-short a11y finds MISS the
+        // completion buttons and cause false generation_timeouts. 500ms finds (the proven
+        // June-14 value) reliably detect them. sawStreaming still handles logged-out Gemini.
         var sawStreaming = false
         while (System.currentTimeMillis() - start < timeout) {
-            Thread.sleep(400)
-            val stopBtn = s.findNode(contentDesc = "Stop streaming", timeoutMs = 150)
-                ?: s.findNode(contentDesc = "Stop generating", timeoutMs = 150)
-                ?: s.findNode(contentDesc = "Stop response", timeoutMs = 150)
+            Thread.sleep(2000)
+            val stopBtn = s.findNode(contentDesc = "Stop streaming", timeoutMs = 500)
+                ?: s.findNode(contentDesc = "Stop generating", timeoutMs = 500)
+                ?: s.findNode(contentDesc = "Stop response", timeoutMs = 500)
             if (stopBtn != null) {
                 sawStreaming = true
                 s.log("Still generating...")
                 continue
             }
-            val hasContent = s.findNode(contentDesc = "Copy", timeoutMs = 150) != null
-                || s.findNode(contentDesc = "Share", timeoutMs = 150) != null
-                || s.findNode(contentDesc = "Read aloud", timeoutMs = 150) != null
+            val hasContent = s.findNode(contentDesc = "Copy", timeoutMs = 500) != null
+                || s.findNode(contentDesc = "Share", timeoutMs = 500) != null
+                || s.findNode(contentDesc = "Read aloud", timeoutMs = 500) != null
             if (hasContent) {
                 s.log("Generation complete (action buttons)")
                 return true
