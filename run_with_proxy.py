@@ -14,6 +14,26 @@ PROXY_USER = os.environ.get("PROXY_USER", "")
 PROXY_PASS = os.environ.get("PROXY_PASS", "")
 DURATION = int(os.environ.get("PROXY_DURATION", "60"))
 PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")  # e.g. asn-21928 (T-Mobile), asn-20057 (AT&T)
+# Which residential provider's username format to build. "decodo" (default) uses
+# the -session-<sid>-sessionduration-<dur>-country-us[-zip-X] scheme; "dataimpulse"
+# uses the __cr.us[__city.X] suffix scheme. Both go through the same SOCKS5 gost
+# connector — only the upstream username differs (host/port/pass come from env).
+PROXY_PROVIDER = os.environ.get("PROXY_PROVIDER", "decodo").lower()
+
+
+def build_upstream_user(sid, zip_=None, state=None):
+    """Build the upstream proxy username for the active provider.
+
+    sid    — per-listener session id (rotation key on Decodo; cosmetic on
+             DataImpulse, which pins one sticky exit IP per source).
+    zip_   — optional retry geo: Decodo appends -zip-<zip>; DataImpulse has no
+             zip targeting, so US country is kept (city-level would be __city.X).
+    """
+    if PROXY_PROVIDER == "dataimpulse":
+        return f"{PROXY_USER}__cr.us__sid.{sid}"
+    if zip_:
+        return f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us-zip-{zip_}"
+    return f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us"
 WAVE_STAGGER_S = int(os.environ.get("WAVE_STAGGER_S", "0"))  # seconds between starting each phone's session; 0 = fire all at once (residential)
 # Auto-retry transient errors with a fresh Decodo session — mirrors
 # audit_dispatch_http.py:587-643 + device_dispatch.py:217. Most 'input failed'
@@ -53,7 +73,7 @@ DEVICES = [
     ("device-104", "adb-149145555W002883-aGtZ5h._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH._adb-tls-connect._tcp"),
     ("device-106", "adb-149145555W006477-JjonPV._adb-tls-connect._tcp"),
-    ("device-107", "adb-149145555W006788-Vb9M0e._adb-tls-connect._tcp"),
+    ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
     ("device-108", "adb-1490455613010287-g9bnc8._adb-tls-connect._tcp"),
     ("device-109", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
     ("device-110", "adb-149145555W006589-2W7yzb._adb-tls-connect._tcp"),
@@ -62,6 +82,8 @@ DEVICES = [
     ("device-113", "adb-129143749A011759-fEoBDp._adb-tls-connect._tcp"),
     ("device-114", "adb-1490455572007706-HQWNyz._adb-tls-connect._tcp"),
     ("device-115", "adb-R83L103VCVH-uvv2pp._adb-tls-connect._tcp"),
+    ("device-116", "adb-1490455615007763-aoRAJa (2)._adb-tls-connect._tcp"),
+    ("device-117", "adb-1490455613010774-txpX1j (2)._adb-tls-connect._tcp"),
 ]
 
 # ONLY_ONLINE=1 prunes DEVICES to phones currently reporting `device` in
@@ -69,8 +91,16 @@ DEVICES = [
 # with device_pool_timeout. Runs at import time, before DevicePool sizes itself.
 if os.environ.get("ONLY_ONLINE") == "1":
     _out = subprocess.run("adb devices", shell=True, capture_output=True, text=True).stdout
-    _online = {l.split()[0] for l in _out.splitlines()[1:]
-               if l.strip() and l.split()[-1] == "device"}
+    # adb devices is TAB-separated (serial<TAB>state). mDNS serials can contain a
+    # space (the "(2)" variant), so split on TAB — never whitespace, or those
+    # serials get truncated and the phone is wrongly treated as offline.
+    _online = set()
+    for _l in _out.splitlines()[1:]:
+        if "\t" not in _l:
+            continue
+        _ser, _, _state = _l.partition("\t")
+        if _state.strip() == "device":
+            _online.add(_ser.strip())
     _before = len(DEVICES)
     DEVICES = [(n, s) for n, s in DEVICES if s in _online]
     print(f"[ONLY_ONLINE] {len(DEVICES)}/{_before} phones online: "
@@ -309,6 +339,15 @@ def main():
     plan = json.load(open(PLAN_PATH))
     waves = plan["waves"]
     nd = len(DEVICES)
+    # PLATFORMS env restricts which platforms run (e.g. "chatgpt,perplexity" to skip
+    # Gemini while its proxy-flagging issue is unresolved). Flatten → filter → repack
+    # into fleet-sized waves so job/device slot alignment stays correct.
+    _plat_filter = {p.strip().lower() for p in os.environ.get("PLATFORMS", "").split(",") if p.strip()}
+    if _plat_filter:
+        flat = [j for w in waves for j in w if j.get("platform", "chatgpt").lower() in _plat_filter]
+        waves = [flat[i:i + nd] for i in range(0, len(flat), nd)] or [[]]
+        plan["waves"] = waves
+        print(f"  [PLATFORMS filter] {sorted(_plat_filter)} -> {len(flat)} jobs, {len(waves)} waves of {nd}", flush=True)
     total = sum(len(w) for w in waves)
     out = os.path.splitext(PLAN_PATH)[0] + "_results.csv"
     start_wave = plan.get("start_wave", 1)

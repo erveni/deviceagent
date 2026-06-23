@@ -47,7 +47,7 @@ from device_dispatch import (
 )
 from run_with_proxy import (
     gost_start, gost_stop, socksdroid_connect, socksdroid_disconnect,
-    wait_tunnel, rsid,
+    wait_tunnel, rsid, build_upstream_user,
 )
 
 MAX_PARALLEL = int(os.environ.get("MAX_PARALLEL", "3"))
@@ -87,9 +87,7 @@ def normalize_plan_job(j: dict) -> dict:
 def _build_spec(device_idx: int, sid: str) -> dict:
     return {
         "port": BASE_GOST + device_idx,
-        "upstream_user": (
-            f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-{PROXY_TARGET}"
-        ),
+        "upstream_user": build_upstream_user(sid),
         "sid": sid,
     }
 
@@ -131,7 +129,7 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
                 state = _parse_state(job.get("biz_address", ""))
                 retry_zip = _STATE_GOOD_ZIP.get(state.upper(), _FALLBACK_GOOD_ZIP) if state else _FALLBACK_GOOD_ZIP
                 print(
-                    f"  [retry] {reason} on {device_id} — rotating Decodo session, "
+                    f"  [retry] {reason} on {device_id} — rotating proxy session, "
                     f"state={state or '?'} zip={retry_zip}",
                     flush=True,
                 )
@@ -145,10 +143,7 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
                 sid = rsid()
                 spec = {
                     "port": BASE_GOST + device_idx,
-                    "upstream_user": (
-                        f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}"
-                        f"-country-us-zip-{retry_zip}"
-                    ),
+                    "upstream_user": build_upstream_user(sid, zip_=retry_zip, state=state),
                     "sid": sid,
                 }
                 gost_proc, gost_cfg = gost_start([spec])

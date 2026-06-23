@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.19-ranking-proven-config"
-        const val APP_VERSION_CODE = 18
+        const val APP_VERSION_NAME = "0.9.22-tabclose-heavy"
+        const val APP_VERSION_CODE = 40
         val lastResult = AtomicReference<SessionResult?>(null)
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
@@ -181,12 +181,13 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 try {
                     // Audit flow MATCHES daily exactly. Steps below are identical to
                     // executeSessionStatic — no audit-only guards, no platform-specific
-                    // branches. RANKING uses the LIGHT clear: a full clear means a cold
-                    // (uncached) Chrome that is too slow under the residential proxy and
-                    // blows the 120s generation budget (cross-platform timeouts). Ranking
-                    // only needs the screenshot (captured pre-wipe), so light clear is both
-                    // sufficient and far more reliable — the proven June-14 behaviour.
-                    if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = false) }) {
+                    // branches. RANKING uses the FULL clear (per directive 2026-06-21):
+                    // the light in-app "Delete browsing data" clears cookies/history but
+                    // never closes tabs, so tabs accumulated job-after-job on each phone.
+                    // The full pm-clear resets Chrome entirely (tabs included) so every job
+                    // starts clean — same as daily. Tradeoff: a cold first-run under the
+                    // proxy is slower (mitigated by dismissChromeFreRobust).
+                    if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
                         pr.status = "error"; pr.error = "reset_chrome failed"; continue
                     }
                     Thread.sleep(500)

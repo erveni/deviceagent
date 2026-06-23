@@ -54,6 +54,54 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return true
     }
 
+    /**
+     * Close EVERY open Chrome tab via Chrome's own tab switcher, selected by stable
+     * Chrome resource-ids (`tab_switcher_button` / `menu_button`) so it behaves
+     * identically on every OEM — unlike the Settings "Clear storage" path, which the
+     * W-series phones fail. This is what makes the per-job clear real on all phones
+     * with NO adb: even when the Settings wipe falls back to the light in-app delete
+     * (which never closed tabs), tabs no longer pile up job-after-job.
+     */
+    fun closeAllChromeTabs(): Boolean {
+        s.log("── CLOSE ALL CHROME TABS ──")
+        // Bring Chrome forward with a real page so the toolbar (and tab-switcher button) is present.
+        s.navigateToUrl("https://www.google.com")
+        Thread.sleep(2500)
+        dismissFreInline()
+        Thread.sleep(400)
+        val switcher = s.findNode(resourceId = "tab_switcher_button", timeoutMs = 4000)
+            ?: s.findNode(contentDesc = "Switch or close tabs", timeoutMs = 1500)
+            ?: findNodeContaining("switch or close tabs")
+        if (switcher == null) { s.log("[tabs] tab-switcher button not found — skipping"); return false }
+        clickSelfOrParent(switcher); switcher.recycle()
+        // A tab grid holding hundreds/thousands of accumulated tabs renders slowly, so
+        // wait generously before the menu lookups — short timeouts here were why the
+        // 318- and 1987-tab phones silently fell through with 'item not found'.
+        Thread.sleep(3500)
+        // Overflow menu inside the tab switcher (resource-id "menu_button", desc "Manage open tabs").
+        val menu = s.findNode(resourceId = "menu_button", timeoutMs = 6000)
+            ?: s.findNode(contentDesc = "Manage open tabs", timeoutMs = 2000)
+            ?: s.findNode(contentDesc = "More options", timeoutMs = 1500)
+            ?: s.findNode(contentDesc = "Customise and control Google Chrome", timeoutMs = 1000)
+            ?: s.findNode(contentDesc = "Customize and control Google Chrome", timeoutMs = 1000)
+        if (menu == null) { s.log("[tabs] tab-switcher overflow not found — skipping"); return false }
+        clickSelfOrParent(menu); menu.recycle()
+        Thread.sleep(1500)
+        val closeAll = s.findNode(text = "Close all tabs", timeoutMs = 7000)
+            ?: findNodeContaining("close all tabs")
+        if (closeAll == null) { s.log("[tabs] 'Close all tabs' item not found — skipping"); return false }
+        clickSelfOrParent(closeAll); closeAll.recycle()
+        Thread.sleep(1200)
+        // Confirm dialog: the button reads "Close all tabs and groups" (not just "Close"),
+        // so match the "close all" substring, not an exact label.
+        (findNodeContaining("close all tabs and groups")
+            ?: findNodeContaining("close all")
+            ?: s.findNode(text = "Close", timeoutMs = 800))?.let { clickSelfOrParent(it); it.recycle() }
+        Thread.sleep(1200)
+        s.log("[tabs] closed all tabs")
+        return true
+    }
+
     /** Find the first node whose text OR contentDescription contains [needle] (case-insensitive). */
     private fun findNodeContaining(needle: String): android.view.accessibility.AccessibilityNodeInfo? {
         val root = s.rootInActiveWindow ?: return null
@@ -102,6 +150,13 @@ class FlowEngine(private val s: AgentAccessibilityService) {
      */
     fun resetChrome(fullClear: Boolean = false): Boolean {
         s.log("── RESET CHROME (fullClear=$fullClear) ──")
+
+        // Always close every open tab first, via Chrome's own UI (no adb). The Settings
+        // "Clear storage" wipe below is the truest reset but fails on several W-series
+        // phones and silently degrades to the light in-app delete, which never closed
+        // tabs — so tabs accumulated job-after-job. Closing them here makes the clear
+        // real on EVERY phone for BOTH daily and ranking. (per directive 2026-06-22)
+        closeAllChromeTabs()
 
         if (fullClear) {
             val cleared = try { clearChromeData() } catch (e: Exception) { s.log("[clear] ex: ${e.message}"); false }

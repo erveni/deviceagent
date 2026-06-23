@@ -35,6 +35,7 @@ from run_with_proxy import (
     PROXY_USER,
     DURATION,
     MAC_IP,
+    build_upstream_user,
     extract_domain,
     gost_start,
     gost_stop,
@@ -212,7 +213,7 @@ def dispatch_one_job(
     sid = rsid()
     spec = {
         "port": BASE_GOST + device_idx,
-        "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us",
+        "upstream_user": build_upstream_user(sid),
         "sid": sid,
     }
 
@@ -248,7 +249,7 @@ def dispatch_one_job(
                 retry_zip = _STATE_GOOD_ZIP.get(state.upper(), _FALLBACK_GOOD_ZIP) if state else _FALLBACK_GOOD_ZIP
                 print(
                     f"  [retry] {reason} on device={device_id} — "
-                    f"rotating Decodo session, state={state or '?'} zip={retry_zip}",
+                    f"rotating proxy session, state={state or '?'} zip={retry_zip}",
                     flush=True,
                 )
                 gost_stop(gost_proc, gost_cfg)
@@ -264,10 +265,7 @@ def dispatch_one_job(
                 # the same wait; cc78963 / b758d1b missed it.
                 time.sleep(2)
                 sid = rsid()
-                upstream_user = (
-                    f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}"
-                    f"-country-us-zip-{retry_zip}"
-                )
+                upstream_user = build_upstream_user(sid, zip_=retry_zip, state=state)
                 spec = {
                     "port": BASE_GOST + device_idx,
                     "upstream_user": upstream_user,
