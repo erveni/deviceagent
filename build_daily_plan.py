@@ -208,8 +208,10 @@ def build_session(kw_id, platform):
 
 
 def extract_zip(addr):
-    m = re.search(r"\b(\d{5})\b", addr or "")
-    return m.group(1) if m else ""
+    # LAST 5-digit group — the zip sits at the address tail; the first group is
+    # often the street number (e.g. "21312 Provincial Blvd, Katy TX 77450").
+    zips = re.findall(r"\b(\d{5})\b", addr or "")
+    return zips[-1] if zips else ""
 
 
 def make_job(kw, biz, plat, sess):
