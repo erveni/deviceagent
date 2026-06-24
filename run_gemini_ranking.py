@@ -66,7 +66,7 @@ def _capture(dev_idx, serial, t):
     gport = BASE_GOST + dev_idx
     cdp = 9222 + dev_idx
     rfile, afile = f"/tmp/gem_result_{dev_idx}.json", f"/tmp/gem_answer_{dev_idx}.txt"
-    spec = {"port": gport, "upstream_user": build_upstream_user(sid, zip_=t.get("zip") or None), "sid": sid}
+    spec = {"port": gport, "upstream_user": build_upstream_user(sid, zip_=t.get("zip") or None, country=t.get("country")), "sid": sid}
     gp = gc = None
     t0 = time.time()
     try:

@@ -21,7 +21,7 @@ PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")  # e.g. asn-21928 (T
 PROXY_PROVIDER = os.environ.get("PROXY_PROVIDER", "decodo").lower()
 
 
-def build_upstream_user(sid, zip_=None, state=None):
+def build_upstream_user(sid, zip_=None, state=None, country=None):
     """Build the upstream proxy username for the active provider.
 
     sid    — per-listener session id (rotation key on Decodo; cosmetic on
@@ -31,9 +31,31 @@ def build_upstream_user(sid, zip_=None, state=None):
     """
     if PROXY_PROVIDER == "dataimpulse":
         return f"{PROXY_USER}__cr.us__sid.{sid}"
+    if (country or "us").lower() == "ca":
+        # Canada: country-level only — Decodo city/postal CA targeting is unreliable
+        # (probed 2026-06-24: -country-ca works, -country-ca-city-* returns empty).
+        return f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-ca"
     if zip_:
         return f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us-zip-{zip_}"
     return f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-country-us"
+
+_CA_PROVINCES = {"ON","QC","BC","AB","MB","SK","NS","NB","NL","PE","NT","YT","NU"}
+
+def geo_target(job):
+    """Derive (zip_or_None, country) for proxy geo-targeting from a job/target.
+
+    biz_zip is unreliable — it is sometimes the street number (e.g. "21312
+    Provincial Blvd, Katy, TX 77450" stored biz_zip=21312), so prefer the LAST
+    5-digit group parsed from biz_address (the real zip sits at the address tail).
+    Canada is detected by province or 'Canada' in the address and targeted at
+    country level (Decodo has no reliable CA zip targeting)."""
+    addr = job.get("biz_address") or ""
+    state = (job.get("biz_state") or "").upper()
+    if state in _CA_PROVINCES or "canada" in addr.lower():
+        return None, "ca"
+    zips = re.findall(r"\b(\d{5})\b", addr)
+    z = zips[-1] if zips else (str(job.get("biz_zip") or "").strip() or None)
+    return z, "us"
 WAVE_STAGGER_S = int(os.environ.get("WAVE_STAGGER_S", "0"))  # seconds between starting each phone's session; 0 = fire all at once (residential)
 # Auto-retry transient errors with a fresh Decodo session — mirrors
 # audit_dispatch_http.py:587-643 + device_dispatch.py:217. Most 'input failed'
@@ -512,8 +534,9 @@ def main():
         for i in range(used):
             sid = f"phone{i:02d}"
             job_i = wave[i] if i < n else None
-            if GEMINI_INLINE and job_i and job_i.get("platform","").lower() == "gemini" and job_i.get("biz_zip"):
-                uu = build_upstream_user(sid, zip_=str(job_i.get("biz_zip")))
+            if GEMINI_INLINE and job_i and job_i.get("platform","").lower() == "gemini":
+                gz, gc = geo_target(job_i)
+                uu = build_upstream_user(sid, zip_=gz, country=gc)
             else:
                 uu = f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-{PROXY_TARGET}"
             specs.append({"port": BASE_GOST + i, "upstream_user": uu, "sid": sid})
