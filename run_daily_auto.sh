@@ -15,19 +15,14 @@ LOG="/private/tmp/daily_auto_${DATE}.log"
 export SSL_CERT_FILE=$(python3 -c "import certifi;print(certifi.where())")
 export EXECUTOR_TOKEN=$(aws secretsmanager get-secret-value --secret-id aeo-admin/prod --profile aeo-admin --region us-east-1 --query SecretString --output text | python3 -c "import sys,json;print(json.load(sys.stdin).get('EXECUTOR_TOKEN',''))")
 set -a; source .env.dev; set +a
-# RESIDENTIAL daily proxy (validated) + balanced/stable knobs.
-# Default is Decodo; set PROXY_PROVIDER=dataimpulse (+ DATAIMPULSE_PASS) to switch.
-# This export runs AFTER the .env.dev source above, so it wins over any .env.dev proxy vars.
-if [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
-  export PROXY_PROVIDER=dataimpulse \
-         PROXY_HOST=gw.dataimpulse.com PROXY_PORT=10000 \
-         PROXY_USER=78e340233fcc27a26b14 \
-         PROXY_PASS="${DATAIMPULSE_PASS:?set DATAIMPULSE_PASS for dataimpulse}" \
-         USE_SNI_RELAY=0 PROXY_TARGET=country-us
-  echo "[daily ${DATE}] proxy: DataImpulse (gw.dataimpulse.com:10000, __cr.us sticky)" | tee -a "$LOG"
-else
-  export PROXY_USER=user-spmqebjuzf PROXY_PASS='Klf0oAnRcz96Da=6fv' PROXY_HOST=gate.decodo.com PROXY_PORT=10001 USE_SNI_RELAY=0 PROXY_TARGET=country-us
-fi
+# RESIDENTIAL daily proxy — Decodo (DataImpulse removed: out of GB, 2026-06-24).
+# Runs AFTER the .env.dev source so it wins over any .env.dev proxy vars.
+export PROXY_PROVIDER=decodo \
+       PROXY_HOST=gate.decodo.com PROXY_PORT=10001 \
+       PROXY_USER=user-spmqebjuzf \
+       PROXY_PASS="${DECODO_PASS:?set DECODO_PASS in .env.dev (gitignored) — never hardcode}" \
+       USE_SNI_RELAY=0 PROXY_TARGET=country-us
+echo "[daily ${DATE}] proxy: Decodo residential (gate.decodo.com:10001)" | tee -a "$LOG"
 export ONLY_ONLINE=1
 # Auto-detect which phones are actually alive (adb + app health) and size the run
 # to them — no stale hardcoded exclude list. Caller can still override by exporting

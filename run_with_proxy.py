@@ -89,20 +89,29 @@ DEVICES = [
 # ONLY_ONLINE=1 prunes DEVICES to phones currently reporting `device` in
 # `adb devices`, so a run skips offline phones instead of failing their jobs
 # with device_pool_timeout. Runs at import time, before DevicePool sizes itself.
+def _hw_core(_s):
+    """Stable hardware id from an mDNS adb serial. The mDNS wrapper rotates the
+    trailing hash and a " (N)" duplicate-counter on every reconnect, but the
+    hardware id (token right after "adb-") never changes — match on that so a
+    DEVICES entry still resolves to its phone after the serial flaps."""
+    return _s.split("-")[1] if _s.startswith("adb-") else _s.strip()
+
 if os.environ.get("ONLY_ONLINE") == "1":
     _out = subprocess.run("adb devices", shell=True, capture_output=True, text=True).stdout
     # adb devices is TAB-separated (serial<TAB>state). mDNS serials can contain a
     # space (the "(2)" variant), so split on TAB — never whitespace, or those
     # serials get truncated and the phone is wrongly treated as offline.
-    _online = set()
+    _online = {}  # hw-core -> ACTUAL connected serial (use this for adb -s)
     for _l in _out.splitlines()[1:]:
         if "\t" not in _l:
             continue
         _ser, _, _state = _l.partition("\t")
         if _state.strip() == "device":
-            _online.add(_ser.strip())
+            _online[_hw_core(_ser.strip())] = _ser.strip()
     _before = len(DEVICES)
-    DEVICES = [(n, s) for n, s in DEVICES if s in _online]
+    # Resolve each DEVICES serial to the serial that is ACTUALLY connected right
+    # now (by hardware core), and keep only phones that are online.
+    DEVICES = [(n, _online[_hw_core(s)]) for n, s in DEVICES if _hw_core(s) in _online]
     print(f"[ONLY_ONLINE] {len(DEVICES)}/{_before} phones online: "
           f"{', '.join(n for n, _ in DEVICES)}", flush=True)
 

@@ -39,7 +39,9 @@ EXCLUDED_BIZ_NAMES = {
     "Nez Perce Traditions Gift Shop",
     "Smith's Enterprise",
 }
-PLATFORMS = ("chatgpt", "gemini", "perplexity")
+PLATFORMS = tuple(
+    p.strip() for p in os.environ.get("PLATFORMS", "chatgpt,gemini,perplexity").split(",") if p.strip()
+)
 CSV_PATH = os.environ.get(
     "AUDIT_CSV",
     f"/Users/seolocalph/projects/device-agent/rabbitmq_audit_results_{ANCHOR_DATE}_full.csv",

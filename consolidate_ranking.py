@@ -77,13 +77,20 @@ def redate_screenshot(path, day):
     return new_path
 
 
+# PLATFORMS env restricts which platforms ship (e.g. "chatgpt,perplexity" to skip
+# a platform whose data is unreliable this run). Unset = all platforms.
+_PLAT_FILTER = {p.strip().lower() for p in os.environ.get("PLATFORMS", "").split(",") if p.strip()}
+
 # 1. pick one OCR-validated success per (campaign_id, platform); latest wins
 best = {}
 for f in SOURCES:
     for r in csv.DictReader(open(f)):
         if (r.get("status") or "").lower() != "success":
             continue
-        k = ((r.get("campaign_id") or "").strip(), (r.get("platform") or "").lower().strip())
+        plat = (r.get("platform") or "").lower().strip()
+        if _PLAT_FILTER and plat not in _PLAT_FILTER:
+            continue
+        k = ((r.get("campaign_id") or "").strip(), plat)
         best[k] = r
 print(f"success (kw,platform) pairs: {len(best)}")
 
