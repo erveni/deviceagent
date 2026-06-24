@@ -688,7 +688,34 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             return true
         }
 
-        // ── ChatGPT / Perplexity (PROVEN original path): semantic ACTION_CLICK on the
+        // ── ChatGPT: the new logged-out chatgpt.com UI ignores ACTION_CLICK on the
+        // send button — the prompt clears and it resets to the empty home screen,
+        // never sending (same class of bug Gemini hit). Tap the real on-screen
+        // send-button center instead; verify via didSend(). ACTION_CLICK only as a
+        // last resort. ──
+        if (platform.lowercase() == "chatgpt") {
+            val node = findSendNode()
+            if (node != null) {
+                val r = android.graphics.Rect(); node.getBoundsInScreen(r); node.recycle()
+                if (r.width() > 0 && r.height() > 0 &&
+                    r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
+                    s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
+                    s.log("Submit[chatgpt]: gesture-tapped send center (${r.centerX()},${r.centerY()})")
+                    Thread.sleep(1500)
+                    if (didSend()) return true
+                }
+                // bounds degenerate or tap missed — try ACTION_CLICK as a fallback
+                val n2 = findSendNode()
+                if (n2 != null) {
+                    val clicked = s.clickNode(n2); n2.recycle()
+                    if (clicked) { Thread.sleep(1500); if (didSend()) { s.log("Submit[chatgpt]: ACTION_CLICK fallback sent"); return true } }
+                }
+            }
+            s.log("Submit[chatgpt]: send not confirmed (no usable send node)")
+            return true
+        }
+
+        // ── Perplexity (PROVEN original path): semantic ACTION_CLICK on the
         // labelled send button. Works regardless of the node's (often degenerate) web
         // bounds — Perplexity's send button reports zero-height bounds, so any coordinate
         // tap misses; ACTION_CLICK does not. Two passes, return on first successful click. ──

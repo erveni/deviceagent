@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 41
-        versionName = "0.9.23-gentimeout-240"
+        versionCode = 42
+        versionName = "0.9.24-chatgpt-send-fix"
     }
 
     buildTypes {
