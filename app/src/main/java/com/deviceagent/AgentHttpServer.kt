@@ -18,9 +18,14 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.22-tabclose-heavy"
-        const val APP_VERSION_CODE = 40
+        const val APP_VERSION_NAME = "0.9.23-gentimeout-240"
+        const val APP_VERSION_CODE = 41
         val lastResult = AtomicReference<SessionResult?>(null)
+        // Generation-wait timeout (seconds) for audit/capture sessions. Raised
+        // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
+        // routinely exceed 120s and were erroring as "generation timeout".
+        // Overridable per request via /session {"genTimeoutSec": N}.
+        @Volatile var genTimeoutSec: Int = 240
         // Approximation of app startup time — initialized when the class is first
         // referenced (which happens at HTTP server start, very early in the
         // process lifecycle). Used for /health uptime reporting.
@@ -94,7 +99,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 // Gemini's logged-out chat wipes ~3s after the answer renders, so poll
                 // quickly instead of burning the window on a long pre-wait.
                 Thread.sleep(if (platform.lowercase() == "gemini") 400 else 2000)
-                if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
+                if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
                     result.status = "error"; result.error = "generation timeout"; return
                 }
                 if (platform.lowercase() == "gemini") {
@@ -205,7 +210,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
                     // waste the window on a long pre-wait.
                     Thread.sleep(if (platform == "gemini") 400 else 2000)
-                    if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
+                    if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
                         pr.status = "error"; pr.error = "generation timeout"; continue
                     }
 
@@ -336,7 +341,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     Thread.sleep(300)
                     step("submit") { flowEngine.submit(plat) }
                     Thread.sleep(2000)
-                    if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = 120) }) {
+                    if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
                         pr.status = "error"; pr.error = "generation timeout"; result.status = "error"; return
                     }
                     // Dismiss any popup that appears WITH the answer (ChatGPT pops a
@@ -531,6 +536,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         try {
             val json = JSONObject(body)
             val sessionType = json.optString("type", "daily")
+            // Per-request override of the generation-wait timeout (default 240s).
+            genTimeoutSec = json.optInt("genTimeoutSec", 240)
 
             when (sessionType) {
                 "audit" -> handleAuditSession(writer, json)

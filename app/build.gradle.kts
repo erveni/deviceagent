@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 40
-        versionName = "0.9.22-tabclose-heavy"
+        versionCode = 41
+        versionName = "0.9.23-gentimeout-240"
     }
 
     buildTypes {

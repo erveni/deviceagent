@@ -1399,7 +1399,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
     }
 
-    fun waitForGeneration(timeoutSec: Int = 180): Boolean {
+    fun waitForGeneration(timeoutSec: Int = 240): Boolean {
         s.log("── WAIT FOR GENERATION ──")
         val start = System.currentTimeMillis()
         val timeout = timeoutSec * 1000L

@@ -460,7 +460,7 @@ def _keyword_text(entry: dict, keyword_id: int) -> str:
 
 # ── HTTP audit call ──
 
-AUDIT_HTTP_TIMEOUT_S = 360  # caps a single platform call (120s wait_gen + buffer)
+AUDIT_HTTP_TIMEOUT_S = 420  # caps a single platform call (240s wait_gen [v0.9.23] + ~60s load + ~40s capture + buffer)
 
 
 def _post_audit(local_port: int, body: dict) -> dict:
