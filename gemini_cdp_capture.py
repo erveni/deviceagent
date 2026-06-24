@@ -50,6 +50,25 @@ def _gemini_tab_ws(serial):
     return None
 
 
+def _close_all_tabs(serial):
+    """Close every Chrome page tab via the CDP HTTP endpoint so tabs don't pile up
+    across captures. The CP flow closes tabs (FlowEngine.closeAllChromeTabs); the
+    CDP path must too — otherwise each am-start of /app leaks a tab (phones hit
+    1000+ tabs over a full run, which slows Chrome to a crawl)."""
+    closed = 0
+    for p in _cdp_json(serial, tries=2):
+        if p.get("type") == "page" and p.get("id"):
+            try:
+                urllib.request.urlopen(
+                    f"http://localhost:{CDP_PORT}/json/close/{p['id']}", timeout=3).read()
+                closed += 1
+            except Exception:
+                pass
+    if closed:
+        print(f"[tabs] closed {closed} tab(s)")
+    return closed
+
+
 class CDP:
     def __init__(self, ws_url):
         self.ws = websocket.create_connection(ws_url, suppress_origin=True, timeout=10, max_size=None)
@@ -123,6 +142,17 @@ def main():
     c = CDP(ws_url)
     c.call("Network.enable")
     c.call("Page.enable")
+
+    # 0a) RESET the anonymous Gemini session before each capture. Logged-out
+    # Gemini's conversation is tied to the anonymous cookie; without a reset a
+    # 2nd+ capture on the same phone reuses the stale (wiped) conversation and
+    # never emits a fresh StreamGenerate (captured=False). Clearing cookies +
+    # reloading /app forces a brand-new session — the CDP analogue of the daily
+    # flow's Chrome reset. Disable with GEMINI_RESET=0.
+    if os.environ.get("GEMINI_RESET", "0") == "1":
+        c.call("Network.clearBrowserCookies")
+        c.call("Page.navigate", {"url": "https://gemini.google.com/app"})
+        time.sleep(5)
 
     # 0) wait until the Gemini input has actually rendered (page can take a while)
     ready = False
@@ -227,6 +257,8 @@ def main():
             print("no prose block; raw head:", text[:300])
 
     c.close()
+    # Close the tab(s) this capture used so they don't accumulate across runs.
+    _close_all_tabs(serial)
     if not got_answer:
         with open(RESULT_FILE, "w") as fh:
             json.dump({"captured": False, "answer": None,

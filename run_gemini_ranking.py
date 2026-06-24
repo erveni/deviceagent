@@ -41,10 +41,10 @@ from run_with_proxy import (  # noqa: E402
 )
 
 HERE = "/Users/seolocalph/projects/device-agent"
-TARGETS = json.load(open("/tmp/gemini_backfill_targets.json"))
-CP_FELLOW = json.load(open("/tmp/cp_fellow_dates.json"))
-OUT = os.path.join(HERE, "ranking_gemini_backfill_consolidated.csv")
-DESKTOP = "/Users/seolocalph/Desktop/Rankings/ranking_gemini_backfill_consolidated.csv"
+TARGETS = json.load(open(os.environ.get("GEMINI_TARGETS", "/tmp/gemini_backfill_targets.json")))
+CP_FELLOW = json.load(open(os.environ.get("GEMINI_CP_FELLOW", "/tmp/cp_fellow_dates.json")))
+OUT = os.environ.get("GEMINI_OUT") or os.path.join(HERE, "ranking_gemini_backfill_consolidated.csv")
+DESKTOP = os.environ.get("GEMINI_DESKTOP") or "/Users/seolocalph/Desktop/Rankings/ranking_gemini_backfill_consolidated.csv"
 WORKERS = int(os.environ.get("GEMINI_WORKERS", "6"))
 MAX_ROUNDS = int(os.environ.get("GEMINI_MAX_ROUNDS", "10"))
 
@@ -92,12 +92,18 @@ def _capture(dev_idx, serial, t):
                        capture_output=True, timeout=130, env=env)
         res = json.load(open(rfile)) if os.path.exists(rfile) else {}
         dur = round(time.time() - t0, 1)
-        if res.get("captured") and res.get("rank_position"):
-            return {**t, "status": "success", "rank_position": res["rank_position"],
-                    "rank_total": res["rank_total"], "response_text": (res.get("answer") or "")[:4000],
+        # Success = the response was SAVED off the wire (captured), mirroring the
+        # daily's "generation happened" signal. The [RANK: X/Y] parse is a bonus,
+        # not a gate — a saved answer with no rank line is still a success (and is
+        # NOT retried). Only a genuine capture miss (no StreamGenerate body) fails.
+        if res.get("captured"):
+            return {**t, "status": "success",
+                    "rank_position": res.get("rank_position"), "rank_total": res.get("rank_total"),
+                    "has_rank": bool(res.get("rank_position")),
+                    "response_text": (res.get("answer") or "")[:4000],
                     "prompt": prompt, "duration_s": dur}
-        return {**t, "status": "error", "error": "no_rank",
-                "response_text": (res.get("answer") or "")[:1000], "prompt": prompt, "duration_s": dur}
+        return {**t, "status": "error", "error": res.get("error") or "not_captured",
+                "response_text": "", "prompt": prompt, "duration_s": dur}
     except Exception as e:
         return {**t, "status": "error", "error": str(e)[:90]}
     finally:
@@ -144,14 +150,16 @@ def _load_existing():
     res = {}
     if os.path.exists(OUT):
         for r in csv.DictReader(open(OUT)):
-            if r.get("status") == "success" and r.get("rank_position"):
+            # Done = response saved (captured), matching _capture's success rule —
+            # not gated on a parsed rank, so resumes only retry genuine misses.
+            if r.get("status") == "success":
                 res[f"{r['campaign_id']}|{r['keyword']}"] = {
                     "campaign_id": r["campaign_id"], "keyword": r["keyword"],
                     "biz_name": r["biz_name"], "city": r.get("proxy_city", ""),
                     "state": r.get("proxy_region", ""), "zip": r.get("proxy_zip", ""),
                     "date": r.get("date"), "scope": r.get("scope", ""),
-                    "status": "success", "rank_position": r["rank_position"],
-                    "rank_total": r["rank_total"], "response_text": r.get("response_text", ""),
+                    "status": "success", "rank_position": r.get("rank_position", ""),
+                    "rank_total": r.get("rank_total", ""), "response_text": r.get("response_text", ""),
                     "prompt": r.get("prompt", ""), "duration_s": r.get("duration_s", ""),
                 }
     return res

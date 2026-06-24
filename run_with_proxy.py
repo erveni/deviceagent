@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Daily plan runner — wave-based. Fresh proxy per wave. CSV after every session."""
 
-import json, sys, time, csv, os, subprocess, random, string, threading, math
+import json, sys, time, csv, os, subprocess, random, string, threading, math, re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -299,9 +299,76 @@ def http_post(port, path, body=None):
         with urllib.request.urlopen(req, timeout=10) as r: return json.loads(r.read())
     except: return {"status":"error","error":"http fail"}
 
+# ── Inline Gemini (CDP StreamGenerate capture) ───────────────────────────────
+# When GEMINI_INLINE=1, gemini jobs run in the SAME mixed wave as ChatGPT/
+# Perplexity but route to the CDP save-capture instead of the app /session flow
+# (logged-out Gemini wipes its answer from the UI; we read it off the wire). The
+# wave's gost for a gemini-assigned device is zip-targeted so Gemini's IP-geo is
+# correct. Success = the answer was SAVED (captured); rank is a bonus parse.
+GEMINI_INLINE = os.environ.get("GEMINI_INLINE") == "1"
+GEMINI_PROMPT_T = os.environ.get("GEMINI_PROMPT_T") or (
+    "Top 3 businesses for {kw} in {city}, {state} {zip}. Numbered list, each with "
+    "a one-sentence reason. After the list, rank {biz} ({url}) among all businesses "
+    "in this space. You MUST include this exact line on its own: [RANK: X/Y] where "
+    "X is the position and Y is total businesses. Keep entire response under 160 words."
+)
+
+def _gemini_cdp_session(device_idx, job, gost_spec, proxy_ip):
+    serial = DEVICES[device_idx][1]
+    cdp = 9222 + device_idx
+    rfile, afile = f"/tmp/gem_result_{device_idx}.json", f"/tmp/gem_answer_{device_idx}.txt"
+    t0 = time.time()
+    url = re.sub(r"[^a-z0-9]", "", (job.get("biz_name") or "biz").lower())[:18] + ".com"
+    prompt = GEMINI_PROMPT_T.format(kw=job.get("keyword_text",""), city=job.get("biz_city",""),
+                                    state=job.get("biz_state",""), zip=job.get("biz_zip",""),
+                                    biz=job.get("biz_name",""), url=url)
+    res = {}
+    try:
+        run(f'adb -s "{serial}" shell "am start -n com.android.chrome/com.google.android.apps.chrome.Main '
+            f"-a android.intent.action.VIEW -d 'https://gemini.google.com/app'\"", 12)
+        time.sleep(9)
+        for f in (rfile, afile):
+            try: os.remove(f)
+            except OSError: pass
+        env = {**os.environ, "CDP_PORT": str(cdp),
+               "GEMINI_RESULT_FILE": rfile, "GEMINI_ANSWER_FILE": afile}
+        subprocess.run(["python3", "gemini_cdp_capture.py", serial, prompt],
+                       capture_output=True, timeout=130, env=env)
+        if os.path.exists(rfile):
+            res = json.load(open(rfile))
+    except Exception as e:
+        res = {"error": str(e)[:90]}
+    dur = round(time.time() - t0, 1)
+    captured = bool(res.get("captured"))
+    err = "" if captured else (res.get("error") or "not_captured")
+    return {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "wave_index": 0,
+        "client_id": job.get("client_id",""), "client_name": job.get("client_name",""),
+        "biz_name": job.get("biz_name",""), "search_address": job.get("biz_address",""),
+        "campaign_id": job.get("campaign_id",""), "campaign_name": job.get("campaign_name",""),
+        "keyword": job.get("keyword_text",""), "keyword_variant": job.get("keyword_variant", job.get("keyword_text","")),
+        "prompt": prompt, "follow_up": "", "has_follow_up": False,
+        "device_id": DEVICES[device_idx][0], "platform": "gemini",
+        "status": "success" if captured else "error", "duration_s": dur,
+        "proxy_status": "CONNECTED", "proxy_username": gost_spec.get("upstream_user",""),
+        "proxy_host": MAC_IP, "proxy_port": gost_spec["port"], "proxy_ip": proxy_ip or "none",
+        "base_latitude": job.get("biz_lat",0) or 0, "base_longitude": job.get("biz_lng",0) or 0,
+        "mocked_latitude": 0, "mocked_longitude": 0, "mocked_timezone": job.get("biz_timezone",""),
+        "backlinks_expected": 0, "backlink_injected": False,
+        "backlink_found": False, "backlink_url": "",
+        "failure_step": err, "error": err,
+        "response_text": (res.get("answer") or "")[:4000],
+        "rank_position": res.get("rank_position") or "",
+        "rank_total": res.get("rank_total") or "",
+        "has_rank": bool(res.get("rank_position")),
+    }
+
 def session(device_idx, job, gost_spec, proxy_ip):
     port = 8765 + device_idx
     platform = job.get("platform","chatgpt").lower()
+    if GEMINI_INLINE and platform == "gemini":
+        return _gemini_cdp_session(device_idx, job, gost_spec, proxy_ip)
     prompt = job.get("prompt","")
     follow_up = job.get("follow_up","") or None
     backlinks = job.get("backlinks",[])
@@ -401,6 +468,8 @@ def main():
            "base_latitude","base_longitude","mocked_latitude","mocked_longitude",
            "mocked_timezone","backlinks_expected","backlink_injected",
            "backlink_found","backlink_url","failure_step","error"]
+    if GEMINI_INLINE:
+        fns = fns + ["response_text","rank_position","rank_total","has_rank"]
 
     def save_csv():
         with csv_lock:
@@ -442,7 +511,12 @@ def main():
         specs = []
         for i in range(used):
             sid = f"phone{i:02d}"
-            specs.append({"port": BASE_GOST + i, "upstream_user": f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-{PROXY_TARGET}", "sid": sid})
+            job_i = wave[i] if i < n else None
+            if GEMINI_INLINE and job_i and job_i.get("platform","").lower() == "gemini" and job_i.get("biz_zip"):
+                uu = build_upstream_user(sid, zip_=str(job_i.get("biz_zip")))
+            else:
+                uu = f"{PROXY_USER}-session-{sid}-sessionduration-{DURATION}-{PROXY_TARGET}"
+            specs.append({"port": BASE_GOST + i, "upstream_user": uu, "sid": sid})
         gost_proc, gost_cfg = gost_start(specs)
 
         # Resolve per-port Decodo exit IPs via Mac-side curl through the gost
