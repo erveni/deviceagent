@@ -17,9 +17,12 @@ export PROXY_PROVIDER=decodo PROXY_HOST=gate.decodo.com PROXY_PORT=10001 \
        PROXY_USER=user-spmqebjuzf PROXY_PASS="${DECODO_PASS:?set DECODO_PASS}" \
        USE_SNI_RELAY=0 PROXY_TARGET=country-us
 export ONLY_ONLINE=1 DEVICE_EXCLUDE=device-117 DATE=2026-06-25 PLATFORMS=chatgpt,gemini,perplexity
-export KEYWORD_IDS_FILE=/tmp/rank_target_kwids.json
-export AUDIT_CSV="$PWD/rabbitmq_audit_results_2026-06-25_stale_full.csv"
-export EXCLUDE_SUCCESS="$PWD/rabbitmq_audit_results_2026-06-25_stale_full*.csv"
+export AEO_SKIP_PREFLIGHT=1   # kill per-job preflight curl (Decodo session-churn / rc=28 source)
+# Only the RANKABLE subset (120 kw with usable address+url); the other 216
+# targets lack business address/URL in AEOAdmin and can't be audit-ranked.
+export KEYWORD_IDS_FILE=/tmp/rank_target_rankable.json
+export AUDIT_CSV="$PWD/rabbitmq_audit_results_2026-06-25_rankable.csv"
+export EXCLUDE_SUCCESS="$PWD/rabbitmq_audit_results_2026-06-25_rankable*.csv"
 export RETRY_KEEP_NORANK=1
 
 [ -f "$KEYWORD_IDS_FILE" ] || { log "FATAL: target ids file missing ($KEYWORD_IDS_FILE)"; exit 1; }

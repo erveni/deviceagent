@@ -466,6 +466,10 @@ AUDIT_HTTP_TIMEOUT_S = 420  # caps a single platform call (240s wait_gen [v0.9.2
 # every flaky attempt hold its gost/Decodo session ~2x longer -> session
 # contention + glacial throughput. 150s covers real generation without that.
 AUDIT_GEN_TIMEOUT_SEC = int(os.environ.get("AUDIT_GEN_TIMEOUT_SEC", "150"))
+# Skip the Mac-side preflight exit-IP curl (best-effort, only populates proxy_ip).
+# Under fleet-wide ranking it adds a 2nd Decodo session + a 15s timeout per job,
+# which is the main source of concurrent-session contention (preflight rc=28).
+_SKIP_PREFLIGHT = os.environ.get("AEO_SKIP_PREFLIGHT") == "1"
 
 
 def _post_audit(local_port: int, body: dict) -> dict:
@@ -759,23 +763,26 @@ def dispatch_audit_job(
         # The original code omitted credentials, so every preflight silently
         # returned rc=97 "User was rejected by the SOCKS5 server" — that's why
         # proxy_ip was "none" on every row.
-        try:
-            cp = subprocess.run(
-                # --socks5-hostname (remote DNS): mobile Decodo rejects the
-                # IP-CONNECT that plain --socks5 (local resolve) produces, so the
-                # preflight always returned rc=97. Matches run_with_proxy.resolve_proxy_ip.
-                ["curl", "-sS", "--max-time", "15", "--socks5-hostname",
-                 f"anon:anon@127.0.0.1:{gost_port}", "https://ifconfig.me"],
-                capture_output=True, text=True, timeout=18,
-            )
-            resolved_ip = cp.stdout.strip()
-            if resolved_ip and len(resolved_ip) < 64:
-                _resolved_proxy_ip[serial] = resolved_ip
-            else:
-                print(f"  [preflight-ip] {serial} gost:{gost_port} rc={cp.returncode} "
-                      f"stderr={cp.stderr.strip()[:120]!r} stdout={resolved_ip[:120]!r}", flush=True)
-        except Exception as e:
-            print(f"  [preflight-ip] {serial} gost:{gost_port} curl raised {type(e).__name__}: {e}", flush=True)
+        if _SKIP_PREFLIGHT:
+            _resolved_proxy_ip[serial] = "skipped"
+        else:
+            try:
+                cp = subprocess.run(
+                    # --socks5-hostname (remote DNS): mobile Decodo rejects the
+                    # IP-CONNECT that plain --socks5 (local resolve) produces, so the
+                    # preflight always returned rc=97. Matches run_with_proxy.resolve_proxy_ip.
+                    ["curl", "-sS", "--max-time", "15", "--socks5-hostname",
+                     f"anon:anon@127.0.0.1:{gost_port}", "https://ifconfig.me"],
+                    capture_output=True, text=True, timeout=18,
+                )
+                resolved_ip = cp.stdout.strip()
+                if resolved_ip and len(resolved_ip) < 64:
+                    _resolved_proxy_ip[serial] = resolved_ip
+                else:
+                    print(f"  [preflight-ip] {serial} gost:{gost_port} rc={cp.returncode} "
+                          f"stderr={cp.stderr.strip()[:120]!r} stdout={resolved_ip[:120]!r}", flush=True)
+            except Exception as e:
+                print(f"  [preflight-ip] {serial} gost:{gost_port} curl raised {type(e).__name__}: {e}", flush=True)
         # IP warmup — mimic wave's implicit settle time without curl probes.
         # Cold Decodo IPs benefit from a pure-sleep pause before HTTPS fires;
         # ports the rolling fix (run_rolling_test.py 2026-05-16) to audit. Zero
