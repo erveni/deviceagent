@@ -48,6 +48,11 @@ CSV_PATH = os.environ.get(
 )
 WORKERS = int(os.environ.get("WORKERS", str(len(DEVICES))))  # default = phone count
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
+# Tunnel warmup gate: run one canary job per phone first and abort the batch if
+# fewer than WARMUP_MIN_FRAC of phones get a live tunnel (avoids grinding the
+# whole batch against dead tunnels). WARMUP_GATE=0 disables.
+WARMUP_GATE = os.environ.get("WARMUP_GATE", "1") == "1"
+WARMUP_MIN_FRAC = float(os.environ.get("WARMUP_MIN_FRAC", "0.5"))
 
 # Load catalog (refresh via /tmp/fetch_catalog_full.py if missing)
 biz_by_id = {b["id"]: b for b in json.load(open("/tmp/biz_admin.json"))}
@@ -339,22 +344,61 @@ def _one(idx_spec):
         return ("err", idx, kw, biz, plat, jtype, f"{type(e).__name__}: {e}")
 
 
+def _tally(payload, kind, kw, biz, plat):
+    """Fold one job result into counts/errors. Return True if the phone got a
+    LIVE tunnel (the failure, if any, was not proxy_unreachable)."""
+    if kind == "ok":
+        status = (payload.get("status") or "").lower()
+        counts[status if status in counts else "other"] = counts.get(status if status in counts else "other", 0) + 1
+        err = (payload.get("error") or "").lower()
+    else:
+        counts["error"] += 1
+        errors.append((kw["id"], biz.get("name"), plat, payload))
+        err = str(payload).lower()
+    return "proxy_unreachable" not in err
+
+
+# --- Tunnel warmup + health gate -------------------------------------------
+# Every proxied job routes 100% of a phone's traffic through the Decodo VPN, so a
+# dead tunnel makes the phone look offline. Run a canary wave (one real job per
+# online phone) FIRST and check how many got a live tunnel; abort before
+# committing the whole batch if the fleet path is unhealthy, instead of grinding
+# hundreds of jobs against dead tunnels. Canary jobs are real work — their rows
+# count, nothing is wasted. Disable with WARMUP_GATE=0.
+_total = len(job_specs)
+if WARMUP_GATE and len(job_specs) > WORKERS:
+    canary, job_specs = job_specs[:WORKERS], job_specs[WORKERS:]
+    print(f"\n[warmup] canary wave: {len(canary)} jobs (~1 per phone) to verify tunnels before the full batch...", flush=True)
+    live = 0
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        futs = {ex.submit(_one, (i, s)): i for i, s in enumerate(canary)}
+        for fut in as_completed(futs):
+            kind, idx, kw, biz, plat, jtype, payload = fut.result()
+            done += 1
+            if _tally(payload, kind, kw, biz, plat):
+                live += 1
+    frac = live / len(canary) if canary else 0.0
+    print(f"[warmup] tunnels live: {live}/{len(canary)} ({frac*100:.0f}%)", flush=True)
+    if frac < WARMUP_MIN_FRAC:
+        print(f"[warmup] ABORT: only {live}/{len(canary)} phones got a live tunnel "
+              f"(< {WARMUP_MIN_FRAC*100:.0f}% threshold). Fleet/proxy path unhealthy — NOT "
+              f"dispatching the remaining {len(job_specs)} jobs. Check gost/SocksDroid/Decodo "
+              f"and re-run.", flush=True)
+        sys.exit(2)
+    print(f"[warmup] fleet healthy — dispatching remaining {len(job_specs)} jobs.\n", flush=True)
+
+
 with ThreadPoolExecutor(max_workers=WORKERS) as ex:
     futs = {ex.submit(_one, (i, s)): i for i, s in enumerate(job_specs)}
     for fut in as_completed(futs):
         kind, idx, kw, biz, plat, jtype, payload = fut.result()
         done += 1
-        if kind == "ok":
-            status = (payload.get("status") or "").lower()
-            counts[status if status in counts else "other"] = counts.get(status if status in counts else "other", 0) + 1
-        else:
-            counts["error"] += 1
-            errors.append((kw["id"], biz.get("name"), plat, payload))
-        if done % 10 == 0 or done == len(job_specs):
+        _tally(payload, kind, kw, biz, plat)
+        if done % 10 == 0 or done == _total:
             elapsed = time.time() - t0
             rate = done / elapsed if elapsed else 0
-            eta_s = (len(job_specs) - done) / rate if rate else 0
-            print(f"  {done:>4d}/{len(job_specs)} done  | success={counts['success']} error={counts['error']} no_rank={counts.get('no_rank',0)} | elapsed={elapsed:.0f}s rate={rate:.2f}/s ETA={eta_s/60:.1f}m", flush=True)
+            eta_s = (_total - done) / rate if rate else 0
+            print(f"  {done:>4d}/{_total} done  | success={counts['success']} error={counts['error']} no_rank={counts.get('no_rank',0)} | elapsed={elapsed:.0f}s rate={rate:.2f}/s ETA={eta_s/60:.1f}m", flush=True)
 
 print(f"\n=== DONE ===")
 print(f"  total:   {done}")

@@ -15,7 +15,7 @@ export SSL_CERT_FILE=$(python3 -c "import certifi;print(certifi.where())")
 export EXECUTOR_TOKEN=$(aws secretsmanager get-secret-value --secret-id aeo-admin/prod --profile aeo-admin --region us-east-1 --query SecretString --output text | python3 -c "import sys,json;print(json.load(sys.stdin).get('EXECUTOR_TOKEN',''))")
 export PROXY_PROVIDER=decodo PROXY_HOST=gate.decodo.com PROXY_PORT=10001 \
        PROXY_USER=user-spmqebjuzf PROXY_PASS="${DECODO_PASS:?set DECODO_PASS}" \
-       USE_SNI_RELAY=0 PROXY_TARGET=country-us
+       USE_SNI_RELAY=1 PROXY_TARGET=country-us
 export ONLY_ONLINE=1 DEVICE_EXCLUDE=device-117 DATE=2026-06-25 PLATFORMS=chatgpt,gemini,perplexity
 export AEO_SKIP_PREFLIGHT=1   # kill per-job preflight curl (Decodo session-churn / rc=28 source)
 # Only the RANKABLE subset (120 kw with usable address+url); the other 216
