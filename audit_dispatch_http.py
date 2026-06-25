@@ -425,13 +425,22 @@ def _adb(serial: str, *args: str, timeout: float = 10) -> subprocess.CompletedPr
 
 
 def _wait_tunnel(serial: str, max_attempts: int = 15) -> bool:
-    """Poll for tun0 UP — needed before HTTP traffic can route through proxy."""
+    """Poll for tun0 UP AND real internet through it. tun0-up alone is NOT enough:
+    a dead Decodo exit gives a tunnel with no DNS (DNS_PROBE_FINISHED_NO_INTERNET
+    on the phone), so the audit page never loads -> no input field (input_failed).
+    Probe a HOSTNAME (forces DNS resolution through the tunnel); two hosts so one
+    blocked domain doesn't false-fail. Caller rotates the Decodo session on False."""
     import time
 
     for _ in range(max_attempts):
         r = _adb(serial, "shell", "ifconfig", "tun0", timeout=5)
         if "UP" in r.stdout and "inet" in r.stdout:
-            return True
+            r2 = _adb(serial, "shell",
+                      "(nc -w 4 www.google.com 443 </dev/null >/dev/null 2>&1 || "
+                      "nc -w 4 chatgpt.com 443 </dev/null >/dev/null 2>&1) && echo OK",
+                      timeout=12)
+            if "OK" in r2.stdout:
+                return True
         time.sleep(2)
     return False
 
@@ -754,7 +763,11 @@ def dispatch_audit_job(
         socksdroid_connect(serial, phone_port)
         time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
         if not _wait_tunnel(serial):
-            raise RuntimeError("socksdroid tun0 never came up")
+            # Dead tunnel (tun0 up but no DNS/internet). Return a proxy_unreachable
+            # response instead of raising, so the existing rotate-Decodo-session +
+            # retry path below kicks in (a fresh session usually has working DNS).
+            return {"platforms": {platform.lower(): {"status": "error", "error": "proxy_unreachable"}},
+                    "error": "proxy_unreachable"}
         # Capture resolved Decodo exit IP via Mac-side curl through the gost SOCKS5
         # listener. Lightweight (~1-2s); does NOT touch the phone/Chrome CDP path
         # so it can't trigger the parallel-CDP hang that AEO_SKIP_PREFLIGHT guards
