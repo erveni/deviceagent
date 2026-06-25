@@ -461,6 +461,11 @@ def _keyword_text(entry: dict, keyword_id: int) -> str:
 # ── HTTP audit call ──
 
 AUDIT_HTTP_TIMEOUT_S = 420  # caps a single platform call (240s wait_gen [v0.9.23] + ~60s load + ~40s capture + buffer)
+# Per-request generation-wait for ranking audits. The app default is 240s (good
+# for the daily), but for high-throughput ranking across all phones that makes
+# every flaky attempt hold its gost/Decodo session ~2x longer -> session
+# contention + glacial throughput. 150s covers real generation without that.
+AUDIT_GEN_TIMEOUT_SEC = int(os.environ.get("AUDIT_GEN_TIMEOUT_SEC", "150"))
 
 
 def _post_audit(local_port: int, body: dict) -> dict:
@@ -820,6 +825,7 @@ def dispatch_audit_job(
                 "state": entry.get("state", ""),
                 "keyword": _keyword_text(entry, int(keyword_id)),
                 "platform": platform.lower(),
+                "genTimeoutSec": AUDIT_GEN_TIMEOUT_SEC,
             }
         return _post_audit(http_port, body)
 
