@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 43
-        versionName = "0.9.25-chatgpt-submit-fix"
+        versionCode = 44
+        versionName = "0.9.26-chatgpt-submit-fix2"
     }
 
     buildTypes {

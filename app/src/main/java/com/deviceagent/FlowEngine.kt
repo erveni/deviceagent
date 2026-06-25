@@ -701,15 +701,19 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             val node = findSendNode()
             if (node != null) {
                 val r = android.graphics.Rect(); node.getBoundsInScreen(r); node.recycle()
-                val inBottomHalf = r.centerY() > s.screenHeight() * 0.5
-                if (r.width() > 0 && r.height() > 0 && inBottomHalf &&
+                // Reject ONLY the top toolbar zone: Chrome's ⋮ overflow is at the
+                // very top (~8% of height). The real send arrow sits mid-screen
+                // (~40%) when the keyboard is up, so a bottom-half (>50%) guard
+                // wrongly rejected it. Anything below the toolbar (~15%) is fair.
+                val notToolbar = r.centerY() > s.screenHeight() * 0.15
+                if (r.width() > 0 && r.height() > 0 && notToolbar &&
                     r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
                     s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
                     s.log("Submit[chatgpt]: gesture-tapped send center (${r.centerX()},${r.centerY()})")
                     Thread.sleep(1500)
                     if (didSend()) return true
                 } else {
-                    s.log("Submit[chatgpt]: ignoring send node at (${r.centerX()},${r.centerY()}) — not bottom-half (likely Chrome toolbar)")
+                    s.log("Submit[chatgpt]: ignoring send node at (${r.centerX()},${r.centerY()}) — top toolbar (Chrome ⋮)")
                 }
             }
             // Fallback: the send arrow is at the right end of the input row. Tap
@@ -717,8 +721,9 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             val inp = s.findInputField(hintText = null, timeoutMs = 2000)
             if (inp != null) {
                 val ib = android.graphics.Rect(); inp.getBoundsInScreen(ib); inp.recycle()
-                val ty = if (ib.centerY() > s.screenHeight() * 0.5) ib.centerY().toFloat()
-                         else s.screenHeight() * 0.9f
+                // Send arrow is at the right end of the input row, near the box's
+                // bottom edge — tap there regardless of where the keyboard pushed it.
+                val ty = (ib.bottom - 8).coerceIn(0, s.screenHeight()).toFloat()
                 s.gestureTap(s.screenWidth() - 60f, ty)
                 s.log("Submit[chatgpt]: input-relative send tap (${s.screenWidth() - 60},${ty.toInt()})")
                 Thread.sleep(1500)
