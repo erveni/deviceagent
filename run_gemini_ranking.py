@@ -62,18 +62,31 @@ def _key(t):
 
 
 def _capture(dev_idx, serial, t):
-    sid = rsid()
     gport = BASE_GOST + dev_idx
     cdp = 9222 + dev_idx
     rfile, afile = f"/tmp/gem_result_{dev_idx}.json", f"/tmp/gem_answer_{dev_idx}.txt"
-    spec = {"port": gport, "upstream_user": build_upstream_user(sid, zip_=t.get("zip") or None, country=t.get("country")), "sid": sid}
     gp = gc = None
     t0 = time.time()
     try:
-        gp, gc = gost_start([spec])
-        socksdroid_connect(serial, gport)
-        time.sleep(3)
-        if not wait_tunnel(serial):
+        # Connectivity gate: bring up the tunnel and verify it actually carries
+        # traffic (wait_tunnel now DNS-probes a hostname). A dead Decodo exit
+        # gives tun0-up-but-no-internet (DNS_PROBE on the phone) — rotate the
+        # session (fresh sid) and retry instead of running the capture on it.
+        connected = False
+        for attempt in range(3):
+            sid = rsid()
+            spec = {"port": gport, "upstream_user": build_upstream_user(sid, zip_=t.get("zip") or None, country=t.get("country")), "sid": sid}
+            gp, gc = gost_start([spec])
+            socksdroid_connect(serial, gport)
+            time.sleep(3)
+            if wait_tunnel(serial):
+                connected = True
+                break
+            gost_stop(gp, gc); gp = gc = None
+            try: socksdroid_disconnect(serial)
+            except Exception: pass
+            time.sleep(1)
+        if not connected:
             return {**t, "status": "error", "error": "tunnel_failed"}
         subprocess.run(["adb", "-s", serial, "shell",
                         "am start -n com.android.chrome/com.google.android.apps.chrome.Main "

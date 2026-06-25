@@ -295,7 +295,12 @@ def wait_tunnel(serial):
             # `-z` rejected by BusyBox nc (TECNO KL4 ships BusyBox; Infinix/Samsung ship toybox).
             # `</dev/null >/dev/null` mirrors open-and-close semantics on both BusyBox AND toybox —
             # strictly more compatible than the original `-z`.
-            r2 = run(f"adb -s \"{serial}\" shell \"nc -w 3 1.1.1.1 53 </dev/null >/dev/null && echo OK\"", 6)
+            # Probe a HOSTNAME, not a raw IP: this forces real DNS resolution
+            # through the tunnel. The old `nc 1.1.1.1 53` only proved TCP-to-an-IP
+            # worked, so it passed even when DNS was dead — the phone then hit
+            # DNS_PROBE_FINISHED_NO_INTERNET on every real page (no input field /
+            # no capture). Two hosts so a single blocked domain doesn't false-fail.
+            r2 = run(f"adb -s \"{serial}\" shell \"(nc -w 4 www.google.com 443 </dev/null >/dev/null 2>&1 || nc -w 4 chatgpt.com 443 </dev/null >/dev/null 2>&1) && echo OK\"", 12)
             if "OK" in r2.stdout:
                 return True
         time.sleep(3)
