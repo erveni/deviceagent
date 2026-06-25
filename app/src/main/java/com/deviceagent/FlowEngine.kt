@@ -694,24 +694,37 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         // send-button center instead; verify via didSend(). ACTION_CLICK only as a
         // last resort. ──
         if (platform.lowercase() == "chatgpt") {
+            // The real send button sits at the BOTTOM, next to the input. Only tap
+            // a send node found in the bottom half — findSendNode() can resolve to a
+            // top-right element (Chrome's ⋮ overflow), and tapping that opened the
+            // Chrome menu instead of sending (confirmed on-screen). Reject top nodes.
             val node = findSendNode()
             if (node != null) {
                 val r = android.graphics.Rect(); node.getBoundsInScreen(r); node.recycle()
-                if (r.width() > 0 && r.height() > 0 &&
+                val inBottomHalf = r.centerY() > s.screenHeight() * 0.5
+                if (r.width() > 0 && r.height() > 0 && inBottomHalf &&
                     r.centerX() in 0..s.screenWidth() && r.centerY() in 0..s.screenHeight()) {
                     s.gestureTap(r.centerX().toFloat(), r.centerY().toFloat())
                     s.log("Submit[chatgpt]: gesture-tapped send center (${r.centerX()},${r.centerY()})")
                     Thread.sleep(1500)
                     if (didSend()) return true
-                }
-                // bounds degenerate or tap missed — try ACTION_CLICK as a fallback
-                val n2 = findSendNode()
-                if (n2 != null) {
-                    val clicked = s.clickNode(n2); n2.recycle()
-                    if (clicked) { Thread.sleep(1500); if (didSend()) { s.log("Submit[chatgpt]: ACTION_CLICK fallback sent"); return true } }
+                } else {
+                    s.log("Submit[chatgpt]: ignoring send node at (${r.centerX()},${r.centerY()}) — not bottom-half (likely Chrome toolbar)")
                 }
             }
-            s.log("Submit[chatgpt]: send not confirmed (no usable send node)")
+            // Fallback: the send arrow is at the right end of the input row. Tap
+            // there relative to the input field's Y (never the top toolbar).
+            val inp = s.findInputField(hintText = null, timeoutMs = 2000)
+            if (inp != null) {
+                val ib = android.graphics.Rect(); inp.getBoundsInScreen(ib); inp.recycle()
+                val ty = if (ib.centerY() > s.screenHeight() * 0.5) ib.centerY().toFloat()
+                         else s.screenHeight() * 0.9f
+                s.gestureTap(s.screenWidth() - 60f, ty)
+                s.log("Submit[chatgpt]: input-relative send tap (${s.screenWidth() - 60},${ty.toInt()})")
+                Thread.sleep(1500)
+                if (didSend()) return true
+            }
+            s.log("Submit[chatgpt]: send not confirmed")
             return true
         }
 
