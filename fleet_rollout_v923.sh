@@ -18,10 +18,14 @@ done
 log "daily finished — starting rollout"
 
 idx=0; ok=0; bad=0; first=1
-for s in $(adb devices | awk -F'\t' 'NR>1 && $2=="device"{print $1}' | grep "_adb-tls-connect"); do
+# mDNS serials can contain a space (the " (2)" duplicate-counter), so read full
+# TAB-delimited serials line-by-line via process substitution (NOT `for in $(...)`,
+# which word-splits on the space) and always quote "$s". Exclude the USB test phone.
+while IFS= read -r s <&3; do
+  [ -z "$s" ] && continue
   lport=$((8901+idx)); idx=$((idx+1))
   log "[$s] install -r"
-  adb -s "$s" install -r "$APK" >/dev/null 2>&1 || { log "[$s] install FAILED"; bad=$((bad+1)); continue; }
+  adb -s "$s" install -r "$APK" </dev/null >/dev/null 2>&1 || { log "[$s] install FAILED"; bad=$((bad+1)); continue; }
   adb -s "$s" shell settings put secure enabled_accessibility_services "$A11Y" >/dev/null 2>&1
   adb -s "$s" shell settings put secure accessibility_enabled 1 >/dev/null 2>&1
   adb -s "$s" shell monkey -p com.deviceagent -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
@@ -40,5 +44,5 @@ for s in $(adb devices | awk -F'\t' 'NR>1 && $2=="device"{print $1}' | grep "_ad
     fi
   fi
   first=0
-done
+done 3< <(adb devices | awk -F'\t' 'NR>1 && $2=="device" && $1 ~ /_adb-tls-connect/ && $1 !~ /149145555W006477/{print $1}')
 log "ROLLOUT DONE — ok=$ok bad=$bad (test phone 149145555W006477 left on its existing build)"
