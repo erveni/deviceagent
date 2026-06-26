@@ -1581,6 +1581,46 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     fun saveScreenshot(name: String): String? = s.saveScreenshot(name)
 
+    private fun captureFrameB64(): String? {
+        val p = try { s.saveScreenshot("gem_${System.currentTimeMillis()}") } catch (e: Exception) { null } ?: return null
+        return try {
+            android.util.Base64.encodeToString(java.io.File(p).readBytes(), android.util.Base64.NO_WRAP)
+        } catch (e: Exception) { null }
+    }
+
+    /**
+     * Gemini's logged-out chat WIPES the answer ~3s after it finishes rendering,
+     * so the a11y text is unreliable. Zoom out (full answer fits) and burst-capture
+     * screenshot frames spanning generation + the brief visible window — a pixel
+     * snapshot survives the wipe. The Mac OCRs the frames for the [RANK] line.
+     * Waits internally (replaces waitForGeneration for Gemini); dedups identical
+     * consecutive frames to keep the payload small.
+     */
+    fun captureGeminiRacingWipe(maxSec: Int = 18): List<String> {
+        try { s.pinchZoomOut() } catch (e: Exception) {}
+        Thread.sleep(300)
+        val frames = mutableListOf<String>()
+        val start = System.currentTimeMillis()
+        var sawStreaming = false
+        var postDone = 0
+        while (System.currentTimeMillis() - start < maxSec * 1000L) {
+            val streaming = s.findNode(contentDesc = "Stop streaming", timeoutMs = 150) != null
+                || s.findNode(contentDesc = "Stop generating", timeoutMs = 150) != null
+                || s.findNode(contentDesc = "Stop response", timeoutMs = 150) != null
+            captureFrameB64()?.let { if (it.isNotBlank() && (frames.isEmpty() || it != frames.last())) frames.add(it) }
+            if (streaming) {
+                sawStreaming = true
+            } else if (sawStreaming) {
+                postDone++
+                if (postDone >= 16) break  // ~2.4s of frames past streaming covers the wipe window
+            }
+            Thread.sleep(150)
+            if (frames.size >= 40) break
+        }
+        s.log("captureGeminiRacingWipe: ${frames.size} frames (sawStreaming=$sawStreaming)")
+        return frames
+    }
+
     // ── helpers for per-platform audit checks ──
 
     /** Return true if any of these texts is currently visible (via accessibility tree). */

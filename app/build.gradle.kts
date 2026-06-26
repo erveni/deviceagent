@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 47
-        versionName = "0.9.29-gemini-short-prompt"
+        versionCode = 48
+        versionName = "0.9.30-gemini-frame-capture"
     }
 
     buildTypes {

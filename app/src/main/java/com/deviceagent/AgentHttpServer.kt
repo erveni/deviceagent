@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.29-gemini-short-prompt"
-        const val APP_VERSION_CODE = 47
+        const val APP_VERSION_NAME = "0.9.30-gemini-frame-capture"
+        const val APP_VERSION_CODE = 48
         val lastResult = AtomicReference<SessionResult?>(null)
         // Generation-wait timeout (seconds) for audit/capture sessions. Raised
         // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
@@ -48,12 +48,17 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // response (with a summary) gets deleted before we can capture the rank.
         // Give Gemini a short prompt — top 3 + [RANK] only, no summary — so it
         // finishes inside the capture window. ChatGPT/Perplexity keep the full one.
+        // Gemini's logged-out chat wipes the answer ~3s after it finishes, often
+        // before a trailing [RANK] line can be captured. So put [RANK] on the FIRST
+        // line — it renders in the first second and the frame burst catches it
+        // before the wipe. The supporting top-3 list comes after.
         private const val GEMINI_AUDIT_PROMPT_TEMPLATE = (
-            "Top 3 businesses for \"{keyword}\" in {city}, {state}, numbered 1-3, one short line each. " +
-            "Then state where {biz_name} ({biz_url}) ranks: its position if it genuinely ranks, or 0 " +
-            "if it does not (do not invent a position). " +
-            "End with only this line: [RANK: X/Y] where X is {biz_name}'s position (0 if not ranked) " +
-            "and Y is the total number of businesses that rank for this query. No summary, text only."
+            "For \"{keyword}\" in {city}, {state}: on the FIRST line output exactly " +
+            "[RANK: X/Y] where X is {biz_name}'s position among the businesses that genuinely rank " +
+            "for this query (0 if it does not rank — do not invent a position) and Y is the total " +
+            "number that rank. Then, on the next lines, list the top 3 businesses (numbered 1-3, " +
+            "one short line each) that justify it. No summary, text only." +
+            " Business being checked: {biz_name} ({biz_url})."
         )
 
         fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String, platform: String = ""): String {
@@ -224,16 +229,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     }
                     Thread.sleep(300)
                     step("submit") { flowEngine.submit(platform) }
-                    // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
-                    // waste the window on a long pre-wait.
-                    Thread.sleep(if (platform == "gemini") 400 else 2000)
-                    if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
-                        pr.status = "error"; pr.error = "generation timeout"; continue
-                    }
 
-                    // Capture text + rank + screenshot. Factored so the Gemini path can
-                    // run it the INSTANT generation completes (racing the wipe), while
-                    // the others scroll to the rank line first for a cleaner screenshot.
+                    // Capture text + rank + screenshot. Factored for the ChatGPT/Perplexity
+                    // path (persistent answers); Gemini uses the wipe-racing frame burst below.
                     fun capture() {
                         // Screenshot FIRST — it's the time-critical visual. On logged-out
                         // Gemini the answer is wiped ~3s after it renders, so grab the
@@ -262,10 +260,24 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     }
 
                     if (platform == "gemini") {
-                        // RACE THE WINDOW: capture immediately, before the wipe. A 6-swipe
-                        // scroll (≈6-12s) would run past it and screenshot a blank welcome.
-                        capture()
+                        // Gemini's logged-out chat WIPES the answer ~3s after render, so the
+                        // a11y text is unreliable. Zoom out + burst-capture frames spanning
+                        // generation and the visible window (waits internally); the Mac OCRs
+                        // the frames for [RANK] — a pixel snapshot survives the wipe.
+                        val frames = flowEngine.captureGeminiRacingWipe()
+                        if (frames.isEmpty()) { pr.status = "error"; pr.error = "no frames captured"; continue }
+                        pr.screenshotFramesB64 = frames.toMutableList()
+                        pr.screenshotB64 = frames.firstOrNull()
+                        val rt = flowEngine.getResponseText()  // best-effort a11y (often wiped)
+                        pr.responseText = rt
+                        val (pos, total) = flowEngine.extractRankingFromText(rt)
+                        pr.rankingPosition = pos; pr.rankingTotal = total
+                        result.steps.add("[gemini] captured ${frames.size} frames (a11y rank=$pos)")
                     } else {
+                        Thread.sleep(2000)
+                        if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
+                            pr.status = "error"; pr.error = "generation timeout"; continue
+                        }
                         // ChatGPT / Perplexity persist — position the [RANK] line for the
                         // screenshot. ChatGPT appends a Google Maps embed for local-business
                         // queries; a fixed scroll overshoots onto the map, so scroll the rank
@@ -656,6 +668,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     put("screenshot_path", pr.screenshotPath ?: "")
                     // Base64 PNG bytes — Mac decodes + writes locally; saves an adb pull.
                     put("screenshot_b64", pr.screenshotB64 ?: "")
+                    // Gemini wipe-racing frames — Mac OCRs these for the [RANK] line.
+                    put("screenshot_frames", org.json.JSONArray(pr.screenshotFramesB64))
                     put("response_text", pr.responseText ?: "")
                     put("error", pr.error ?: "")
                 }
