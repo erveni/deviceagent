@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.28-top3-summary"
-        const val APP_VERSION_CODE = 46
+        const val APP_VERSION_NAME = "0.9.29-gemini-short-prompt"
+        const val APP_VERSION_CODE = 47
         val lastResult = AtomicReference<SessionResult?>(null)
         // Generation-wait timeout (seconds) for audit/capture sessions. Raised
         // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
@@ -44,8 +44,21 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             "Text only — no maps, images, or embedded content. Keep the entire response under 200 words."
         )
 
-        fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String): String {
-            return AUDIT_PROMPT_TEMPLATE
+        // Gemini's logged-out chat WIPES the answer ~3s after it renders, so a long
+        // response (with a summary) gets deleted before we can capture the rank.
+        // Give Gemini a short prompt — top 3 + [RANK] only, no summary — so it
+        // finishes inside the capture window. ChatGPT/Perplexity keep the full one.
+        private const val GEMINI_AUDIT_PROMPT_TEMPLATE = (
+            "Top 3 businesses for \"{keyword}\" in {city}, {state}, numbered 1-3, one short line each. " +
+            "Then state where {biz_name} ({biz_url}) ranks: its position if it genuinely ranks, or 0 " +
+            "if it does not (do not invent a position). " +
+            "End with only this line: [RANK: X/Y] where X is {biz_name}'s position (0 if not ranked) " +
+            "and Y is the total number of businesses that rank for this query. No summary, text only."
+        )
+
+        fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String, platform: String = ""): String {
+            val template = if (platform.lowercase() == "gemini") GEMINI_AUDIT_PROMPT_TEMPLATE else AUDIT_PROMPT_TEMPLATE
+            return template
                 .replace("{keyword}", keyword)
                 .replace("{city}", city)
                 .replace("{state}", state)
@@ -150,8 +163,6 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             keyword: String,
             platformsFilter: String? = null
         ) {
-            val prompt = buildAuditPrompt(bizName, bizUrl, city, state, keyword)
-            result.prompt = prompt
             result.type = "audit"
 
             val platformsOrder = if (platformsFilter.isNullOrBlank()) {
@@ -170,6 +181,11 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             for (platform in platformsOrder) {
                 val pr = PlatformResult(status = "running")
                 result.platforms[platform] = pr
+
+                // Per-platform prompt: Gemini gets the short no-summary template so
+                // its answer renders before the logged-out wipe.
+                val prompt = buildAuditPrompt(bizName, bizUrl, city, state, keyword, platform)
+                result.prompt = prompt
 
                 val stepBase = System.currentTimeMillis()
                 fun step(name: String, block: () -> Boolean): Boolean {

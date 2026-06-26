@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 46
-        versionName = "0.9.28-top3-summary"
+        versionCode = 47
+        versionName = "0.9.29-gemini-short-prompt"
     }
 
     buildTypes {
