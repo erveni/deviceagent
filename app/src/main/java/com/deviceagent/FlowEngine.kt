@@ -775,6 +775,66 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return true
     }
 
+    // The ANSWER's rank line carries real numbers ("[RANK: 8/25]"); the prompt
+    // bubble echoes the literal "[RANK: X/Y]" instruction, so match digits only.
+    private val rankAnswerPattern =
+        Regex("""\[rank:\s*\d+\s*/\s*\d+""", RegexOption.IGNORE_CASE)
+
+    /** The LAST on-tree node whose text is the numeric [RANK] answer (not the
+     *  prompt bubble's placeholder). Caller must recycle the returned node. */
+    private fun findRankAnswerNode(): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        var last: android.view.accessibility.AccessibilityNodeInfo? = null
+        fun walk(node: android.view.accessibility.AccessibilityNodeInfo) {
+            val t = node.text?.toString() ?: ""
+            if (rankAnswerPattern.containsMatchIn(t)) {
+                last?.recycle()
+                last = android.view.accessibility.AccessibilityNodeInfo.obtain(node)
+            }
+            for (i in 0 until node.childCount) {
+                val c = node.getChild(i) ?: continue
+                walk(c); c.recycle()
+            }
+        }
+        walk(root); root.recycle()
+        return last
+    }
+
+    /**
+     * Scroll so the answer's [RANK: X/Y] line is on-screen for the screenshot,
+     * instead of over-scrolling onto the trailing Google Maps embed ChatGPT adds
+     * for local-business queries. Scrolls down in modest steps and stops the
+     * moment the rank line enters the visible band; nudges back up if overshot.
+     * Falls back (returns false) if the line is never positioned.
+     */
+    fun scrollToRankLine(maxSteps: Int = 14): Boolean {
+        ensureChromeForeground()
+        val x = s.screenWidth() - 3f
+        val h = s.screenHeight()
+        val topBand = (h * 0.12f).toInt()
+        val botBand = (h * 0.82f).toInt()
+        for (i in 1..maxSteps) {
+            val node = findRankAnswerNode()
+            if (node != null) {
+                val r = android.graphics.Rect(); node.getBoundsInScreen(r); node.recycle()
+                if (r.height() > 0 && r.centerY() in topBand..botBand) {
+                    s.log("scrollToRankLine: [RANK] on-screen y=${r.centerY()} (step $i)")
+                    return true
+                }
+                if (r.height() > 0 && r.centerY() < topBand) {
+                    // overshot past it onto the map — nudge back up (swipe down)
+                    s.gestureSwipe(x, h * 0.35f, x, h * 0.65f, 600)
+                    Thread.sleep(1400); continue
+                }
+            }
+            // not found yet, or below the band — scroll down a modest amount
+            s.gestureSwipe(x, h * 0.70f, x, h * 0.45f, 600)
+            Thread.sleep(1600)
+        }
+        s.log("scrollToRankLine: [RANK] not positioned after $maxSteps steps")
+        return false
+    }
+
     // ── full flow ──
 
     /** Full daily session: reset → FRE → navigate → input → submit → wait → scroll → follow-up → backlink */

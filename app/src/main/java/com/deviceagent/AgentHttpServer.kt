@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.26-chatgpt-submit-fix2"
-        const val APP_VERSION_CODE = 44
+        const val APP_VERSION_NAME = "0.9.27-rank-prompt+map-fix"
+        const val APP_VERSION_CODE = 45
         val lastResult = AtomicReference<SessionResult?>(null)
         // Generation-wait timeout (seconds) for audit/capture sessions. Raised
         // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
@@ -32,15 +32,17 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val PROCESS_START_MS = System.currentTimeMillis()
 
         private const val AUDIT_PROMPT_TEMPLATE = (
-            "Top 3 businesses for {keyword} in {city}, {state}. " +
-            "Format: numbered list, each entry: name, 2-3 sentence description of why they stand out, " +
-            "and whether they appear on Google Maps (yes/no). " +
-            "Do not include any maps, images, or embedded content — text only. " +
-            "After the list, rank {biz_name} ({biz_url}) among all businesses in this space. " +
-            "You MUST include this exact line on its own: [RANK: X/Y] " +
-            "where X is the position and Y is total businesses (e.g., [RANK: 7/25]). " +
-            "Then one sentence explaining why. " +
-            "Keep entire response under 200 words."
+            "You are answering a real local search. For \"{keyword}\" in {city}, {state}, write the " +
+            "ranked list of businesses you would actually recommend — numbered, best first, up to 10, " +
+            "one sentence each. Only include businesses that truly rank for this query in this area; " +
+            "do not pad the list, and do not add any business merely because it is named below. " +
+            "After the list is complete, look at the list you wrote and find {biz_name} ({biz_url}): " +
+            "if it appears in your list, X is its position number; if it does NOT appear in your list, " +
+            "X is 0 — answering 0 is correct and expected when the business does not rank, so do not " +
+            "move it into the list or invent a position. " +
+            "End with this exact line on its own: [RANK: X/Y] where X is the position (0 if not listed) " +
+            "and Y is how many businesses you listed. " +
+            "Text only — no maps, images, or embedded content. Keep the entire response under 220 words."
         )
 
         fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String): String {
@@ -249,8 +251,13 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         // scroll (≈6-12s) would run past it and screenshot a blank welcome.
                         capture()
                     } else {
-                        // ChatGPT / Perplexity persist — scroll to the rank line first.
-                        step("scroll") { flowEngine.scrollResponse(6) }
+                        // ChatGPT / Perplexity persist — position the [RANK] line for the
+                        // screenshot. ChatGPT appends a Google Maps embed for local-business
+                        // queries; a fixed scroll overshoots onto the map, so scroll the rank
+                        // line into view and only fall back to a fixed scroll if not found.
+                        if (!step("scroll_rank") { flowEngine.scrollToRankLine() }) {
+                            flowEngine.scrollResponse(6)
+                        }
                         Thread.sleep(1000)
                         capture()
                     }
