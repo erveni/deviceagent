@@ -935,7 +935,11 @@ def dispatch_audit_job(
         # it still shows no answer, demote to a retryable status so a bad
         # screenshot is never recorded as a good result. (OCR_VALIDATE_SCREENSHOT=0
         # disables this; _screenshot_has_answer fails open if the OCR tool is gone.)
-        if status in ("success", "no_rank") and ss_local and not _answer_ok(ss_local):
+        # Gemini's logged-out chat WIPES the answer ~3s after it renders, so its
+        # screenshot is expected to be blank/Deleted even when we captured the
+        # ranking from the a11y tree. Success for Gemini = ranking captured, NOT a
+        # valid screenshot — so skip OCR screenshot validation for it.
+        if platform.lower() != "gemini" and status in ("success", "no_rank") and ss_local and not _answer_ok(ss_local):
             print(f"  [ocr] no answer in screenshot kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
             try:
                 socksdroid_disconnect(serial)
@@ -963,7 +967,7 @@ def dispatch_audit_job(
             resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
             response_text_path = _write_response_text(resp_text_blob, platform, int(keyword_id))
             duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
-            if status in ("success", "no_rank") and (not ss_local or not _answer_ok(ss_local)):
+            if platform.lower() != "gemini" and status in ("success", "no_rank") and (not ss_local or not _answer_ok(ss_local)):
                 status = "ocr_no_answer"  # non-terminal -> outer retry loop re-runs it
 
         # Capture per-platform error + last few steps for diagnostics. Top-level
