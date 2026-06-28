@@ -165,6 +165,23 @@ def main():
             break
         time.sleep(1)
     print("input ready:", ready)
+    if not ready and os.environ.get("GEMINI_CDP_SHOT"):
+        # Debug: dump what the page actually shows so we can see the blocker
+        # (consent wall? login? slow load?).
+        try:
+            info = c.call("Runtime.evaluate", {"expression":
+                "JSON.stringify({url:location.href,title:document.title,"
+                "body:(document.body.innerText||'').slice(0,400)})",
+                "returnByValue": True}).get("result", {}).get("result", {}).get("value", "")
+            print("PAGE STATE:", info)
+            shot = c.call("Page.captureScreenshot", {}).get("result", {}).get("data", "")
+            if shot:
+                import base64 as _b64
+                with open(os.environ["GEMINI_CDP_SHOT"], "wb") as _f:
+                    _f.write(_b64.b64decode(shot))
+                print("screenshot ->", os.environ["GEMINI_CDP_SHOT"])
+        except Exception as _e:
+            print("debug-shot error:", _e)
 
     # 1) type the prompt into the contenteditable and submit, via JS
     inject = (

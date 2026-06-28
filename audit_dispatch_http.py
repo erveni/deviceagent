@@ -714,14 +714,16 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
 # whole audit dispatch (geo fix, Decodo proxy, GPS mock, parallelism, CSV) and
 # only swap the platform query for Gemini. See memory gemini-logged-out-wipe.
 GEMINI_RANK_PROMPT = (
-    'List the top 10 businesses for "{kw}" in {city}, {state}. Numbered list, each '
-    "with the business name and a one-line reason (only genuine results — do not pad; "
-    "list fewer if fewer genuinely rank). Then DEEP-DIVE the COMPLETE ranking for this "
-    "query — not just the 10 shown — and find where {biz} ({url}) genuinely falls, "
-    "however deep. On its own line output [RANK: X/Y] where X is {biz}'s true position "
-    "in the complete ranking (even if far beyond the top 10) and Y is the total number "
-    "that rank. If {biz} does NOT genuinely rank anywhere, output [RANK: 0/Y] — never "
-    "invent a position. Keep the whole response under 240 words."
+    'Top 3 businesses for "{kw}" in {city}, {state} — numbered 1-3, one short line each '
+    "(only genuine results; list fewer if fewer genuinely rank). Then DEEP-DIVE the "
+    "COMPLETE ranking for this query — not just the 3 shown — and find where {biz} ({url}) "
+    "genuinely falls, however deep. If it genuinely ranks, give its true position even if "
+    "far beyond the top 3. If {biz} does NOT genuinely rank, it goes LAST and is COUNTED "
+    "in the total — never invent a position among the genuine results. "
+    "On its own line output [RANK: X/Y]. If {biz} genuinely ranks, X is its true position "
+    "and Y is the total that rank. If {biz} does NOT rank, set BOTH X and Y to (the number "
+    "that genuinely rank) + 1 (e.g. 3 rank -> [RANK: 4/4]). VALIDATION: X must never exceed "
+    "Y. Keep the whole response under 240 words."
 )
 
 
@@ -743,13 +745,27 @@ def _gemini_cdp_rank(serial: str, device_idx: int, entry: dict, keyword_id: int)
             pass
     env = {**os.environ, "GEMINI_ANSWER_FILE": ans_f, "GEMINI_RESULT_FILE": res_f,
            "CDP_PORT": str(9300 + device_idx)}
+    # gemini_cdp_capture attaches to an EXISTING gemini.google.com tab — it does not
+    # open one. Open it first via a Chrome intent (the daily flow does the same), else
+    # the capture fails with "no gemini.google.com tab found" -> cdp_no_capture.
     try:
-        subprocess.run(["python3", "gemini_cdp_capture.py", serial, prompt],
-                       env=env, capture_output=True, timeout=AUDIT_GEN_TIMEOUT_SEC + 60)
+        subprocess.run(["adb", "-s", serial, "shell", "am", "start",
+                        "-n", "com.android.chrome/com.google.android.apps.chrome.Main",
+                        "-a", "android.intent.action.VIEW", "-d", "https://gemini.google.com/app"],
+                       capture_output=True, timeout=15)
+        time.sleep(9)  # let the gemini tab render through the proxy before attaching
+    except Exception:
+        pass
+    try:
+        _cp = subprocess.run(["python3", "gemini_cdp_capture.py", serial, prompt],
+                       env=env, capture_output=True, text=True, timeout=AUDIT_GEN_TIMEOUT_SEC + 60)
     except subprocess.TimeoutExpired:
         return {"platforms": {"gemini": {"status": "error", "error": "generation timeout"}}}
     res = json.loads(Path(res_f).read_text()) if Path(res_f).exists() else {}
     if not res.get("captured"):
+        if os.environ.get("GEMINI_CDP_DEBUG") == "1":
+            with open(f"/tmp/gemini_cdp_debug_{tag}.log", "w") as _dbg:
+                _dbg.write(f"PROMPT: {prompt}\n\n--STDOUT--\n{_cp.stdout}\n\n--STDERR--\n{_cp.stderr}\n")
         return {"platforms": {"gemini": {"status": "error", "error": "cdp_no_capture"}}}
     pos = res.get("rank_position")
     return {"platforms": {"gemini": {
@@ -1023,10 +1039,12 @@ def dispatch_audit_job(
             or "proxy_unreachable" in combined
             or "input failed" in combined
             or "generation timeout" in combined
+            or "cdp_no_capture" in combined
         ):
             if "proxy_unreachable" in combined: reason = "proxy_unreachable"
             elif "input failed" in combined: reason = "input_failed"
             elif "generation timeout" in combined: reason = "generation_timeout"
+            elif "cdp_no_capture" in combined: reason = "cdp_no_capture"  # Gemini reset on a flagged exit → fresh IP
             else: reason = "navigate"
             # On retry, rotate the Decodo session (fresh exit IP) but KEEP the
             # business's own city. Prefer a zip in the business's actual city
