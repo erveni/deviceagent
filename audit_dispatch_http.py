@@ -167,6 +167,60 @@ def _resolve_zip(assigned_zip: str, state: str = "") -> tuple[str, str]:
     return assigned_zip, "cached_ok"
 
 
+# city+state → representative zip, so a business with no zip of its own gets
+# audited from its OWN city instead of the state's single default zip (which
+# routed e.g. a Sacramento business through Beverly Hills 90210). Cached per run.
+_CITY_ZIP_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _city_name_variants(city: str) -> list[str]:
+    """Candidate spellings to try against zippopotam, in order. Covers common
+    abbreviations (Ft.→Fort, St.→Saint, Mt.→Mount) and hyphenated names
+    (zippopotam wants 'Opa Locka', not 'Opa-locka')."""
+    base = city.strip()
+    variants = [base]
+    abbr = {"ft.": "Fort", "ft": "Fort", "st.": "Saint", "mt.": "Mount"}
+    head, _, rest = base.partition(" ")
+    if rest and head.lower() in abbr:
+        variants.append(f"{abbr[head.lower()]} {rest}")
+    if "-" in base:
+        variants.append(base.replace("-", " "))
+    # de-dup preserving order
+    seen: set[str] = set()
+    return [v for v in variants if not (v.lower() in seen or seen.add(v.lower()))]
+
+
+def _city_to_zip(city: str, state: str) -> str:
+    """Resolve a city+state to one of its zips via zippopotam. Prefers a zip
+    Decodo is known to serve (per _ZIP_CACHE); else the first listed. Returns
+    '' when the city can't be resolved, so the caller falls back to state-good."""
+    code = _norm_state(state)
+    if not city or not code:
+        return ""
+    key = (city.strip().lower(), code)
+    if key in _CITY_ZIP_CACHE:
+        return _CITY_ZIP_CACHE[key]
+    result = ""
+    for variant in _city_name_variants(city):
+        try:
+            url = (
+                f"https://api.zippopotam.us/us/{urllib.parse.quote(code)}"
+                f"/{urllib.parse.quote(variant)}"
+            )
+            with urllib.request.urlopen(url, timeout=4) as r:
+                data = json.loads(r.read())
+        except Exception:
+            continue
+        zips = [p.get("post code", "") for p in data.get("places", []) if p.get("post code")]
+        if not zips:
+            continue
+        supported = [z for z in zips if (_ZIP_CACHE.get(z) or {}).get("supported")]
+        result = (supported or zips)[0]
+        break
+    _CITY_ZIP_CACHE[key] = result
+    return result
+
+
 # Cached zip → (lat, lng) lookup. Populated lazily via api.zippopotam.us.
 # Phones use this to mock GPS so geolocation matches the Decodo proxy IP
 # (daily flow does the same via job["biz_lat"]/["biz_lng"]; audit job has
@@ -636,6 +690,61 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
     }
 
 
+# ── Gemini ranking via CDP (wipe-proof) ──
+# Logged-out Gemini deletes its answer ~3s after render, so the app's
+# a11y/screenshot path loses the rank. CDP reads the full answer off the
+# StreamGenerate network wire BEFORE the wipe (proven 2026-06-27). We reuse the
+# whole audit dispatch (geo fix, Decodo proxy, GPS mock, parallelism, CSV) and
+# only swap the platform query for Gemini. See memory gemini-logged-out-wipe.
+GEMINI_RANK_PROMPT = (
+    'List the top 10 businesses for "{kw}" in {city}, {state}. Numbered list, each '
+    "with the business name and a one-line reason (only genuine results — do not pad; "
+    "list fewer if fewer genuinely rank). Then DEEP-DIVE the COMPLETE ranking for this "
+    "query — not just the 10 shown — and find where {biz} ({url}) genuinely falls, "
+    "however deep. On its own line output [RANK: X/Y] where X is {biz}'s true position "
+    "in the complete ranking (even if far beyond the top 10) and Y is the total number "
+    "that rank. If {biz} does NOT genuinely rank anywhere, output [RANK: 0/Y] — never "
+    "invent a position. Keep the whole response under 240 words."
+)
+
+
+def _gemini_cdp_rank(serial: str, device_idx: int, entry: dict, keyword_id: int) -> dict:
+    """Rank one (keyword, business) on Gemini via CDP, returning a response in the
+    _classify shape. Unique CDP port + result files per phone so concurrent fleet
+    runs don't collide on local tcp:9222."""
+    biz = entry.get("biz_name", "")
+    url = entry.get("biz_url", "") or (re.sub(r"[^a-z0-9]", "", biz.lower())[:20] + ".com")
+    prompt = GEMINI_RANK_PROMPT.format(
+        kw=_keyword_text(entry, keyword_id), city=entry.get("city", ""),
+        state=entry.get("state", ""), biz=biz, url=url)
+    tag = re.sub(r"[^A-Za-z0-9]", "_", serial)[:24]
+    ans_f, res_f = f"/tmp/gemini_answer_{tag}.txt", f"/tmp/gemini_result_{tag}.json"
+    for f in (ans_f, res_f):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    env = {**os.environ, "GEMINI_ANSWER_FILE": ans_f, "GEMINI_RESULT_FILE": res_f,
+           "CDP_PORT": str(9300 + device_idx)}
+    try:
+        subprocess.run(["python3", "gemini_cdp_capture.py", serial, prompt],
+                       env=env, capture_output=True, timeout=AUDIT_GEN_TIMEOUT_SEC + 60)
+    except subprocess.TimeoutExpired:
+        return {"platforms": {"gemini": {"status": "error", "error": "generation timeout"}}}
+    res = json.loads(Path(res_f).read_text()) if Path(res_f).exists() else {}
+    if not res.get("captured"):
+        return {"platforms": {"gemini": {"status": "error", "error": "cdp_no_capture"}}}
+    pos = res.get("rank_position")
+    return {"platforms": {"gemini": {
+        "status": "completed",
+        "ranking_position": pos if pos else 0,
+        "ranking_total": res.get("rank_total") or "",
+        # Archive the captured answer (carries the SWML geo string for verifying
+        # the proxy landed in the right city).
+        "response_text": (res.get("answer") or "")[:5000],
+    }}}
+
+
 # ── main dispatcher ──
 
 ACQUIRE_TIMEOUT_S = 600
@@ -725,6 +834,25 @@ def dispatch_audit_job(
         # Resolve zip: broken zips → state's known-good (distributes load, keeps
         # same-state geo). See _resolve_zip for full precedence.
         biz_zip, zip_note = _resolve_zip(assigned_zip, state_code)
+        # If resolution collapsed to the state's single default zip (empty zip,
+        # broken-zip override, or Decodo-unsupported with no nearby zip), the
+        # business loses its city — a Sacramento business gets audited from
+        # Beverly Hills 90210. Recover its OWN city instead: derive a city zip
+        # and re-check it through the Decodo cache. Only adopt it if the city zip
+        # doesn't ALSO collapse to the state default (else keep state-good).
+        _STATE_DEFAULT_NOTES = ("empty_zip_to_", "override_", "unsupported_")
+        if zip_note.startswith(_STATE_DEFAULT_NOTES):
+            city = entry.get("city", "")
+            city_zip = _city_to_zip(city, state_code)
+            if city_zip:
+                cz, cz_note = _resolve_zip(city_zip, state_code)
+                if not cz_note.startswith(_STATE_DEFAULT_NOTES):
+                    print(
+                        f"  [geo] {city}, {state_code}: state-default {biz_zip} →"
+                        f" city zip {cz} ({cz_note})",
+                        flush=True,
+                    )
+                    biz_zip, zip_note = cz, f"city_{cz_note}"
         if biz_zip != assigned_zip:
             print(
                 f"  [zip-cache] assigned={assigned_zip} → using={biz_zip or '(region-only)'}"
@@ -811,8 +939,11 @@ def dispatch_audit_job(
             except Exception:
                 pass
         else:
-            zc = (entry.get("proxy") or {}).get("zip", "") or ""
-            ll = _zip_to_latlng(zc)
+            # Derive GPS from the RESOLVED zip (biz_zip), not the raw assigned
+            # zip — otherwise a zip-less/overridden business mocks GPS from the
+            # wrong place (or not at all) while the proxy exits elsewhere, and the
+            # GPS/IP mismatch trips the platform's location check.
+            ll = _zip_to_latlng(biz_zip)
             if ll:
                 try:
                     mock_location(serial, ll[0], ll[1])
@@ -825,6 +956,11 @@ def dispatch_audit_job(
             except Exception:
                 pass
         _adb(serial, "forward", f"tcp:{http_port}", "tcp:8765", timeout=5)
+        # Gemini: read the answer off the wire via CDP (wipe-proof) instead of the
+        # app's a11y/screenshot path, which the ~3s logged-out wipe defeats. Reuses
+        # the Decodo proxy + geo-fixed zip + GPS mock already set up above.
+        if platform.lower() == "gemini" and capture_prompt is None:
+            return _gemini_cdp_rank(serial, device_idx, entry, int(keyword_id))
         if capture_prompt is not None:
             body = {
                 "type": "capture",
@@ -875,16 +1011,23 @@ def dispatch_audit_job(
             elif "input failed" in combined: reason = "input_failed"
             elif "generation timeout" in combined: reason = "generation_timeout"
             else: reason = "navigate"
-            # On retry, switch to the state's known-good zip (per probes). This
-            # gives a different exit IP within the same metro area instead of
-            # repeating the same broken zip or dropping to a too-broad state
-            # pool. _STATE_GOOD_ZIP map is empirically validated.
-            # Covered state → its known-good zip; uncovered state → KEEP the
-            # business's real zip (better local geo than dropping to NY 10001).
-            retry_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
+            # On retry, rotate the Decodo session (fresh exit IP) but KEEP the
+            # business's own city. Prefer a zip in the business's actual city
+            # (a different same-city zip than the one that just failed) — only
+            # fall back to the statewide default if the city can't be resolved.
+            # Dropping straight to _STATE_GOOD_ZIP audited e.g. a Sacramento
+            # business from Beverly Hills 90210 on every retry → false no_rank.
+            _retry_city = entry.get("city", "")
+            _retry_city_zip = _city_to_zip(_retry_city, state_code) if _retry_city else ""
+            # Avoid re-using the exact zip that just failed; the session rotation
+            # below still gives a fresh exit if the city has only one usable zip.
+            if _retry_city_zip and _retry_city_zip != biz_zip:
+                retry_zip = _retry_city_zip
+            else:
+                retry_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
             print(
-                f"  [retry] {reason} — dropping zip={biz_zip or '(none)'} → "
-                f"state={state_code} only, rotating Decodo session",
+                f"  [retry] {reason} — zip={biz_zip or '(none)'} → {retry_zip}"
+                f" ({_retry_city or state_code}), rotating Decodo session",
                 flush=True,
             )
             # Tear down current proxy
@@ -905,9 +1048,11 @@ def dispatch_audit_job(
                 base_port=gost_port,
             )
             gost.start(wait_seconds=2.0)
-            response = _setup_and_post()
-            # Track what we actually used so the CSV row reflects reality
+            # Update biz_zip BEFORE re-setup so _setup_and_post mocks GPS from the
+            # retry zip (keeps GPS/proxy in the same place); also reflects reality
+            # in the CSV row.
             biz_zip = retry_zip
+            response = _setup_and_post()
 
         # 4. Classify + build row
         duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)

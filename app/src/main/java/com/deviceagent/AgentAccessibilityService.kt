@@ -273,23 +273,6 @@ class AgentAccessibilityService : AccessibilityService() {
         return true
     }
 
-    /** Two-finger pinch IN (fingers converge toward center) = zoom OUT, so more of
-     *  the page fits in one screenshot frame. Best-effort; returns false on old SDK. */
-    fun pinchZoomOut(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
-        val cx = screenWidth() / 2f; val cy = screenHeight() / 2f
-        val out = (screenHeight() * 0.30f)
-        val f1 = Path().apply { moveTo(cx - out, cy - out); lineTo(cx - 40f, cy - 40f) }
-        val f2 = Path().apply { moveTo(cx + out, cy + out); lineTo(cx + 40f, cy + 40f) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(f1, 0, 350))
-            .addStroke(GestureDescription.StrokeDescription(f2, 0, 350))
-            .build()
-        dispatchGesture(gesture, null, null)
-        Thread.sleep(450)
-        return true
-    }
-
     fun gestureLongPress(x: Float, y: Float, durationMs: Long = 600): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         val path = Path().apply {

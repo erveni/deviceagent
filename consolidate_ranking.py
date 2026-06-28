@@ -81,18 +81,39 @@ def redate_screenshot(path, day):
 # a platform whose data is unreliable this run). Unset = all platforms.
 _PLAT_FILTER = {p.strip().lower() for p in os.environ.get("PLATFORMS", "").split(",") if p.strip()}
 
+# INCLUDE_NORANK_LAST=1: a genuinely-unranked business (deep-dive [RANK: 0/Y]) is
+# recorded at LAST place — position Y+1 of Y+1 — instead of being dropped, so every
+# keyword has a rank and the unranked ones show as worst place. Success always wins
+# over no_rank for the same pair.
+INCLUDE_NORANK_LAST = os.environ.get("INCLUDE_NORANK_LAST") == "1"
+
 # 1. pick one OCR-validated success per (campaign_id, platform); latest wins
 best = {}
+norank = {}
 for f in SOURCES:
     for r in csv.DictReader(open(f)):
-        if (r.get("status") or "").lower() != "success":
-            continue
         plat = (r.get("platform") or "").lower().strip()
         if _PLAT_FILTER and plat not in _PLAT_FILTER:
             continue
+        st = (r.get("status") or "").lower()
         k = ((r.get("campaign_id") or "").strip(), plat)
+        if st == "success":
+            best[k] = r
+        elif st == "no_rank" and INCLUDE_NORANK_LAST:
+            norank[k] = r
+if INCLUDE_NORANK_LAST:
+    for k, r in norank.items():
+        if k in best:
+            continue  # a real success for this pair wins over last-place
+        try:
+            y = int((r.get("rank_total") or "0") or 0)
+        except ValueError:
+            y = 0
+        r = dict(r)
+        r["rank_position"] = str(y + 1)   # last place: one past the last genuine ranker
+        r["rank_total"] = str(y + 1)
         best[k] = r
-print(f"success (kw,platform) pairs: {len(best)}")
+print(f"(kw,platform) pairs: {len(best)} (success + no_rank→last={INCLUDE_NORANK_LAST})")
 
 # 2. client_name backfill
 client_name = {}
@@ -114,8 +135,12 @@ for (cid, plat), r in best.items():
         if lr:
             cd = (dt.date.fromisoformat(lr) + dt.timedelta(days=14)).isoformat()
         else:
-            no_created += 1
-            cd = DATE  # no prior rank known → fall back to run-label date
+            # No prior rank → this is an INITIAL ranking; back-date to the
+            # keyword's createdAt (initial-ranking convention), not the run date.
+            cd = created_date(kwid)
+            if not cd:
+                no_created += 1
+                cd = DATE  # createdAt also unknown → fall back to run-label date
     elif USE_RUN_DATE:
         cd = DATE  # stale re-run → stamp with the actual run date (current reading)
     else:

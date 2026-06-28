@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 48
-        versionName = "0.9.30-gemini-frame-capture"
+        versionCode = 50
+        versionName = "0.9.32-top3-deepdive"
     }
 
     buildTypes {

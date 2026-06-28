@@ -170,7 +170,11 @@ print(f"target date:               {TARGET_DATE_ISO}")
 import re as _re_addr
 import urllib.parse as _url_parse
 
-_ADDR_RE = _re_addr.compile(r",\s*([^,]+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?")
+# \s* (not \s+) before the zip: some addresses glue the state to the zip with no
+# space, e.g. "New York, NY10118" / "Memphis, TN38103" (Citedlogic) — those must
+# still parse to (city, ST, zip), else city/state come back empty and the phone
+# rejects the audit ("city, state required").
+_ADDR_RE = _re_addr.compile(r",\s*([^,]+?),\s*([A-Z]{2})\s*(\d{5})(?:-\d{4})?")
 
 
 def _parse_address(addr: str) -> tuple[str, str, str]:
@@ -182,7 +186,10 @@ def _parse_address(addr: str) -> tuple[str, str, str]:
     return (m.group(1).strip(), m.group(2).strip(), m.group(3).strip()) if m else ("", "", "")
 
 
-_CITY_ST_RE = _re_addr.compile(r"([A-Za-z][A-Za-z .'\-]+),\s*([A-Z]{2})\b")
+# (?![A-Za-z]) not \b: \b fails to end the state code when a zip is glued on
+# ("NY10118" — no word boundary between Y and 1). Negative-lookahead for a letter
+# lets "NY" match whether followed by a digit, space, or end.
+_CITY_ST_RE = _re_addr.compile(r"([A-Za-z][A-Za-z .'\-]+),\s*([A-Z]{2})(?![A-Za-z])")
 
 # Full US state/territory name -> 2-letter code. Free-trial campaign addresses often
 # use the loose 'City, FullStateName' form (e.g. 'Brooklyn, New York') with no zip and
@@ -244,6 +251,14 @@ def make_job_record(kw: dict, biz: dict, platform: str, job_type: str, job_id: i
     # fall back to the business address only when the campaign has none.
     camp_addr = CAMPAIGN_ADDR.get(str(kw.get("aeoPlanId") or "")) or ""
     address_line1 = camp_addr or biz.get("publishedAddress") or biz.get("address") or ""
+    # Multi-location businesses (e.g. Citedlogic) carry the per-location address ONLY
+    # in the campaignName tail ("Biz — <street>, <city>, <ST><zip>") with null
+    # business city/state. Parse that tail when no structured address exists, else
+    # city/state are empty and the phone rejects the audit.
+    if not address_line1:
+        _cn = kw.get("campaignName") or ""
+        if "—" in _cn:
+            address_line1 = _cn.split("—", 1)[1].strip()
     biz_name_eff = biz.get("name") or biz.get("businessName") or ""
     city_p, state_p, zip_p = _parse_loc(address_line1)
     biz_url = biz.get("gmbUrl") or biz.get("websiteUrl") or _synth_gmb_url(biz_name_eff, address_line1)
