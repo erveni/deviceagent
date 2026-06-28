@@ -324,8 +324,16 @@ def run_client(c: dict) -> dict:
             for attempt in range(QUERY_RETRIES + 1):
                 try:
                     resp = _http(phone_ip, "/session", body, method="POST", timeout=SESSION_TIMEOUT)
-                except urllib.error.URLError as e:
-                    print(f"    {kw!r}: session error {e}; retry", flush=True)
+                except (urllib.error.URLError, OSError) as e:
+                    # Transport hiccup (connection reset, timeout) — common when the agent is
+                    # mid-captcha. Don't crash the run; rotate the exit IP and retry.
+                    print(f"    {kw!r}: session transport error ({type(e).__name__}); "
+                          f"rotating + retry", flush=True)
+                    if attempt < QUERY_RETRIES:
+                        try:
+                            _rotate_gost(h, geo); _ensure_localized(h, geo, name)
+                        except Exception as re:
+                            print(f"    rotate failed: {re}", flush=True)
                     continue
                 clicked = bool(resp.get("engaged") or resp.get("backlink_clicked"))
                 status = resp.get("status")

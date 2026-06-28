@@ -368,6 +368,18 @@ class AgentAccessibilityService : AccessibilityService() {
         log("Navigating to $url")
     }
 
+    /** Launch an installed app by package (e.g. com.nordvpn.android). Returns false
+     *  if the package has no launch intent (not installed). */
+    fun launchApp(pkg: String): Boolean {
+        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: run {
+            log("launchApp: no launch intent for $pkg (not installed?)"); return false
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        log("Launched $pkg")
+        return true
+    }
+
     // get screen dimensions
     fun screenWidth(): Int = resources.displayMetrics.widthPixels
     fun screenHeight(): Int = resources.displayMetrics.heightPixels
