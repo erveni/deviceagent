@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.33-top3-putlast"
-        const val APP_VERSION_CODE = 51
+        const val APP_VERSION_NAME = "0.9.34-putlast-validated"
+        const val APP_VERSION_CODE = 52
         val lastResult = AtomicReference<SessionResult?>(null)
         // Generation-wait timeout (seconds) for audit/capture sessions. Raised
         // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
@@ -37,12 +37,14 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             "Then DEEP-DIVE the COMPLETE ranking for this query in this area — not just the 3 shown — " +
             "and determine where {biz_name} ({biz_url}) genuinely falls, however deep. If it genuinely " +
             "ranks anywhere, give its true position even if far beyond the top 3. If {biz_name} does " +
-            "NOT genuinely rank anywhere, it goes LAST — never invent a position among the genuine " +
-            "results to seem helpful. " +
+            "NOT genuinely rank, it goes LAST and is COUNTED as one extra entry at the end — never " +
+            "invent a position among the genuine results. " +
             "On its own line: [RANK: X/Y]. If {biz_name} genuinely ranks, X is its true position and Y " +
-            "is the total number of businesses that rank for this query. If {biz_name} does NOT rank, " +
-            "set BOTH X and Y to (the number of businesses that genuinely rank) + 1 — i.e. last place " +
-            "(e.g. if 3 genuinely rank, output [RANK: 4/4]). " +
+            "is the total number of businesses that rank. If {biz_name} does NOT rank, it is placed " +
+            "last AND included in the count, so X and Y MUST be EQUAL — set both to (the number that " +
+            "genuinely rank) + 1 (e.g. 3 genuinely rank -> it is 4th of 4 -> [RANK: 4/4]). " +
+            "VALIDATION before answering: X must NEVER be greater than Y; if {biz_name} is not ranked, " +
+            "confirm X equals Y. " +
             "Finally, a 2-3 sentence summary of {biz_name}'s standing for this search. " +
             "Text only — no maps, images, or embedded content. Keep the entire response under 280 words."
         )
@@ -57,8 +59,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             "If it does NOT genuinely rank, it goes LAST (do not invent a position among the genuine " +
             "results). " +
             "End with only this line: [RANK: X/Y]. If it genuinely ranks, X is its position and Y is " +
-            "the total that rank. If it does NOT rank, set BOTH X and Y to (the number that genuinely " +
-            "rank) + 1 — last place (e.g. 3 rank → [RANK: 4/4]). No summary, text only."
+            "the total that rank. If it does NOT rank, it is last and counted in the total, so X and Y " +
+            "MUST be EQUAL — set both to (the number that genuinely rank) + 1 (e.g. 3 rank -> 4th of 4 " +
+            "-> [RANK: 4/4]). VALIDATION: X must never exceed Y. No summary, text only."
         )
 
         fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String, platform: String = ""): String {

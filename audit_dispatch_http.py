@@ -575,6 +575,14 @@ def _classify(response: dict, platform: str) -> tuple[str, str, str, str, str, s
     ss_b64 = pr.get("screenshot_b64", "")
 
     if pr_status == "completed" and pos and int(pos) > 0:
+        # Safety repair: the prompt asks the AI to count a put-last business in the
+        # total (X == Y), but it occasionally slips and returns X>Y (e.g. 6/5). A
+        # position can't exceed the total — clamp Y up to X so it reads 6/6.
+        try:
+            if str(total).strip().isdigit() and int(total) < int(pos):
+                total = pos
+        except (TypeError, ValueError):
+            pass
         return ("success", str(pos), str(total), f"[RANK: {pos}/{total}]", ss_path, ss_b64)
     if pr_status == "completed":
         # Not ranked ([RANK: 0/Y]). If the answer reported a total Y, record LAST
