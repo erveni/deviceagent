@@ -18,8 +18,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.32-top3-deepdive"
-        const val APP_VERSION_CODE = 50
+        const val APP_VERSION_NAME = "0.9.33-top3-putlast"
+        const val APP_VERSION_CODE = 51
         val lastResult = AtomicReference<SessionResult?>(null)
         // Generation-wait timeout (seconds) for audit/capture sessions. Raised
         // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
@@ -36,11 +36,13 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             "each, only genuine results (do not pad; list fewer if fewer genuinely rank). " +
             "Then DEEP-DIVE the COMPLETE ranking for this query in this area — not just the 3 shown — " +
             "and determine where {biz_name} ({biz_url}) genuinely falls, however deep. If it genuinely " +
-            "ranks anywhere, give its true position even if far beyond the top 3; if it does not " +
-            "appear among the real results at all, X is 0 — answering 0 is correct and expected, so do " +
-            "not invent a position to be helpful. " +
-            "On its own line: [RANK: X/Y] where X is {biz_name}'s true position in the complete ranking " +
-            "(0 if not ranked) and Y is the total number of businesses that rank for this query. " +
+            "ranks anywhere, give its true position even if far beyond the top 3. If {biz_name} does " +
+            "NOT genuinely rank anywhere, it goes LAST — never invent a position among the genuine " +
+            "results to seem helpful. " +
+            "On its own line: [RANK: X/Y]. If {biz_name} genuinely ranks, X is its true position and Y " +
+            "is the total number of businesses that rank for this query. If {biz_name} does NOT rank, " +
+            "set BOTH X and Y to (the number of businesses that genuinely rank) + 1 — i.e. last place " +
+            "(e.g. if 3 genuinely rank, output [RANK: 4/4]). " +
             "Finally, a 2-3 sentence summary of {biz_name}'s standing for this search. " +
             "Text only — no maps, images, or embedded content. Keep the entire response under 280 words."
         )
@@ -51,10 +53,12 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // finishes inside the capture window. ChatGPT/Perplexity keep the full one.
         private const val GEMINI_AUDIT_PROMPT_TEMPLATE = (
             "Top 3 businesses for \"{keyword}\" in {city}, {state}, numbered 1-3, one short line each. " +
-            "Then state where {biz_name} ({biz_url}) ranks: its position if it genuinely ranks, or 0 " +
-            "if it does not (do not invent a position). " +
-            "End with only this line: [RANK: X/Y] where X is {biz_name}'s position (0 if not ranked) " +
-            "and Y is the total number of businesses that rank for this query. No summary, text only."
+            "Then state where {biz_name} ({biz_url}) ranks: its true position if it genuinely ranks. " +
+            "If it does NOT genuinely rank, it goes LAST (do not invent a position among the genuine " +
+            "results). " +
+            "End with only this line: [RANK: X/Y]. If it genuinely ranks, X is its position and Y is " +
+            "the total that rank. If it does NOT rank, set BOTH X and Y to (the number that genuinely " +
+            "rank) + 1 — last place (e.g. 3 rank → [RANK: 4/4]). No summary, text only."
         )
 
         fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String, platform: String = ""): String {

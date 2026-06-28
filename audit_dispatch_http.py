@@ -577,6 +577,15 @@ def _classify(response: dict, platform: str) -> tuple[str, str, str, str, str, s
     if pr_status == "completed" and pos and int(pos) > 0:
         return ("success", str(pos), str(total), f"[RANK: {pos}/{total}]", ss_path, ss_b64)
     if pr_status == "completed":
+        # Not ranked ([RANK: 0/Y]). If the answer reported a total Y, record LAST
+        # place (Y+1 of Y+1) so the row carries a position everywhere — raw CSV and
+        # deliverable — instead of a bare 0. Status stays no_rank so it's still
+        # distinguishable from a genuine last-place rank. No Y (capture miss) →
+        # leave blank for the retry/answer-gate to catch.
+        if str(total).strip().isdigit() and int(total) >= 1:
+            y = int(total)
+            return ("no_rank", str(y + 1), str(y + 1),
+                    f"[RANK: 0/{y} → last {y + 1}/{y + 1}]", ss_path, ss_b64)
         return ("no_rank", "", "", "", ss_path, ss_b64)
     if "generation timeout" in pr_err.lower() or "wait_generation" in pr_err.lower():
         return ("flow_failed", "", "", "", ss_path, ss_b64)

@@ -106,12 +106,16 @@ if INCLUDE_NORANK_LAST:
         if k in best:
             continue  # a real success for this pair wins over last-place
         try:
+            pos = int((r.get("rank_position") or "0") or 0)
             y = int((r.get("rank_total") or "0") or 0)
         except ValueError:
-            y = 0
+            pos, y = 0, 0
         r = dict(r)
-        r["rank_position"] = str(y + 1)   # last place: one past the last genuine ranker
-        r["rank_total"] = str(y + 1)
+        # Idempotent: _classify may already record last place (pos == total == Y+1).
+        # Only compute Y+1 when the row is still a bare 0 — never double-increment.
+        if not (pos > 0 and pos == y):
+            r["rank_position"] = str(y + 1)   # last place: one past the last genuine ranker
+            r["rank_total"] = str(y + 1)
         best[k] = r
 print(f"(kw,platform) pairs: {len(best)} (success + no_rank→last={INCLUDE_NORANK_LAST})")
 
