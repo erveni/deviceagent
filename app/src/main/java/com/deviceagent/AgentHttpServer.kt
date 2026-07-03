@@ -1,5 +1,6 @@
 package com.deviceagent
 
+import android.provider.Settings
 import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -18,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.34-putlast-validated"
-        const val APP_VERSION_CODE = 52
+        const val APP_VERSION_NAME = "0.9.50-wifidebug-rearm"
+        const val APP_VERSION_CODE = 68
         val lastResult = AtomicReference<SessionResult?>(null)
         // Generation-wait timeout (seconds) for audit/capture sessions. Raised
         // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
@@ -32,21 +33,31 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val PROCESS_START_MS = System.currentTimeMillis()
 
         private const val AUDIT_PROMPT_TEMPLATE = (
-            "Top 3 businesses for \"{keyword}\" in {city}, {state} — numbered 1-3, one short line " +
-            "each, only genuine results (do not pad; list fewer if fewer genuinely rank). " +
-            "Then DEEP-DIVE the COMPLETE ranking for this query in this area — not just the 3 shown — " +
-            "and determine where {biz_name} ({biz_url}) genuinely falls, however deep. If it genuinely " +
-            "ranks anywhere, give its true position even if far beyond the top 3. If {biz_name} does " +
-            "NOT genuinely rank, it goes LAST and is COUNTED as one extra entry at the end — never " +
-            "invent a position among the genuine results. " +
-            "On its own line: [RANK: X/Y]. If {biz_name} genuinely ranks, X is its true position and Y " +
-            "is the total number of businesses that rank. If {biz_name} does NOT rank, it is placed " +
-            "last AND included in the count, so X and Y MUST be EQUAL — set both to (the number that " +
-            "genuinely rank) + 1 (e.g. 3 genuinely rank -> it is 4th of 4 -> [RANK: 4/4]). " +
-            "VALIDATION before answering: X must NEVER be greater than Y; if {biz_name} is not ranked, " +
-            "confirm X equals Y. " +
-            "Finally, a 2-3 sentence summary of {biz_name}'s standing for this search. " +
-            "Text only — no maps, images, or embedded content. Keep the entire response under 280 words."
+            "Top 3 businesses for \"{keyword}\" in {location} — numbered 1-3, one short line " +
+            "each (name + a few words), only genuine results (do not pad; list fewer if " +
+            "fewer genuinely rank). " +
+            "IMMEDIATELY after the list, on its OWN line, output [RANK: X/Y] FIRST — before any " +
+            "summary paragraph. X is {biz_name}'s ({biz_url}) approximate position in the COMPLETE " +
+            "ranking for this query in this area — not just the 3 shown, however deep (usually dozens " +
+            "of genuine local results) — and Y is the approximate total number of businesses that " +
+            "genuinely rank in this area (usually well more than 3). Only if {biz_name} truly does " +
+            "not appear anywhere in the ranking, it is LAST — set X EQUAL to Y (e.g. [RANK: 19/19]); " +
+            "NEVER output 0, blank, or an X below Y for a non-ranking business. " +
+            "CONSISTENCY (critical): the numbered list and [RANK] MUST agree. If {biz_name} is in " +
+            "the top 3, it MUST be the business named at position X in the list above; if {biz_name} " +
+            "is NOT one of the names you listed, then X MUST be greater than 3. Never claim a top-3 " +
+            "position for {biz_name} unless its name actually appears at that position. " +
+            "VALIDATION before answering: X must NEVER be greater than Y. " +
+            "THEN a 2-3 sentence summary of {biz_name}'s standing — always state a concrete " +
+            "APPROXIMATE ranking position for this search in a neutral, positive, factual tone " +
+            "(e.g. \"{biz_name} ranks approximately around position X for this search\") and " +
+            "describe its visibility favorably. Even when {biz_name} does not yet rank, stay " +
+            "favorable and forward-looking — present it as an emerging presence building visibility " +
+            "(e.g. \"{biz_name} is an emerging presence, currently around position X of Y as it " +
+            "builds local visibility\"); NEVER write \"does not appear\", \"not visible\", or " +
+            "\"low visibility\". " +
+            "Respond in plain prose ONLY — do NOT render any map, place card, location widget, image, " +
+            "or embedded content; describe everything in words. Keep the entire response under 280 words."
         )
 
         // Gemini's logged-out chat WIPES the answer ~3s after it renders, so a long
@@ -54,20 +65,25 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // Give Gemini a short prompt — top 3 + [RANK] only, no summary — so it
         // finishes inside the capture window. ChatGPT/Perplexity keep the full one.
         private const val GEMINI_AUDIT_PROMPT_TEMPLATE = (
-            "Top 3 businesses for \"{keyword}\" in {city}, {state}, numbered 1-3, one short line each. " +
-            "Then state where {biz_name} ({biz_url}) ranks: its true position if it genuinely ranks. " +
-            "If it does NOT genuinely rank, it goes LAST (do not invent a position among the genuine " +
-            "results). " +
+            "Top 3 businesses for \"{keyword}\" in {location}, numbered 1-3, one short line each. " +
+            "Then state {biz_name}'s ({biz_url}) APPROXIMATE ranking position in a neutral, factual " +
+            "tone (e.g. \"ranks approximately around position X\"); if it's not among the genuine top " +
+            "results, treat its position as just past the last genuine ranker. " +
             "End with only this line: [RANK: X/Y]. If it genuinely ranks, X is its position and Y is " +
             "the total that rank. If it does NOT rank, it is last and counted in the total, so X and Y " +
             "MUST be EQUAL — set both to (the number that genuinely rank) + 1 (e.g. 3 rank -> 4th of 4 " +
             "-> [RANK: 4/4]). VALIDATION: X must never exceed Y. No summary, text only."
         )
 
-        fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String, platform: String = ""): String {
+        fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String, platform: String = "", searchAddress: String = ""): String {
             val template = if (platform.lowercase() == "gemini") GEMINI_AUDIT_PROMPT_TEMPLATE else AUDIT_PROMPT_TEMPLATE
+            // Prefer the full search address (street + city + state, no zip) for tighter
+            // local ranking; fall back to "city, state".
+            val location = if (searchAddress.isNotBlank()) searchAddress
+                           else listOf(city, state).filter { it.isNotBlank() }.joinToString(", ")
             return template
                 .replace("{keyword}", keyword)
+                .replace("{location}", location)
                 .replace("{city}", city)
                 .replace("{state}", state)
                 .replace("{biz_name}", bizName)
@@ -169,7 +185,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             city: String,
             state: String,
             keyword: String,
-            platformsFilter: String? = null
+            platformsFilter: String? = null,
+            searchAddress: String = ""
         ) {
             result.type = "audit"
 
@@ -192,7 +209,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
 
                 // Per-platform prompt: Gemini gets the short no-summary template so
                 // its answer renders before the logged-out wipe.
-                val prompt = buildAuditPrompt(bizName, bizUrl, city, state, keyword, platform)
+                val prompt = buildAuditPrompt(bizName, bizUrl, city, state, keyword, platform, searchAddress)
                 result.prompt = prompt
 
                 val stepBase = System.currentTimeMillis()
@@ -278,6 +295,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         // screenshot. ChatGPT appends a Google Maps embed for local-business
                         // queries; a fixed scroll overshoots onto the map, so scroll the rank
                         // line into view and only fall back to a fixed scroll if not found.
+                        // NOTE: pinch zoom-out was tried to fit ranks 1-3 + [RANK] in one shot
+                        // but chatgpt.com sets user-scalable=no so Chrome blocks the gesture
+                        // (and it grazed the Voice mic button). Use CDP Emulation zoom instead.
                         if (!step("scroll_rank") { flowEngine.scrollToRankLine() }) {
                             flowEngine.scrollResponse(6)
                         }
@@ -549,6 +569,13 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         respond(writer, 405, """{"error":"use POST"}""")
                     }
                 }
+                path == "/adb/rearm" || path == "/wireless-debug/toggle" -> {
+                    if (method == "POST") {
+                        handleWirelessDebugRearm(writer)
+                    } else {
+                        respond(writer, 405, """{"error":"use POST"}""")
+                    }
+                }
                 else -> {
                     respond(writer, 404, """{"error":"not found"}""")
                 }
@@ -643,7 +670,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         lastResult.set(result)
 
         val platformFilter = json.optString("platform", "").let { if (it.isBlank()) null else it }
-        executeAuditSession(result, bizName, bizUrl, city, state, keyword, platformFilter)
+        val searchAddress = json.optString("searchAddress", "").let { if (it == "null") "" else it }
+        executeAuditSession(result, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress)
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -765,9 +793,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         city: String,
         state: String,
         keyword: String,
-        platformFilter: String? = null
+        platformFilter: String? = null,
+        searchAddress: String = ""
     ) {
-        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter)
+        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress)
     }
 
     private fun handleMqttConfig(writer: OutputStreamWriter, body: String) {
@@ -864,6 +893,49 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             })
         }
         respond(writer, 200, json.toString())
+    }
+
+    /**
+     * POST /adb/rearm (alias /wireless-debug/toggle) — restart Android's
+     * wireless-debug listener by cycling the adb_wifi_enabled global setting
+     * 1 -> 0 -> 1. Recovers a phone whose adb-over-WiFi socket died after a
+     * network blip WITHOUT physical access: the response travels over this HTTP
+     * socket (direct WiFi :8765), not over adb, so it returns even though the
+     * toggle drops any live adb connection. Requires WRITE_SECURE_SETTINGS,
+     * which is not grantable at runtime — grant once per phone over USB/live-adb:
+     *   adb shell pm grant com.deviceagent android.permission.WRITE_SECURE_SETTINGS
+     */
+    private fun handleWirelessDebugRearm(writer: OutputStreamWriter) {
+        val svc = AgentAccessibilityService.instance
+        if (svc == null) {
+            respond(writer, 503, """{"ok":false,"error":"accessibility service not bound"}""")
+            return
+        }
+        val resolver = svc.contentResolver
+        val key = "adb_wifi_enabled"
+        try {
+            val previous = Settings.Global.getInt(resolver, key, -1)
+            // Force off first: setting 1 -> 1 is a no-op, so tear down the stale
+            // listener with a 0, then bring it back up to advertise a fresh one.
+            Settings.Global.putInt(resolver, key, 0)
+            Thread.sleep(1500)
+            Settings.Global.putInt(resolver, key, 1)
+            val now = Settings.Global.getInt(resolver, key, -1)
+            Log.d("DeviceAgent", "wireless-debug re-armed: $previous -> 0 -> $now")
+            val json = JSONObject().apply {
+                put("ok", true)
+                put("previous", previous)
+                put("now", now)
+                put("note", "wireless debugging re-armed; host reconnects via mDNS")
+            }
+            respond(writer, 200, json.toString())
+        } catch (e: SecurityException) {
+            Log.e("DeviceAgent", "wireless-debug re-arm denied: ${e.message}")
+            respond(writer, 403, """{"ok":false,"error":"WRITE_SECURE_SETTINGS not granted; run: adb shell pm grant com.deviceagent android.permission.WRITE_SECURE_SETTINGS"}""")
+        } catch (e: Exception) {
+            Log.e("DeviceAgent", "wireless-debug re-arm failed: ${e.message}")
+            respond(writer, 500, """{"ok":false,"error":"rearm failed"}""")
+        }
     }
 
     private fun handleScreenshot(rawOut: OutputStream, writer: OutputStreamWriter, fullPath: String) {

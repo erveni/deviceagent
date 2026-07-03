@@ -287,6 +287,23 @@ class AgentAccessibilityService : AccessibilityService() {
         return true
     }
 
+    /** Pinch IN (two fingers move toward the center) → zoom OUT, so more of a long
+     *  answer fits in one screenshot. Two simultaneous strokes converging on (cx,cy).
+     *  Requires Chrome "Force enable zoom" when the page sets user-scalable=no. */
+    fun gesturePinchZoomOut(cx: Float, cy: Float, spread: Float = 420f, durationMs: Long = 500): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+        val endGap = 120f
+        val top = Path().apply { moveTo(cx, cy - spread); lineTo(cx, cy - endGap) }
+        val bot = Path().apply { moveTo(cx, cy + spread); lineTo(cx, cy + endGap) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(top, 0, durationMs))
+            .addStroke(GestureDescription.StrokeDescription(bot, 0, durationMs))
+            .build()
+        dispatchGesture(gesture, null, null)
+        Thread.sleep(durationMs + 300)
+        return true
+    }
+
     fun gestureTap(x: Float, y: Float): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         val path = Path().apply {

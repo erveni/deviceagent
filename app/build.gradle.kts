@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 52
-        versionName = "0.9.34-putlast-validated"
+        versionCode = 68
+        versionName = "0.9.50-wifidebug-rearm"
     }
 
     buildTypes {

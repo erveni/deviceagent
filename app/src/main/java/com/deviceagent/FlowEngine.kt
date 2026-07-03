@@ -761,6 +761,21 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     // ── scroll ──
 
+    /** Zoom OUT a few times so a long top-3 answer (list + [RANK: X/Y] line) fits
+     *  in one screenshot — the client needs to SEE ranks 1-3 together with the
+     *  rank line, which over-scrolling to the rank line alone pushes #1 off-top. */
+    fun zoomOutResponse(times: Int = 2): Boolean {
+        ensureChromeForeground()
+        val cx = s.screenWidth() / 2f
+        val cy = s.screenHeight() / 2f
+        for (i in 1..times) {
+            s.gesturePinchZoomOut(cx, cy)
+            Thread.sleep(800)
+            s.log("zoomOut $i/$times")
+        }
+        return true
+    }
+
     fun scrollResponse(count: Int = 12): Boolean {
         s.log("── SCROLL ($count swipes) ──")
         ensureChromeForeground()
@@ -811,8 +826,16 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         ensureChromeForeground()
         val x = s.screenWidth() - 3f
         val h = s.screenHeight()
-        val topBand = (h * 0.12f).toInt()
-        val botBand = (h * 0.82f).toInt()
+        // Park [RANK] as LOW as it will go so the ranks 1-3 ABOVE it get the most
+        // room — that's what keeps rank #1 from clipping off the top. [RANK] now
+        // sits right after the top-3 (prompt outputs it before the summary), so a
+        // low [RANK] means #1, #2, #3 fill the screen above it (the summary + the
+        // trailing map scroll below the fold). We can't zoom-out to fit a tall list
+        // (chatgpt.com sets user-scalable=no), and scrolling UP toward the answer
+        // top snaps logged-out ChatGPT back to its zero-state — so the only safe
+        // lever is parking [RANK] low and relying on the short-description prompt.
+        val topBand = (h * 0.70f).toInt()
+        val botBand = (h * 0.92f).toInt()
         for (i in 1..maxSteps) {
             val node = findRankAnswerNode()
             if (node != null) {
