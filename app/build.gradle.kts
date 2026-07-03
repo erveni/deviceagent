@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 68
-        versionName = "0.9.50-wifidebug-rearm"
+        versionCode = 69
+        versionName = "0.9.51-selfheal"
     }
 
     buildTypes {

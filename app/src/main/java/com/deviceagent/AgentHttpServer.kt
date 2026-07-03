@@ -19,8 +19,18 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.50-wifidebug-rearm"
-        const val APP_VERSION_CODE = 68
+        const val APP_VERSION_NAME = "0.9.51-selfheal"
+        const val APP_VERSION_CODE = 69
+        // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
+        // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
+        // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
+        // inbound connectivity, so it works on the Infinix/Samsung builds that
+        // firewall direct WiFi HTTP. The Mac-side _fleet_watchdog.sh pings /ping
+        // every ~3 min while healthy, so self-heal only fires on real severs.
+        const val SELF_HEAL_SILENCE_MS = 20L * 60 * 1000
+        const val SELF_HEAL_COOLDOWN_MS = 20L * 60 * 1000
+        @Volatile var lastContactMs: Long = System.currentTimeMillis()
+        @Volatile var selfHealCount: Int = 0
         val lastResult = AtomicReference<SessionResult?>(null)
         // Generation-wait timeout (seconds) for audit/capture sessions. Raised
         // 120 -> 240: ChatGPT ranking prompts (numbered list + [RANK] line)
@@ -480,6 +490,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
 
     fun start() {
         running = true
+        startSelfHealWatchdog()
         serverThread = Thread {
             try {
                 val server = ServerSocket().apply {
@@ -515,6 +526,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
     }
 
     private fun handleClient(socket: Socket) {
+        lastContactMs = System.currentTimeMillis()
         try {
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             val writer = OutputStreamWriter(socket.outputStream)
@@ -887,12 +899,52 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             put("accessibility", accessibilityActive)
             put("lastJobStatus", lastStatus)
             put("uptimeMs", System.currentTimeMillis() - PROCESS_START_MS)
+            put("lastContactAgoMs", System.currentTimeMillis() - lastContactMs)
+            put("selfHealCount", selfHealCount)
             put("tun0", JSONObject().apply {
                 put("up", tun.first)
                 put("addr", tun.second ?: "")
             })
         }
         respond(writer, 200, json.toString())
+    }
+
+    /**
+     * Self-heal watchdog thread: every 60s, re-arm wireless debugging from the
+     * inside when (a) Android silently flipped adb_wifi_enabled to 0 (OEM power
+     * managers do this), or (b) the Mac has been silent past SELF_HEAL_SILENCE_MS
+     * (listener presumed dead after a network blip) with a cooldown so a phone
+     * never flaps. Stops permanently if WRITE_SECURE_SETTINGS is missing.
+     */
+    private fun startSelfHealWatchdog() {
+        Thread {
+            var lastRearmMs = 0L
+            while (true) {
+                try {
+                    Thread.sleep(60_000)
+                    val resolver = AgentAccessibilityService.instance?.contentResolver ?: continue
+                    val enabled = android.provider.Settings.Global.getInt(resolver, "adb_wifi_enabled", -1)
+                    val now = System.currentTimeMillis()
+                    val silentMs = now - lastContactMs
+                    val cooldownOver = now - lastRearmMs > SELF_HEAL_COOLDOWN_MS
+                    val heal = enabled == 0 || (silentMs > SELF_HEAL_SILENCE_MS && cooldownOver)
+                    if (!heal) continue
+                    Log.d("DeviceAgent", "self-heal: adb_wifi_enabled=$enabled silentMin=${silentMs / 60000} — re-arming wireless debugging")
+                    android.provider.Settings.Global.putInt(resolver, "adb_wifi_enabled", 0)
+                    Thread.sleep(1500)
+                    android.provider.Settings.Global.putInt(resolver, "adb_wifi_enabled", 1)
+                    lastRearmMs = System.currentTimeMillis()
+                    selfHealCount++
+                } catch (e: SecurityException) {
+                    Log.e("DeviceAgent", "self-heal disabled: WRITE_SECURE_SETTINGS not granted")
+                    return@Thread
+                } catch (e: InterruptedException) {
+                    return@Thread
+                } catch (e: Exception) {
+                    Log.e("DeviceAgent", "self-heal error: ${e.message}")
+                }
+            }
+        }.apply { isDaemon = true; name = "SelfHealWatchdog" }.start()
     }
 
     /**

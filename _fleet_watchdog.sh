@@ -59,11 +59,25 @@ recover_phone(){  # $1 = ip
   fi
 }
 
+# keep-alive: touch every attached phone's HTTP server so the v0.9.51 on-device
+# self-heal watchdog sees "Mac contact" and never cycles a healthy/busy phone
+# (CDP traffic doesn't touch :8765, so without this a long CDP job looks silent).
+keepalive_all(){
+  local port=18960 s
+  while IFS= read -r s; do
+    port=$((port+1))
+    adb -s "$s" forward "tcp:$port" tcp:8765 >/dev/null 2>&1
+    curl -s -m 2 "http://127.0.0.1:$port/ping" >/dev/null 2>&1
+    adb -s "$s" forward --remove "tcp:$port" >/dev/null 2>&1
+  done < <(attached_blob)
+}
+
 last_state="init"
 tick=0
 while true; do
   n=$(count_devices)
   tick=$((tick+1))
+  keepalive_all
   if [ "$n" -ge "$EXPECT" ]; then
     state="healthy"
     [ "$state" != "$last_state" ] && log "healthy: $n devices"
