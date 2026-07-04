@@ -10,8 +10,8 @@
 # Never touches phones that are attached. Stop: pkill -f _fleet_watchdog.sh
 # Log: /private/tmp/fleet_watchdog.log  (hourly LLM check-in reads this)
 set -u
-EXPECT=11
-SEVER_MIN=6
+EXPECT=8
+SEVER_MIN=4
 LOG=/private/tmp/fleet_watchdog.log
 PIDFILE=/private/tmp/fleet_watchdog.pid
 FLEET_IPS="192.168.0.100 192.168.0.102 192.168.0.103 192.168.0.104 192.168.0.106 192.168.0.120 192.168.0.121 192.168.0.122"
