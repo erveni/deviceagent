@@ -14,7 +14,7 @@ EXPECT=11
 SEVER_MIN=6
 LOG=/private/tmp/fleet_watchdog.log
 PIDFILE=/private/tmp/fleet_watchdog.pid
-FLEET_IPS="192.168.0.100 192.168.0.102 192.168.0.103 192.168.0.104 192.168.0.106 192.168.0.107 192.168.0.110 192.168.0.113 192.168.0.120 192.168.0.121 192.168.0.122"
+FLEET_IPS="192.168.0.100 192.168.0.102 192.168.0.103 192.168.0.104 192.168.0.106 192.168.0.120 192.168.0.121 192.168.0.122"
 
 [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null && { echo "already running (pid $(cat "$PIDFILE"))"; exit 0; }
 echo $$ > "$PIDFILE"
@@ -31,6 +31,10 @@ recover_phone(){  # $1 = ip
   # skip if any attached serial resolves to this ip via mdns OR direct ip:port serial
   local blob; blob=$(attached_blob)
   if echo "$blob" | grep -q "^$ip:"; then return 0; fi
+  # FIRST: try the fixed tcpip:5555 port — mDNS-independent, works even when the
+  # phone isn't advertising (the failure mode that stranded phones on 2026-07-04).
+  local r5; r5=$(adb connect "$ip:5555" 2>&1)
+  if echo "$r5" | grep -q "^connected\|already"; then log "  $ip reconnected via :5555"; return 0; fi
   local mdns_line serial port
   mdns_line=$(adb mdns services 2>/dev/null | grep "_adb-tls-connect" | grep " $ip:" | head -1)
   if [ -n "$mdns_line" ]; then
