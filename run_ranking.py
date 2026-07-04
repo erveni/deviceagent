@@ -210,9 +210,15 @@ _STATE_NAME_TO_CODE = {
     "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
     "washington dc": "DC", "washington d.c.": "DC",
 }
-# 'City, Full State Name' (optionally trailing zip/country) — captures the full name.
+# 'City, Full State Name' — anchored on the KNOWN state names so the second group
+# only matches a real state. A generic \w+ second group greedily matched the wrong
+# comma pair ("495 Fred Taylor Road, Siletz" instead of "Siletz, Oregon") and never
+# reached the real state; anchoring on the state alternation fixes that.
+_STATE_NAMES_ALT = "|".join(
+    _re_addr.escape(_n) for _n in sorted(_STATE_NAME_TO_CODE, key=len, reverse=True))
 _CITY_STATENAME_RE = _re_addr.compile(
-    r"([A-Za-z][A-Za-z .'\-]+),\s*([A-Za-z]{3,}(?:\s+[A-Za-z]{3,})?)\b")
+    r"([A-Za-z][A-Za-z .'\-]+?),\s*(" + _STATE_NAMES_ALT + r")(?![A-Za-z])",
+    _re_addr.IGNORECASE)
 
 
 def _parse_loc(addr: str) -> tuple[str, str, str]:
