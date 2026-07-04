@@ -11,6 +11,18 @@
          adb shell pm grant com.deviceagent android.permission.WRITE_SECURE_SETTINGS -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
+    <!-- Keep-alive layer (v0.9.52): foreground service + WifiLock + boot restart
+         so the agent process survives OEM battery killers — an app-process death
+         on an inbound-blocked phone is otherwise remotely unrecoverable. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Required alongside FOREGROUND_SERVICE_CONNECTED_DEVICE: the connectedDevice
+         FGS type demands one of the "connection" perms. CHANGE_WIFI_STATE also
+         backs the WifiLock. Without it startForeground throws + crash-loops. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <application
         android:allowBackup="true"
@@ -39,6 +51,19 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <service
+            android:name=".AgentKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".AgentImeService"

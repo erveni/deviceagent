@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 69
-        versionName = "0.9.51-selfheal"
+        versionCode = 71
+        versionName = "0.9.52-keepalive-fix"
     }
 
     buildTypes {

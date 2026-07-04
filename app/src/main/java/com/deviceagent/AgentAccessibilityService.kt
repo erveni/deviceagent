@@ -36,6 +36,7 @@ class AgentAccessibilityService : AccessibilityService() {
         info.flags = info.flags or AccessibilityServiceInfo.FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY
         serviceInfo = info
         log("Service connected")
+        AgentKeepAliveService.ensureRunning(this)
 
         // Start HTTP API server for automated execution
         httpServer = AgentHttpServer(FlowEngine(this))
