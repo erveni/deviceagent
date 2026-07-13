@@ -27,6 +27,7 @@ import hashlib
 import itertools
 import json
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -215,7 +216,9 @@ def _city_to_zip(city: str, state: str) -> str:
         if not zips:
             continue
         supported = [z for z in zips if (_ZIP_CACHE.get(z) or {}).get("supported")]
-        result = (supported or zips)[0]
+        # Randomize the in-city zip (prefer Decodo-supported) so repeated audits in
+        # the same city don't all route through one identical zip.
+        result = random.choice(supported or zips)
         break
     _CITY_ZIP_CACHE[key] = result
     return result
@@ -417,6 +420,61 @@ def _screenshot_has_answer(path: str) -> bool:
     # numbered list of >=2 items with prose is also a real answer
     if len(re.findall(r"(?m)^\s*\d+[\.\)]\s+\w", txt)) >= 2 and len(txt) > 350:
         return True
+    return False
+
+
+def _shows_list_and_rank(path: str) -> bool:
+    """Stricter ChatGPT/Perplexity audit gate: the shot must show BOTH the numbered top
+    list AND the [RANK: X/Y] line. Rejects framing misses where the list scrolled off and
+    only [RANK] + the summary are visible — the client must see the top 3 AND the ranking.
+    Fail-open if the OCR tool is missing/errors so a tooling gap never blocks the pipeline."""
+    if os.environ.get("OCR_VALIDATE_SCREENSHOT", "1") != "1":
+        return True
+    if not path or not os.path.exists(path) or not os.path.exists(_OCR_BIN):
+        return True
+    try:
+        txt = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40).stdout
+    except Exception:
+        return True
+    if _WALL_RE.search(txt):
+        return False
+    has_rank = bool(re.search(r"\[?rank:\s*\d+\s*/\s*\d+", txt, re.I))
+    items = len(re.findall(r"(?m)(?:^|\s)[1-9]\d?[.)]\s+[A-Za-z]", txt))
+    return has_rank and items >= 2
+
+
+# ChatGPT/Perplexity render "You said:…" / the echoed query before the answer;
+# strip it so the list parse below doesn't see the prompt bubble.
+_LIST_MARK = {"chatgpt": "ChatGPT said:", "perplexity": "Show more"}
+
+
+def _rank_inconsistent(response_text: str, biz: str, platform: str) -> bool:
+    """True when the target business is shown in the top-3 list but the
+    [RANK: X/Y] line claims a different position (a fabricated bad rank — e.g.
+    listed #1 but [RANK: 4/4]). Mirrors gate 3 of _verify_scan; used to reject a
+    self-contradicting capture in-run so it is re-captured, not saved. Matches the
+    business against each list item's NAME only (text before the "— description")
+    so a generic name can't match a competitor's blurb and false-reject."""
+    if platform.lower() not in ("chatgpt", "perplexity") or not response_text or not biz:
+        return False
+    mk = _LIST_MARK.get(platform.lower())
+    ans = (response_text.split(mk, 1)[1] if (mk and mk in response_text) else response_text).lower()
+    m = re.search(r"\[rank:\s*(\d+)\s*/\s*(\d+)\]", ans)
+    if not m:
+        return False
+    x = int(m.group(1))
+    bc = " ".join(re.sub(r"[^a-z0-9 ]", " ", biz.split(",")[0].lower()).split())
+    if len(bc) < 3:
+        return False
+    region = ans[:m.start()]
+    for n in (1, 2, 3):
+        mm = re.search(rf"(?:^|\n)\s*{n}[.\)]\s*(.*?)(?=(?:\n\s*{n + 1}[.\)])|\Z)", region, re.S)
+        if not mm:
+            continue
+        name = " ".join(re.sub(r"[^a-z0-9 ]", " ",
+                               re.split(r"\s[—–-]\s|\n", mm.group(1).strip(), maxsplit=1)[0]).split())
+        if bc in name:
+            return x > 3 or x != n
     return False
 
 
@@ -701,6 +759,7 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
         "city": address.get("city", ""),
         "state": address.get("stateCode") or address.get("state") or "",
         "zip": address.get("zipCode") or address.get("zip") or "",
+        "search_address": address.get("addressLine1", ""),
         "keyword": keyword.get("name", ""),
         "mode": (job_record.get("type") or "RANKING").lower(),
         "targetDate": job_record.get("targetDate", ""),
@@ -713,18 +772,104 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
 # StreamGenerate network wire BEFORE the wipe (proven 2026-06-27). We reuse the
 # whole audit dispatch (geo fix, Decodo proxy, GPS mock, parallelism, CSV) and
 # only swap the platform query for Gemini. See memory gemini-logged-out-wipe.
-GEMINI_RANK_PROMPT = (
-    'Top 3 businesses for "{kw}" in {city}, {state} — numbered 1-3, one short line each '
-    "(only genuine results; list fewer if fewer genuinely rank). Then DEEP-DIVE the "
-    "COMPLETE ranking for this query — not just the 3 shown — and find where {biz} ({url}) "
-    "genuinely falls, however deep. If it genuinely ranks, give its true position even if "
-    "far beyond the top 3. If {biz} does NOT genuinely rank, it goes LAST and is COUNTED "
-    "in the total — never invent a position among the genuine results. "
-    "On its own line output [RANK: X/Y]. If {biz} genuinely ranks, X is its true position "
-    "and Y is the total that rank. If {biz} does NOT rank, set BOTH X and Y to (the number "
-    "that genuinely rank) + 1 (e.g. 3 rank -> [RANK: 4/4]). VALIDATION: X must never exceed "
-    "Y. Keep the whole response under 240 words."
+# Short descriptions keep ranks 1-3 + [RANK] inside one phone screen; [RANK] is rank-first
+# (right after the list, before the summary) so it's always visible; favorable deep ranking.
+_RANK_PROMPT_BODY = (
+    'List the top 3 businesses for "{kw}" in {location} — numbered 1-3. Each line is ONLY the '
+    "business name plus a 2-4 word tag — NO full sentences, under 8 words each. Write every business "
+    'name EXACTLY as its real full name; for the target business always use the verbatim name "{biz}" '
+    "— complete and unchanged, never abbreviated, never a different branch/location, never a renamed "
+    "or paraphrased variant. IMMEDIATELY after the list, on its OWN line, output the rank as exactly "
+    "[RANK: X/Y] with nothing else on that line — X is {biz} ({url})'s approximate position in the "
+    "COMPLETE local ranking for this query (not just the top 3, however deep — usually dozens of "
+    "genuine local results), Y the approximate total that genuinely rank (well more than 3); only if "
+    "{biz} truly does not appear at all, it is LAST — set X EQUAL to Y (e.g. [RANK: 19/19]), never 0 "
+    "or blank. CONSISTENCY (critical): the list and [RANK] MUST agree — if {biz} is in the top 3 it "
+    'MUST appear in the list spelled exactly "{biz}" at position X; if the exact name "{biz}" is not '
+    "one of the listed names, X MUST be greater than 3 (never claim a top-3 position, and never "
+    "substitute a similarly-named or different-location business for {biz}). THEN a 2-3 sentence "
+    "favorable summary of {biz}'s standing (e.g. '{biz} ranks approximately around position X for "
+    "this search'); even when {biz} does not yet rank, stay favorable — present it as an emerging "
+    "presence building visibility, never 'does not appear' or 'low visibility'. Output ONLY the "
+    "numbered list, the [RANK: X/Y] line, and the summary — do NOT repeat, quote, or describe these "
+    "instructions. VALIDATION: X must never exceed Y. "
 )
+GEMINI_RANK_PROMPT = _RANK_PROMPT_BODY + "Keep the whole response under 110 words."
+# ChatGPT/Perplexity now run through the same CDP device-shot flow as Gemini (the app audit
+# is bypassed), so their prompt lives here in Python too. They tolerate a slightly longer
+# answer; ask them not to embed a map (best-effort — ChatGPT still adds a small place card).
+CHATGPT_RANK_PROMPT = _RANK_PROMPT_BODY + (
+    "Respond in plain prose; do NOT render any map, place card, or image. Keep under 180 words."
+)
+
+
+_ZIP_RE = re.compile(r"\s*\b\d{5}(?:-\d{4})?\b")
+
+
+def _addr_no_zip(addr: str) -> str:
+    """Strip the zip and trailing country from a search address for the prompt.
+    "244 East 14th Street, New York, NY 10003-4105, USA" -> "244 East 14th Street, New York, NY"."""
+    a = _ZIP_RE.sub("", addr or "")
+    a = re.sub(r",?\s*(USA|United States)\s*$", "", a, flags=re.I)
+    a = re.sub(r"\s*,(\s*,)+", ",", a)        # collapse commas left where the zip was
+    a = re.sub(r"[\s,]+$", "", a.strip())     # trailing comma/space
+    return a.strip()
+
+
+def _cdp_js_frame_screenshot(serial: str, device_idx: int, platform: str, keyword_id: int) -> str:
+    """ChatGPT: position ranks 1-3 below the fixed header using the page's own
+    geometry (cdp_js_frame.py reads the <ol> position + header height, wheels it into
+    place, freezes JS, captures). Beats the app's gesture scroll, which can't fight
+    ChatGPT's auto-scroll-to-bottom. Prefers the device screencap (real browser bar);
+    falls back to the clean CDP shot. Returns the local path, or '' on failure."""
+    host = "chatgpt.com"
+    out = f"/tmp/jsframe_{platform.lower()}_{keyword_id}.png"
+    dev = out.replace(".png", "_dev.png")
+    for p in (out, dev):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    env = {**os.environ, "CDP_PORT": str(9300 + device_idx)}
+    try:
+        cp = subprocess.run(["python3", "cdp_js_frame.py", serial, host, out],
+                            env=env, capture_output=True, text=True, timeout=40)
+        shot = dev if Path(dev).exists() else (out if Path(out).exists() else "")
+        if cp.returncode == 0 and shot:
+            b64 = base64.b64encode(Path(shot).read_bytes()).decode()
+            return _write_b64_screenshot(b64, platform, keyword_id)
+        if os.environ.get("GEMINI_CDP_DEBUG") == "1":
+            print(f"  [cdp-jsframe] {platform} kw{keyword_id} failed: {cp.stderr[:160]}", flush=True)
+    except Exception as e:
+        if os.environ.get("GEMINI_CDP_DEBUG") == "1":
+            print(f"  [cdp-jsframe] {platform} kw{keyword_id} exception: {e}", flush=True)
+    return ""
+
+
+def _cdp_strip_map_screenshot(serial: str, device_idx: int, platform: str, keyword_id: int) -> str:
+    """Delete ChatGPT's auto-embedded Mapbox map widget via CDP JS, then capture the
+    cleaned viewport (at the [RANK]-line scroll position the app left). ChatGPT
+    ignores the 'no maps' prompt instruction, so we strip the map from the DOM.
+    Returns the local path, or '' on failure (caller keeps the app screenshot)."""
+    substr = "perplexity.ai" if platform.lower() == "perplexity" else "chatgpt.com"
+    tmp = f"/tmp/cdp_shot_{platform.lower()}_{keyword_id}.png"
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    env = {**os.environ, "CDP_PORT": str(9300 + device_idx)}
+    try:
+        cp = subprocess.run(["python3", "cdp_strip_map_shot.py", serial, substr, tmp],
+                            env=env, capture_output=True, text=True, timeout=40)
+        if cp.returncode == 0 and Path(tmp).exists():
+            b64 = base64.b64encode(Path(tmp).read_bytes()).decode()
+            return _write_b64_screenshot(b64, platform, keyword_id)
+        if os.environ.get("GEMINI_CDP_DEBUG") == "1":
+            print(f"  [cdp-strip] {platform} kw{keyword_id} failed: {cp.stderr[:120]}", flush=True)
+    except Exception as e:
+        if os.environ.get("GEMINI_CDP_DEBUG") == "1":
+            print(f"  [cdp-strip] {platform} kw{keyword_id} exception: {e}", flush=True)
+    return ""
 
 
 def _gemini_cdp_rank(serial: str, device_idx: int, entry: dict, keyword_id: int) -> dict:
@@ -733,18 +878,27 @@ def _gemini_cdp_rank(serial: str, device_idx: int, entry: dict, keyword_id: int)
     runs don't collide on local tcp:9222."""
     biz = entry.get("biz_name", "")
     url = entry.get("biz_url", "") or (re.sub(r"[^a-z0-9]", "", biz.lower())[:20] + ".com")
+    # Use the SAME full street address (zip stripped) as ChatGPT/Perplexity so all
+    # three platforms rank on the same basis — else Gemini ranked at city level and
+    # listed competitors as the top 3 while [RANK] inconsistently claimed the client.
+    location = _addr_no_zip(entry.get("search_address", "")) \
+        or ", ".join(p for p in (entry.get("city", ""), entry.get("state", "")) if p)
     prompt = GEMINI_RANK_PROMPT.format(
-        kw=_keyword_text(entry, keyword_id), city=entry.get("city", ""),
-        state=entry.get("state", ""), biz=biz, url=url)
+        kw=_keyword_text(entry, keyword_id), location=location, biz=biz, url=url)
     tag = re.sub(r"[^A-Za-z0-9]", "_", serial)[:24]
     ans_f, res_f = f"/tmp/gemini_answer_{tag}.txt", f"/tmp/gemini_result_{tag}.json"
+    shot_f = f"/tmp/gemini_shot_{tag}.png"
+    try:
+        os.remove(shot_f)
+    except OSError:
+        pass
     for f in (ans_f, res_f):
         try:
             os.remove(f)
         except OSError:
             pass
     env = {**os.environ, "GEMINI_ANSWER_FILE": ans_f, "GEMINI_RESULT_FILE": res_f,
-           "CDP_PORT": str(9300 + device_idx)}
+           "GEMINI_SHOT_FILE": shot_f, "CDP_PORT": str(9300 + device_idx)}
     # gemini_cdp_capture attaches to an EXISTING gemini.google.com tab — it does not
     # open one. Open it first via a Chrome intent (the daily flow does the same), else
     # the capture fails with "no gemini.google.com tab found" -> cdp_no_capture.
@@ -768,6 +922,15 @@ def _gemini_cdp_rank(serial: str, device_idx: int, entry: dict, keyword_id: int)
                 _dbg.write(f"PROMPT: {prompt}\n\n--STDOUT--\n{_cp.stdout}\n\n--STDERR--\n{_cp.stderr}\n")
         return {"platforms": {"gemini": {"status": "error", "error": "cdp_no_capture"}}}
     pos = res.get("rank_position")
+    # Inline the CDP screenshot (base64) so the dispatcher writes it locally like
+    # the ChatGPT/Perplexity app screenshots — gives Gemini visual proof too.
+    shot_b64 = ""
+    shot_path = res.get("screenshot")
+    if shot_path and Path(shot_path).exists():
+        try:
+            shot_b64 = base64.b64encode(Path(shot_path).read_bytes()).decode()
+        except Exception:
+            shot_b64 = ""
     return {"platforms": {"gemini": {
         "status": "completed",
         "ranking_position": pos if pos else 0,
@@ -775,6 +938,7 @@ def _gemini_cdp_rank(serial: str, device_idx: int, entry: dict, keyword_id: int)
         # Archive the captured answer (carries the SWML geo string for verifying
         # the proxy landed in the right city).
         "response_text": (res.get("answer") or "")[:5000],
+        "screenshot_b64": shot_b64,
     }}}
 
 
@@ -805,7 +969,8 @@ def dispatch_audit_job(
     _answer_ok = (
         (lambda p: _capture_has_answer(p, capture_prompt))
         if capture_prompt is not None
-        else _screenshot_has_answer
+        else (_shows_list_and_rank if platform.lower() in ("chatgpt", "perplexity")
+              else _screenshot_has_answer)
     )
     POOL.setup_forwards()
     device_idx = POOL.acquire(timeout=acquire_timeout)
@@ -835,6 +1000,7 @@ def dispatch_audit_job(
             "biz_url": job.get("biz_url", ""),
             "city": job.get("city", ""),
             "state": job.get("state", ""),
+            "search_address": job.get("search_address", ""),
             "keywords": [{"keyword_id": int(keyword_id), "keyword": job.get("keyword", "")}],
             # Use the JobRecord's parsed zip (from the business address) instead of
             # defaulting to NY 10001 — otherwise non-catalog businesses get audited
@@ -992,6 +1158,10 @@ def dispatch_audit_job(
         # Gemini: read the answer off the wire via CDP (wipe-proof) instead of the
         # app's a11y/screenshot path, which the ~3s logged-out wipe defeats. Reuses
         # the Decodo proxy + geo-fixed zip + GPS mock already set up above.
+        # ChatGPT/Perplexity go through the standard app-audit below (the app submit
+        # works through the proxy where CDP submit doesn't); their deliverable shot is
+        # produced post-audit — ChatGPT via cdp_js_frame (positions ranks 1-3 below the
+        # header), Perplexity via cdp_strip_map (see _classify path ~line 1256).
         if platform.lower() == "gemini" and capture_prompt is None:
             return _gemini_cdp_rank(serial, device_idx, entry, int(keyword_id))
         if capture_prompt is not None:
@@ -1012,6 +1182,10 @@ def dispatch_audit_job(
                 "bizUrl": entry.get("biz_url", ""),
                 "city": entry.get("city", ""),
                 "state": entry.get("state", ""),
+                # Full search address minus the zip — gives the prompt the exact
+                # street/neighborhood for tighter local ranking (the proxy still
+                # carries the zip-level geo). App falls back to city/state if empty.
+                "searchAddress": _addr_no_zip(entry.get("search_address", "")),
                 "keyword": _keyword_text(entry, int(keyword_id)),
                 "platform": platform.lower(),
                 "genTimeoutSec": AUDIT_GEN_TIMEOUT_SEC,
@@ -1098,6 +1272,18 @@ def dispatch_audit_job(
         if capture_prompt is not None:
             _frames = (response.get("platforms") or {}).get(platform.lower(), {}).get("screenshot_frames") or []
             ss_local = _write_stitched_screenshot(_frames, platform, int(keyword_id))
+        # ChatGPT: position ranks 1-3 below the header via the page's own geometry
+        # (cdp_js_frame) — the app's gesture scroll can't fight ChatGPT's auto-scroll.
+        # Perplexity: strip the auto-embedded map and re-capture the cleaned viewport
+        # (it frames 1-3 on its own — no auto-scroll fight). Both fall through to the
+        # app screenshot if CDP fails.
+        if (not ss_local and capture_prompt is None
+                and platform.lower() in ("chatgpt", "perplexity")
+                and status in ("success", "no_rank")):
+            if platform.lower() == "chatgpt":
+                ss_local = _cdp_js_frame_screenshot(serial, device_idx, platform, int(keyword_id))
+            else:
+                ss_local = _cdp_strip_map_screenshot(serial, device_idx, platform, int(keyword_id))
         if not ss_local:
             # Prefer inline base64 (zero-adb data plane). Fall back to adb pull when
             # the phone's APK is older than 0.7.1-b64 or the b64 read failed on-device.
@@ -1119,8 +1305,10 @@ def dispatch_audit_job(
         # screenshot is expected to be blank/Deleted even when we captured the
         # ranking from the a11y tree. Success for Gemini = ranking captured, NOT a
         # valid screenshot — so skip OCR screenshot validation for it.
-        if status in ("success", "no_rank") and ss_local and not _answer_ok(ss_local):
-            print(f"  [ocr] no answer in screenshot kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
+        _bad_rank = _rank_inconsistent(resp_text_blob, entry["biz_name"], platform)
+        if status in ("success", "no_rank") and ss_local and (not _answer_ok(ss_local) or _bad_rank):
+            _why = "fabricated rank (list vs [RANK])" if _bad_rank else "no answer in screenshot"
+            print(f"  [ocr] {_why} kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
             try:
                 socksdroid_disconnect(serial)
             except Exception:
@@ -1147,7 +1335,8 @@ def dispatch_audit_job(
             resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
             response_text_path = _write_response_text(resp_text_blob, platform, int(keyword_id))
             duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
-            if status in ("success", "no_rank") and (not ss_local or not _answer_ok(ss_local)):
+            if status in ("success", "no_rank") and (not ss_local or not _answer_ok(ss_local)
+                    or _rank_inconsistent(resp_text_blob, entry["biz_name"], platform)):
                 status = "ocr_no_answer"  # non-terminal -> outer retry loop re-runs it
 
         # Capture per-platform error + last few steps for diagnostics. Top-level

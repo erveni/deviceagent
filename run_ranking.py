@@ -64,6 +64,17 @@ rr        = json.load(open("/tmp/rr_admin.json"))
 # Maps aeo_plan_id (str) -> search_address; empty/absent file = business-only fallback.
 CAMPAIGN_ADDR = ({str(k): v for k, v in json.load(open("/tmp/campaign_addr.json")).items()}
                  if os.path.exists("/tmp/campaign_addr.json") else {})
+# Local geo override — keyword id (str) -> "City, ST". Last-resort geo for campaigns
+# whose target location exists ONLY in the keyword text (NULL search_address AND no
+# business address, e.g. Voice depot metros, Yellow Brick). Neighborhood-only keywords
+# are pre-mapped to their parent metro here so we don't geocode a bare locality (the
+# _geocode wrong-city guard would reject that). Tracked in-repo; drop an entry once
+# AEOAdmin backfills client_aeo_plans.search_address for it.
+_KW_GEO_OVERRIDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "kw_geo_override.json")
+KW_GEO_OVERRIDE = ({str(k): v for k, v in json.load(open(_KW_GEO_OVERRIDE_PATH)).items()
+                    if not str(k).startswith("_")}
+                   if os.path.exists(_KW_GEO_OVERRIDE_PATH) else {})
 
 excluded_biz_ids = {
     bid for bid, b in biz_by_id.items()
@@ -174,7 +185,7 @@ import urllib.parse as _url_parse
 # space, e.g. "New York, NY10118" / "Memphis, TN38103" (Citedlogic) — those must
 # still parse to (city, ST, zip), else city/state come back empty and the phone
 # rejects the audit ("city, state required").
-_ADDR_RE = _re_addr.compile(r",\s*([^,]+?),\s*([A-Z]{2})\s*(\d{5})(?:-\d{4})?")
+_ADDR_RE = _re_addr.compile(r",\s*([^,]+?),\s*([A-Za-z]{2})\s*(\d{5})(?:-\d{4})?")
 
 
 def _parse_address(addr: str) -> tuple[str, str, str]:
@@ -183,13 +194,16 @@ def _parse_address(addr: str) -> tuple[str, str, str]:
     if not addr:
         return ("", "", "")
     m = _ADDR_RE.search(addr)
-    return (m.group(1).strip(), m.group(2).strip(), m.group(3).strip()) if m else ("", "", "")
+    if not m:
+        return ("", "", "")
+    st = m.group(2).strip().upper()
+    return (m.group(1).strip(), st, m.group(3).strip()) if st in _VALID_ST else ("", "", "")
 
 
 # (?![A-Za-z]) not \b: \b fails to end the state code when a zip is glued on
 # ("NY10118" — no word boundary between Y and 1). Negative-lookahead for a letter
 # lets "NY" match whether followed by a digit, space, or end.
-_CITY_ST_RE = _re_addr.compile(r"([A-Za-z][A-Za-z .'\-]+),\s*([A-Z]{2})(?![A-Za-z])")
+_CITY_ST_RE = _re_addr.compile(r"([A-Za-z][A-Za-z .'\-]+),\s*([A-Za-z]{2})(?![A-Za-z])")
 
 # Full US state/territory name -> 2-letter code. Free-trial campaign addresses often
 # use the loose 'City, FullStateName' form (e.g. 'Brooklyn, New York') with no zip and
@@ -210,6 +224,9 @@ _STATE_NAME_TO_CODE = {
     "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
     "washington dc": "DC", "washington d.c.": "DC",
 }
+# Valid 2-letter codes — case-insensitive parsing can match junk 2-letter tokens
+# (e.g. "of"), so accept a parsed state only when it is a real US code.
+_VALID_ST = frozenset(_STATE_NAME_TO_CODE.values())
 # 'City, Full State Name' — anchored on the KNOWN state names so the second group
 # only matches a real state. A generic \w+ second group greedily matched the wrong
 # comma pair ("495 Fred Taylor Road, Siletz" instead of "Siletz, Oregon") and never
@@ -233,14 +250,21 @@ def _parse_loc(addr: str) -> tuple[str, str, str]:
         return (city, state, zc)
     cleaned = _re_addr.sub(r"\(.*?\)", "", addr).strip()
     matches = _CITY_ST_RE.findall(cleaned)
-    if matches:
-        c, s = matches[-1]
-        return (c.strip(), s.strip(), "")
+    for c, s in reversed(matches):
+        s = s.strip().upper()
+        if s in _VALID_ST:
+            return (c.strip(), s, "")
     # Fall back to 'City, FullStateName' → map the name to a 2-letter code.
     for c, s in _CITY_STATENAME_RE.findall(cleaned):
         code = _STATE_NAME_TO_CODE.get(s.strip().lower())
         if code:
             return (c.strip(), code, "")
+    # 'City ST 12345' with no comma before the state ('Los Angeles CA 90028',
+    # 'Richmond Tx 77406') — complete data the comma-based regexes miss. State+zip
+    # are correct even if the city span picks up the street; the zip drives geo.
+    m2 = _re_addr.search(r"([A-Za-z][A-Za-z .'\-]+?)\s+([A-Za-z]{2})\s+(\d{5})(?:-\d{4})?\b", cleaned)
+    if m2 and m2.group(2).strip().upper() in _VALID_ST:
+        return (m2.group(1).strip(), m2.group(2).strip().upper(), m2.group(3))
     return ("", "", "")
 
 
@@ -251,12 +275,64 @@ def _synth_gmb_url(biz_name: str, addr: str) -> str:
     return f"https://www.google.com/maps/search/{_url_parse.quote_plus(q)}"
 
 
+_GEO_CACHE: dict[str, tuple[str, str, str]] = {}
+
+
+def _geocode(addr: str) -> tuple[str, str, str]:
+    """Resolve a free-form street address to (city, state_code, zip) via Nominatim
+    (OpenStreetMap) — fallback for search_addresses that omit state/zip (street +
+    neighborhood, e.g. Voice depot's "100 SE 2nd St,Brickell" -> Miami, FL). Cached;
+    obeys Nominatim's 1 req/s policy; fail-safe -> ('','','') so a geocode miss just
+    leaves the row as the existing 'required' error, never worse."""
+    key = " ".join((addr or "").split()).lower()
+    if not key:
+        return ("", "", "")
+    if key in _GEO_CACHE:
+        return _GEO_CACHE[key]
+    import urllib.request as _r, time as _t
+    out = ("", "", "")
+    try:
+        # search_addresses often glue tokens ("St,Brickell", "PeakDr", "CamelbackRd")
+        # — add a space after commas and split camelCase so Nominatim can match.
+        norm = _re_addr.sub(r",(\S)", r", \1", addr)
+        norm = _re_addr.sub(r"([a-z])([A-Z])", r"\1 \2", norm)
+        q = _url_parse.quote_plus(norm + ", USA")
+        url = (f"https://nominatim.openstreetmap.org/search?q={q}"
+               "&format=json&addressdetails=1&limit=1&countrycodes=us")
+        req = _r.Request(url, headers={"User-Agent": "device-agent-geo/1.0 (ranking-audit)"})
+        data = json.load(_r.urlopen(req, timeout=15))
+        _t.sleep(1.1)
+        if data:
+            a = data[0].get("address", {})
+            city = (a.get("city") or a.get("town") or a.get("village")
+                    or a.get("suburb") or a.get("neighbourhood") or a.get("county") or "")
+            st = _STATE_NAME_TO_CODE.get((a.get("state") or "").strip().lower(), "")
+            # Safety: the address's own locality token (last comma segment, e.g.
+            # "Beverly Hills"/"South Congress") MUST appear in the geocoded result,
+            # else Nominatim matched the wrong metro ("823 Congress Ave, South
+            # Congress" -> New Haven CT). Reject -> the row stays a 'required' error
+            # (a visible gap) instead of a silent wrong-city audit.
+            token = " ".join(_re_addr.sub(r"[^a-z0-9 ]", " ", norm.rsplit(",", 1)[-1].lower()).split())
+            comps = " ".join(str(a.get(k, "")) for k in
+                             ("city", "town", "village", "suburb", "neighbourhood", "county", "state")).lower()
+            if st and city and token and token in comps:
+                out = (city, st, a.get("postcode", "") or "")
+    except Exception:
+        out = ("", "", "")
+    _GEO_CACHE[key] = out
+    return out
+
+
 def make_job_record(kw: dict, biz: dict, platform: str, job_type: str, job_id: int) -> dict:
     """Match the JobRecord shape build_audit_dispatch_job expects."""
     # Campaign search_address is authoritative (per-campaign / multi-location);
     # fall back to the business address only when the campaign has none.
     camp_addr = CAMPAIGN_ADDR.get(str(kw.get("aeoPlanId") or "")) or ""
-    address_line1 = camp_addr or biz.get("publishedAddress") or biz.get("address") or ""
+    # Keyword-level geo override wins over the business address (which for national
+    # multi-metro campaigns is just an unrelated HQ) but never over a real per-campaign
+    # search_address.
+    kw_override = KW_GEO_OVERRIDE.get(str(kw.get("id") or "")) or ""
+    address_line1 = camp_addr or kw_override or biz.get("publishedAddress") or biz.get("address") or ""
     # Multi-location businesses (e.g. Citedlogic) carry the per-location address ONLY
     # in the campaignName tail ("Biz — <street>, <city>, <ST><zip>") with null
     # business city/state. Parse that tail when no structured address exists, else
@@ -267,6 +343,20 @@ def make_job_record(kw: dict, biz: dict, platform: str, job_type: str, job_id: i
             address_line1 = _cn.split("—", 1)[1].strip()
     biz_name_eff = biz.get("name") or biz.get("businessName") or ""
     city_p, state_p, zip_p = _parse_loc(address_line1)
+    # Street geocode fallback: search_addresses that omit state/zip (street +
+    # neighborhood) don't parse — geocode the full street to city+state. Leave the
+    # zip empty so the dispatcher's _city_to_zip resolves + randomizes it in-city.
+    if not state_p and address_line1:
+        _gc, _gs, _gz = _geocode(address_line1)
+        if _gs:
+            city_p, state_p, zip_p = (_gc or city_p), _gs, ""
+    # Curated keyword-override fallback: the search_address was a bare street+neighborhood
+    # ("2000 McKinneyAve, Uptown") that neither parsed nor geocoded (the wrong-city guard
+    # rejects a lone locality). Use this keyword's pre-mapped parent metro rather than error.
+    if not state_p and kw_override:
+        _oc, _os, _oz = _parse_loc(kw_override)
+        if _os:
+            city_p, state_p, zip_p = _oc, _os, ""
     biz_url = biz.get("gmbUrl") or biz.get("websiteUrl") or _synth_gmb_url(biz_name_eff, address_line1)
     return {
         "id": job_id,
