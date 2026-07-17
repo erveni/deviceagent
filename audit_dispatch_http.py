@@ -447,14 +447,80 @@ def _shows_list_and_rank(path: str) -> bool:
 # strip it so the list parse below doesn't see the prompt bubble.
 _LIST_MARK = {"chatgpt": "ChatGPT said:", "perplexity": "Show more"}
 
+_STOP = {"the", "a", "an", "at", "of", "and", "in", "for", "inc", "llc", "co"}
 
-def _rank_inconsistent(response_text: str, biz: str, platform: str) -> bool:
-    """True when the target business is shown in the top-3 list but the
-    [RANK: X/Y] line claims a different position (a fabricated bad rank — e.g.
-    listed #1 but [RANK: 4/4]). Mirrors gate 3 of _verify_scan; used to reject a
-    self-contradicting capture in-run so it is re-captured, not saved. Matches the
-    business against each list item's NAME only (text before the "— description")
-    so a generic name can't match a competitor's blurb and false-reject."""
+
+def _norm_name(s: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split())
+
+
+def _toks(s: str) -> set:
+    """Significant tokens, singularised. Drops filler words and plural 's' so
+    order/article/plural variants of ONE name collapse together."""
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w
+            for w in s.split() if w and w not in _STOP}
+
+
+def _name_candidates(biz: str, aka: str = ""):
+    """(candidate, strict) pairs naming the tracked business.
+
+    The full name and each explicit `aka` are distinctive, so a substring hit on
+    them is trustworthy. The comma-first-segment is DERIVED and may be a bare
+    category: "Chimney Sweep, Chimney Cleaning, Vancouver WA" -> "chimney sweep",
+    which substring-matched the COMPETITOR "Vancouver Chimney Sweep" at #1 and so
+    scored a row whose tracked business was absent from the list as consistent —
+    a fabrication passing the gate. The segment is still worth trying (many names
+    are "Name, City, ST" and only the segment appears in the listing), but only
+    under token-set equality, which tolerates order/articles/plurals and nothing
+    else.
+    """
+    out = [(_norm_name(biz), False)]
+    seg = _norm_name(biz.split(",")[0])
+    if seg and seg != out[0][0]:
+        out.append((seg, True))
+    out += [(_norm_name(a), False) for a in (aka or "").split(",")]
+    return [(c, strict) for c, strict in out if len(c) >= 3]
+
+
+def _name_matches(cand: str, listed: str, strict: bool = False) -> bool:
+    """True when `listed` names the same business as `cand`.
+
+    Substring alone is what this gate used to do, and it wrongly rejected a
+    genuine win: tracked "The Fusion at RYE 3030" was listed as "Fusion at the
+    Rye 3030" — same business, different word order. So also accept an exact
+    match of the significant-token SETS.
+
+    Set EQUALITY, not subset: subset would merge "Crown Roofing" into "Crown
+    Industrial Roofing", which the validator rules (rightly) call different
+    businesses. `strict` drops the substring path entirely, for derived
+    candidates that may be a generic category term.
+    """
+    if not strict and cand in listed:
+        return True
+    ct, lt = _toks(cand), _toks(listed)
+    return bool(ct) and ct == lt
+
+
+def _rank_inconsistent(response_text: str, biz: str, platform: str, aka: str = "") -> bool:
+    """True when the [RANK: X/Y] line contradicts the numbered list above it, in
+    either direction:
+
+      * listed at n but X disagrees (e.g. listed #1, claims [RANK: 4/4]);
+      * NOT listed at all but X <= 3 — the model names three real competitors and
+        then claims a top-3 spot for us anyway, hedged in the prose below
+        ("HazWash ranks approximately around position 1..." under a list of
+        SERVPRO/Bio-One/Advanced Trauma). This is the common one: 16 of 30
+        rejections in the 2026-07-17 labelled sample, and it is what the prompt
+        already forbids ("if {biz} is NOT one of the names you listed, then X MUST
+        be greater than 3") and the models ignore anyway. Enforce it here instead.
+
+    Rejecting in-run re-captures the pair rather than saving a fabricated rank.
+
+    Matches each list item's NAME only (text before the "— description") so a
+    generic name can't match a competitor's blurb, and matches `aka` trading names
+    too — a DBA business ("Wichita Florist" listed as "Flower Factory Flowers") is
+    genuinely in its own list, and without that it would look absent and re-capture
+    forever."""
     if platform.lower() not in ("chatgpt", "perplexity") or not response_text or not biz:
         return False
     mk = _LIST_MARK.get(platform.lower())
@@ -463,19 +529,24 @@ def _rank_inconsistent(response_text: str, biz: str, platform: str) -> bool:
     if not m:
         return False
     x = int(m.group(1))
-    bc = " ".join(re.sub(r"[^a-z0-9 ]", " ", biz.split(",")[0].lower()).split())
-    if len(bc) < 3:
+    cands = _name_candidates(biz, aka)
+    if not cands:
         return False
     region = ans[:m.start()]
+    parsed = 0
     for n in (1, 2, 3):
         mm = re.search(rf"(?:^|\n)\s*{n}[.\)]\s*(.*?)(?=(?:\n\s*{n + 1}[.\)])|\Z)", region, re.S)
         if not mm:
             continue
+        parsed += 1
         name = " ".join(re.sub(r"[^a-z0-9 ]", " ",
                                re.split(r"\s[—–-]\s|\n", mm.group(1).strip(), maxsplit=1)[0]).split())
-        if bc in name:
+        if any(_name_matches(c, name, strict) for c, strict in cands):
             return x > 3 or x != n
-    return False
+    # Only judge absence when the list actually parsed — a capture whose list we
+    # could not read is a parse failure, not a fabrication, and must not be
+    # re-captured on that basis.
+    return parsed > 0 and x <= 3
 
 
 def _capture_has_answer(path: str, prompt: str) -> bool:
@@ -755,6 +826,7 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
         # synthesized entry doesn't ship empty bizName to the phone (→ phone returns 400).
         "campaign_name": business.get("businessName") or business.get("name") or "",
         "biz_name": business.get("businessName") or business.get("name") or "",
+        "biz_aka": business.get("alsoKnownAs") or "",
         "biz_url": biz_url,
         "city": address.get("city", ""),
         "state": address.get("stateCode") or address.get("state") or "",
@@ -1305,7 +1377,8 @@ def dispatch_audit_job(
         # screenshot is expected to be blank/Deleted even when we captured the
         # ranking from the a11y tree. Success for Gemini = ranking captured, NOT a
         # valid screenshot — so skip OCR screenshot validation for it.
-        _bad_rank = _rank_inconsistent(resp_text_blob, entry["biz_name"], platform)
+        _bad_rank = _rank_inconsistent(resp_text_blob, entry["biz_name"], platform,
+                                       entry.get("biz_aka", ""))
         if status in ("success", "no_rank") and ss_local and (not _answer_ok(ss_local) or _bad_rank):
             _why = "fabricated rank (list vs [RANK])" if _bad_rank else "no answer in screenshot"
             print(f"  [ocr] {_why} kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
