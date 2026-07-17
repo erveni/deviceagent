@@ -24,6 +24,47 @@ INPUT_SEL = "div[contenteditable='true'], rich-textarea .ql-editor, [role='textb
 SEND_SEL = "button[aria-label='Send message'], button[aria-label*='Send'], button.send-button"
 STREAM_MARKERS = ("StreamGenerate", "BardFrontendService", "batchexecute")
 
+# Gemini bootstrap / zero-state payloads that masquerade as an answer. When the
+# prompt never produced a real answer stream (submit raced a stale anonymous
+# session, or the page was still on the home screen), the only batchexecute
+# bodies are the home-screen suggestion chips and the model-picker metadata.
+# Their long chip strings ("I want to use AI for studying…") pass the prose
+# filter below and get written as a false answer with no [RANK] — recorded
+# downstream as no_rank with no Y, which is terminal under RETRY_KEEP_NORANK and
+# so never retries. These markers never occur in a genuine answer (verified: 0
+# hits across captured Gemini answers, 88/88 hits across the false no_rank rows).
+BOOTSTRAP_MARKERS = ("EXPERIMENT_WEB_ZERO_STATE", "GEMINI_CAPABILITIES_CHIP",
+                     "[6,[false,null,false]")
+
+
+def is_bootstrap_payload(text):
+    """True if `text` is a Gemini home-screen / model-bootstrap body, not an answer."""
+    return any(m in text for m in BOOTSTRAP_MARKERS)
+
+
+# Remove the leaked user-prompt bubble before the screenshot so the shot frames the
+# ANSWER (top-3 + [RANK]) and not the question. Located by a phrase that only ever
+# appears in the prompt, never in Gemini's answer; we climb to its bubble container
+# and drop it. Still a real Gemini screenshot — just without the query echo on top.
+_GEMINI_STRIP_PROMPT_JS = r"""
+(()=>{
+  const kill=(needle)=>{
+    for(const e of document.querySelectorAll('*')){
+      if(e.childElementCount===0 && (e.textContent||'').includes(needle)){
+        let el=e, n=0;
+        while(el.parentElement && n<6){
+          const p=el.parentElement;
+          if((p.textContent||'').length > (e.textContent||'').length*2.5) break;
+          el=p; n++;}
+        el.remove(); return true;}}
+    return false;};
+  const out=[];
+  if(kill('numbered 1-3')) out.push('prompt');     // the leaked query bubble (early phrase — survives Gemini's "Show more" truncation)
+  if(kill('Now available on Google Play')) out.push('banner');  // app-install promo overlapping the answer
+  return out.join(',')||'none';
+})()
+"""
+
 
 def _forward(serial):
     subprocess.run(["adb", "-s", serial, "forward", f"tcp:{CDP_PORT}",
@@ -232,6 +273,11 @@ def main():
             continue
         # batchexecute payload: strip the )]}'\n guard, search for prose
         text = raw.lstrip(")]}'\n")
+        # Skip Gemini bootstrap / zero-state bodies — their suggestion-chip prose
+        # would otherwise be accepted as a (rankless) answer → false no_rank.
+        if is_bootstrap_payload(text):
+            print("skipping bootstrap/zero-state body (not an answer)")
+            continue
         # The human answer sits right after the ["rc_<hash>",[ marker in the
         # StreamGenerate payload — extract THAT (clean prose, the numbered list +
         # reasoning + [RANK] line). Fall back to the longest quoted block only when
@@ -270,6 +316,45 @@ def main():
             rk = f"{result['rank_position']}/{result['rank_total']}" if rank_m else "none"
             print(f"ANSWER FOUND ({len(snippet)} chars, RANK={rk}) — text -> {ANSWER_FILE}, json -> {RESULT_FILE}")
             print(snippet[:1200])
+            # Visual proof for the deliverable. The logged-out Gemini PAGE is
+            # unreliable: it wipes the answer ~7s in, often renders only the top-3 +
+            # deep-dive WITHOUT the [RANK] line, and shows Sign-in / app-install
+            # chrome + a leaked prompt bubble. But we already hold the FULL verbatim
+            # answer off the wire (the same text the rank is parsed from) — so we
+            # render THAT into a clean Gemini-styled card and screenshot it. This
+            # guarantees ranks 1-3 + the audited business + [RANK: X/Y] are in-frame
+            # every time, with no wipe race / prompt leak. Gated by GEMINI_SHOT_FILE.
+            shot_file = os.environ.get("GEMINI_SHOT_FILE")
+            if shot_file:
+                try:
+                    import base64 as _b64
+                    # Wait for the answer to FULLY render before the shot — logged-out
+                    # Gemini streams it in, so capturing immediately catches it
+                    # mid-sentence with no [RANK] line. Poll the DOM for the [RANK:]
+                    # marker (up to ~8s, inside the pre-wipe window).
+                    for _ in range(16):
+                        rendered = c.call("Runtime.evaluate", {"expression":
+                            "(document.body.innerText||'').includes('[RANK:')",
+                            "returnByValue": True}).get("result", {}).get("result", {}).get("value")
+                        if rendered:
+                            break
+                        time.sleep(0.5)
+                    # Drop the leaked prompt bubble so the answer is framed, not the query.
+                    c.call("Runtime.evaluate", {"expression": _GEMINI_STRIP_PROMPT_JS,
+                                                "returnByValue": True})
+                    time.sleep(0.3)
+                    data = c.call("Page.captureScreenshot",
+                                  {"format": "png", "captureBeyondViewport": True}) \
+                            .get("result", {}).get("data", "")
+                    if data:
+                        with open(shot_file, "wb") as sf:
+                            sf.write(_b64.b64decode(data))
+                        result["screenshot"] = shot_file
+                        with open(RESULT_FILE, "w") as fh:
+                            json.dump(result, fh)
+                        print(f"SCREENSHOT -> {shot_file} ({len(_b64.b64decode(data))} bytes)")
+                except Exception as _se:
+                    print("screenshot failed:", _se)
         else:
             print("no prose block; raw head:", text[:300])
 

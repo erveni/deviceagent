@@ -28,8 +28,10 @@ export AEO_SKIP_PREFLIGHT=1
 export KEYWORD_IDS_FILE=/tmp/rank_stale_all.json
 export AUDIT_CSV="$PWD/rabbitmq_audit_results_2026-06-28_stale.csv"
 export EXCLUDE_SUCCESS="$PWD/rabbitmq_audit_results_2026-06-28_stale*.csv"
-export RETRY_KEEP_NORANK=1   # success + no_rank terminal; retry only errors
+export RETRY_KEEP_NORANK=1   # FRESH FULL RE-RUN (2026-06-30): no_rank is terminal (prompt puts unranked last) — only errors retry, else genuine no_rank would retry 5x
+export GEMINI_RESET=0        # FRESH FULL RE-RUN: match the proven daily flow (residential acct + relay off already set) — no per-capture cookie reset
 export DEVICE_EXCLUDE=device-106
+export GEMINI_CDP_DEBUG=1     # surface cdp_js_frame (ChatGPT) + gemini CDP capture debug
 
 python3 -c "import websocket" 2>/dev/null || { log "FATAL: websocket-client missing (needed for Gemini CDP)"; exit 1; }
 [ -f "$KEYWORD_IDS_FILE" ] || { log "FATAL: target ids file missing ($KEYWORD_IDS_FILE)"; exit 1; }

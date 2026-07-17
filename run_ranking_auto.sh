@@ -16,11 +16,15 @@ CSV_GLOB="/Users/seolocalph/projects/device-agent/rabbitmq_audit_results_${DATE}
 LOG="/private/tmp/ranking_auto_${DATE}.log"
 
 export SSL_CERT_FILE=$(python3 -c "import certifi;print(certifi.where())")
-export EXECUTOR_TOKEN=$(aws secretsmanager get-secret-value --secret-id aeo-admin/prod --profile aeo-admin --region us-east-1 --query SecretString --output text | python3 -c "import sys,json;print(json.load(sys.stdin).get('EXECUTOR_TOKEN',''))")
+_SECRET=$(aws secretsmanager get-secret-value --secret-id aeo-admin/prod --profile aeo-admin --region us-east-1 --query SecretString --output text)
+export EXECUTOR_TOKEN=$(printf '%s' "$_SECRET" | python3 -c "import sys,json;print(json.load(sys.stdin).get('EXECUTOR_TOKEN',''))")
+# build_ranking_dueset.py reads /api/ranking-reports, which is Bearer-gated.
+export READ_API_TOKEN=$(printf '%s' "$_SECRET" | python3 -c "import sys,json;print(json.load(sys.stdin).get('READ_API_TOKEN',''))")
+unset _SECRET
 set -a; source .env.dev; set +a
 # RANKING is RESIDENTIAL — .env.dev sets PROXY_PORT=7000 (mobile); force 10001.
 export PROXY_HOST=gate.decodo.com PROXY_PORT=10001
-export PROXY_BASE_USER=user-spmqebjuzf PROXY_PASSWORD='Klf0oAnRcz96Da=6fv' USE_SNI_RELAY=0
+export PROXY_BASE_USER=user-spmqebjuzf PROXY_PASSWORD="${DECODO_PASS:?set DECODO_PASS in .env.dev}" USE_SNI_RELAY=0
 export DATE AUDIT_CSV="$CSV" KEYWORD_IDS_FILE="$KW_IDS"
 
 # auto-detect live phones; ranking caps workers (router stability — the audit path

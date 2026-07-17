@@ -1,12 +1,12 @@
 #!/bin/bash
-# Roll APK v0.9.23 (gen-timeout 240s) to the wifi fleet AFTER the Jun-24 daily
-# finishes. Excludes the USB test phone (149145555W006477). Per phone: install -r,
+# Roll APK v0.9.28 (versionCode 46, top-3 + summary format; honesty + map fix)
+# to the wifi fleet. Excludes the USB test phone (149145555W006477). install -r,
 # re-assert accessibility (shell trick), relaunch, verify /health version+a11y.
 # Defensive: if the FIRST phone ends without accessibility, abort the rest (so we
 # don't break the whole fleet's a11y unattended).
 set -u
 cd /Users/seolocalph/projects/device-agent
-APK=/tmp/device-agent-v924.apk
+APK=/tmp/device-agent-v929.apk
 LOG=/private/tmp/fleet_rollout_v923.log
 A11Y="com.deviceagent/com.deviceagent.AgentAccessibilityService"
 log(){ echo "[rollout $(date '+%F %T')] $*" | tee -a "$LOG"; }
@@ -36,7 +36,7 @@ while IFS= read -r s <&3; do
   ver=$(echo "$h" | python3 -c "import sys,json;print(json.load(sys.stdin).get('versionCode'))" 2>/dev/null)
   a11y=$(echo "$h" | python3 -c "import sys,json;print(json.load(sys.stdin).get('accessibility'))" 2>/dev/null)
   log "[$s] versionCode=$ver accessibility=$a11y"
-  if [ "$ver" = "42" ] && [ "$a11y" = "True" ]; then ok=$((ok+1)); else
+  if [ "$ver" = "47" ] && [ "$a11y" = "True" ]; then ok=$((ok+1)); else
     bad=$((bad+1))
     if [ "$first" = "1" ]; then
       log "ABORT: first phone did not come up clean (ver=$ver a11y=$a11y) — stopping rollout to avoid breaking the fleet. Investigate + roll manually."

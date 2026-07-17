@@ -10,11 +10,14 @@
 # Never touches phones that are attached. Stop: pkill -f _fleet_watchdog.sh
 # Log: /private/tmp/fleet_watchdog.log  (hourly LLM check-in reads this)
 set -u
-EXPECT=8
+EXPECT=9
 SEVER_MIN=4
 LOG=/private/tmp/fleet_watchdog.log
 PIDFILE=/private/tmp/fleet_watchdog.pid
-FLEET_IPS="192.168.0.100 192.168.0.102 192.168.0.103 192.168.0.104 192.168.0.106 192.168.0.120 192.168.0.121 192.168.0.122"
+# 9 live phones as of 2026-07-15 (verified by getprop ro.serialno). Each also
+# dual-connects via mDNS, so count_devices reports up to ~18 lines when fully
+# healthy; EXPECT=9 (one line per unique phone) is the floor before recovery.
+FLEET_IPS="192.168.0.100 192.168.0.110 192.168.0.113 192.168.0.115 192.168.0.118 192.168.0.120 192.168.0.123 192.168.0.133 192.168.0.136"
 
 [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null && { echo "already running (pid $(cat "$PIDFILE"))"; exit 0; }
 echo $$ > "$PIDFILE"

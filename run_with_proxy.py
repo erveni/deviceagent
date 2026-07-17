@@ -89,14 +89,14 @@ _relays_by_cfg = {}              # gost cfg path -> [relay Popen, ...]
 _relays_lock = threading.Lock()
 
 DEVICES = [
-    ("device-101", "adb-R83L112EVWK-PydBnX (2)._adb-tls-connect._tcp"),
-    ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y (2)._adb-tls-connect._tcp"),
+    ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
+    ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
-    ("device-104", "adb-149145555W002883-aGtZ5h._adb-tls-connect._tcp"),
+    ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH._adb-tls-connect._tcp"),
     ("device-106", "adb-149145555W006477-JjonPV._adb-tls-connect._tcp"),
     ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
-    ("device-108", "adb-1490455613010287-g9bnc8._adb-tls-connect._tcp"),
+    ("device-108", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
     ("device-109", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
     ("device-110", "adb-149145555W006589-2W7yzb._adb-tls-connect._tcp"),
     ("device-111", "adb-129143748T010173-6zhzYl._adb-tls-connect._tcp"),
@@ -104,8 +104,19 @@ DEVICES = [
     ("device-113", "adb-129143749A011759-fEoBDp._adb-tls-connect._tcp"),
     ("device-114", "adb-1490455572007706-HQWNyz._adb-tls-connect._tcp"),
     ("device-115", "adb-R83L103VCVH-uvv2pp._adb-tls-connect._tcp"),
-    ("device-116", "adb-1490455615007763-aoRAJa (2)._adb-tls-connect._tcp"),
-    ("device-117", "adb-1490455613010774-txpX1j (2)._adb-tls-connect._tcp"),
+    ("device-116", "adb-1490455615007763-aoRAJa._adb-tls-connect._tcp"),
+    ("device-117", "adb-1490455613010774-txpX1j._adb-tls-connect._tcp"),
+    # Added 2026-07-17: 8 new Infinix X6725 / Android 15 phones. They shipped with a
+    # differently-signed agent 0.6.3 (install -r fails INSTALL_FAILED_UPDATE_INCOMPATIBLE),
+    # so each was uninstalled and reinstalled with the fleet build 0.9.52 (versionCode 71).
+    ("device-118", "adb-149045556L013514-Lp5Qe9._adb-tls-connect._tcp"),
+    ("device-119", "adb-149045556R004735-xZmsMI._adb-tls-connect._tcp"),
+    ("device-120", "adb-149045556R006310-ke8PPl._adb-tls-connect._tcp"),
+    ("device-121", "adb-149045556R021680-y2ttdr._adb-tls-connect._tcp"),
+    ("device-122", "adb-149045556S003287-TPRJ3x._adb-tls-connect._tcp"),
+    ("device-123", "adb-1490455571033550-R2yFec._adb-tls-connect._tcp"),
+    ("device-124", "adb-1490455572006390-9vebFC._adb-tls-connect._tcp"),
+    ("device-125", "adb-1490455572008742-O0MeAp._adb-tls-connect._tcp"),
 ]
 
 # ONLY_ONLINE=1 prunes DEVICES to phones currently reporting `device` in

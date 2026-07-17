@@ -105,16 +105,19 @@ for k in kws:
     items.append({"kw": k, "biz": b, "bid": bid,
                   "campaign": k.get("campaignName") or f"biz{bid}"})
 
-# group by campaign/location
+# group by campaign/location. Key on (campaignName, businessId): dozens of distinct
+# free-trial businesses share the generic campaignName "Free Trial" and must not
+# collapse into one 8-session bucket. Same business, distinct campaign names (e.g.
+# Leo's per-location campaigns) still separate correctly on the name component.
 by_campaign = defaultdict(list)
 for it in items:
-    by_campaign[it["campaign"]].append(it)
+    by_campaign[(it["campaign"], it["bid"])].append(it)
 print(f"active keywords: {len(items)} across {len(by_campaign)} campaigns/locations")
 
 # assign (kw, biz, platform) specs per campaign with cap/priority/force-cover
 specs = []
 report = []
-for camp_off, (camp, its) in enumerate(by_campaign.items()):
+for camp_off, ((camp, _gbid), its) in enumerate(by_campaign.items()):
     bid = its[0]["bid"]
     biz = its[0]["biz"]
     prio = is_priority(bid, camp)
@@ -201,10 +204,19 @@ if DRY_RUN:
 
 # ---- enrich via build-session + write plan ----
 def build_session(kw_id, platform):
+    # Retry transient network/SSL blips: one failed call among ~1.6k must not abort
+    # the whole build (ThreadPoolExecutor.map re-raises the first exception).
+    import time
     body = json.dumps({"keyword_id": kw_id, "platform": platform.lower()}).encode()
     req = urllib.request.Request(f"{ADMIN}/api/llm/build-session", data=body,
                                  headers={**H, "Content-Type": "application/json"}, method="POST")
-    return json.load(urllib.request.urlopen(req, timeout=60))
+    for attempt in range(4):
+        try:
+            return json.load(urllib.request.urlopen(req, timeout=60))
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if attempt == 3:
+                raise
+            time.sleep(2 * (attempt + 1))
 
 
 def extract_zip(addr):
