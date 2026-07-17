@@ -373,6 +373,12 @@ def make_job_record(kw: dict, biz: dict, platform: str, job_type: str, job_id: i
                 "id": biz["id"],
                 "businessName": biz_name_eff,
                 "name":         biz_name_eff,
+                # Trading name(s) the platforms list this business under when they
+                # differ from `name` (businesses.also_known_as) — Wichita Florist is
+                # listed as "Flower Factory Flowers". The dispatch's fabricated-rank
+                # gate matches on these too, else a genuine win for a DBA business
+                # looks absent from its own list and gets re-captured forever.
+                "alsoKnownAs":  biz.get("alsoKnownAs") or "",
                 "clientId":     biz.get("clientId"),
                 "client":       {"clientId": biz.get("clientId"), "clientName": ""},
                 "gmb":          {"id": biz["id"], "name": biz_url, "type": "GMB"},
