@@ -63,22 +63,23 @@
 ## Session Opener (paste at start of next session)
 
 ```
-Continuing device-agent. Ranking backlog (2026-07-17 due-set) is at 99.54%
-(4,554/4,575), grinding the last 16 real pairs (grease/cooking-oil ChatGPT
-cluster + 4 crystal-shop) via the com.deviceagent.ranking LaunchAgent
-(240s timeout, reboot-durable). 5 junk pairs correctly excluded (kw 55
-duplicate botox, kw 4562 test) — real 100% = 4,570. Code fixes committed +
-pushed to devicefarm1/dev (72d950d); NOT main/develop. LaunchAgent files
-(_ranking_daemon.sh + plist) are local/uncommitted.
+Continuing device-agent. The 2026-07-17 stale ranking backlog is DONE at real
+100% — deliverable ready for admin import at
+~/Desktop/Rankings/ranking_stale_2026-07-17_consolidated.csv (4,569 rows,
+per-slot dated last_rank+14, 14 salvaged, junk kw55/4562 excluded, no backfill,
+zero future dates). Root cause of the "grease residue" was found + FIXED
+(commit abf201d): _rank_inconsistent split list-item names on a plain hyphen,
+truncating "Ace Grease Service - St. Louis" and false-rejecting genuine top-3
+as fabrications. Fix + handover pushed to devicefarm1/dev (HEAD e812cb4) — NOT
+main/develop. Fleet idle; ranking daemon stopped (.ranking_2026-07-17.done set);
+com.deviceagent.fleet still up. LaunchAgent files (_ranking_daemon.sh + plist)
+are local/uncommitted.
 
-NEW TASK the user wants started while the backlog finishes: scan then test
-the feature/develop branch (https://github.com/DeviceFarm1/device-agent/tree/
-feature/develop) as a potential new device-agent / new way of running —
-git fetch + diff vs current first, report what changed, do NOT adopt or push
-to develop/feature/develop until scanned + tested.
-
-Consolidation is blocked on two user decisions: backfill 368 multi-slot rows
-(rec: no) and filter ~90 future-dated leftovers (rec: yes). Also open: rotate
-the Decodo password (in git history), kw 4169 perplexity straggler, 6 dark
-phones needing physical toggle. Start by fetching + diffing feature/develop.
+Open tasks: (1) feature/develop TEST step — scan is done (Kotlin/Ktor
+Android-native rewrite: on-device NordVPN/SuperProxy, device-owner, custom IME;
+removes the Mac Python pipeline). Build + install on ONE spare phone, exercise
+the Ktor routes, isolated from the live fleet. Do NOT push to develop/
+feature/develop. (2) Rotate the Decodo password (still in git history).
+(3) kw 4169 perplexity straggler; 6 dark phones (105,107,111,112,114,115) need
+a physical wireless-debug toggle. Start with whatever the user asks.
 ```
