@@ -539,8 +539,12 @@ def _rank_inconsistent(response_text: str, biz: str, platform: str, aka: str = "
         if not mm:
             continue
         parsed += 1
+        # Split name from its "— description" on EM/EN dash only, never the plain
+        # hyphen: business names embed " - " ("Ace Grease Service - St. Louis"), and
+        # splitting on it truncated the name to "Ace Grease Service", which then
+        # failed the strict token match and rejected genuine #1 rows as fabrications.
         name = " ".join(re.sub(r"[^a-z0-9 ]", " ",
-                               re.split(r"\s[—–-]\s|\n", mm.group(1).strip(), maxsplit=1)[0]).split())
+                               re.split(r"\s[—–]\s|\n", mm.group(1).strip(), maxsplit=1)[0]).split())
         if any(_name_matches(c, name, strict) for c, strict in cands):
             return x > 3 or x != n
     # Only judge absence when the list actually parsed — a capture whose list we
