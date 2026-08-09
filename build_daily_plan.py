@@ -16,12 +16,12 @@ no plan written. Without DRY_RUN it calls /api/llm/build-session and writes
 daily_plan_2026-06-08.json.
 """
 from __future__ import annotations
-import json, os, random, re, sys, urllib.request
+import csv, glob, json, os, random, re, sys, urllib.request
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor
 
 os.environ.setdefault("SSL_CERT_FILE", __import__("certifi").where())
-ADMIN = "https://jjm59vpn3y.us-east-1.awsapprunner.com"
+ADMIN = os.environ.get("ADMIN_BASE", "https://jjm59vpn3y.us-east-1.awsapprunner.com")
 TOKEN = os.environ["EXECUTOR_TOKEN"]
 H = {"X-Executor-Token": TOKEN}
 DATE = os.environ.get("DATE", "2026-06-08")
@@ -82,12 +82,40 @@ clients = api("/api/clients")
 active_client_ids = {c["id"] for c in clients if active(c)}
 excluded_biz_ids = {bid for bid, b in biz_by_id.items()
                     if (b.get("name") or b.get("businessName") or "") in EXCLUDED_BIZ_NAMES}
-# Optional campaign exclusion by aeo_plan_id — e.g. Free-Trial plans are ranking-only
-# and must NOT run in daily (per user). File = JSON list of plan ids to skip.
+# Daily exclusion rule (per user 2026-07-22): a keyword is dropped from the daily
+# ONLY when it is BOTH in a free-trial plan AND ranks top 1-3. Free-trial keywords
+# that are NOT top-3 RUN; non-free-trial top-3 keywords RUN. Top-3 is keyed on
+# (biz_name, keyword) with rank_position 1..3 from the ranking audit CSVs — the
+# same field used to detect top-3 last session.
 _excl_plan_file = os.environ.get("EXCLUDE_PLAN_IDS_FILE", "/tmp/exclude_plan_ids.json")
-excluded_plan_ids = set(json.load(open(_excl_plan_file))) if os.path.exists(_excl_plan_file) else set()
-if excluded_plan_ids:
-    print(f"excluding {len(excluded_plan_ids)} campaigns (e.g. Free-Trial) from daily")
+free_trial_plan_ids = set(json.load(open(_excl_plan_file))) if os.path.exists(_excl_plan_file) else set()
+
+def _to_int(v):
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None
+
+_rank_glob = os.environ.get("RANK_CSVS", "rabbitmq_audit_results_2026-07-17_ranking_*.csv")
+top3_keys = set()   # (biz_name_lower, keyword_lower)
+for _rp in sorted(glob.glob(_rank_glob)):
+    for _r in csv.DictReader(open(_rp, newline="")):
+        _pos = _to_int(_r.get("rank_position"))
+        if _pos is not None and 1 <= _pos <= 3:
+            top3_keys.add(((_r.get("biz_name") or "").strip().lower(),
+                           (_r.get("keyword") or "").strip().lower()))
+print(f"free-trial plans: {len(free_trial_plan_ids)}; top-3 (biz,kw) keys: "
+      f"{len(top3_keys)} from '{_rank_glob}'")
+
+def is_free_trial_top3(k, b):
+    """Exclude iff BOTH free-trial plan AND this (biz_name, keyword) ranks top 1-3."""
+    if k.get("aeoPlanId") not in free_trial_plan_ids:
+        return False
+    bn = (b.get("name") or b.get("businessName") or "").strip().lower()
+    kt = (k.get("keywordText") or "").strip().lower()
+    return (bn, kt) in top3_keys
+
+_n_ft_top3 = 0   # keywords dropped by the free-trial-AND-top-3 rule
 
 # collect active keywords with their campaign/location
 items = []   # dict(kw, biz, campaign)
@@ -100,10 +128,12 @@ for k in kws:
         continue
     if bid in excluded_biz_ids:
         continue
-    if k.get("aeoPlanId") in excluded_plan_ids:
+    if is_free_trial_top3(k, b):
+        _n_ft_top3 += 1
         continue
     items.append({"kw": k, "biz": b, "bid": bid,
                   "campaign": k.get("campaignName") or f"biz{bid}"})
+print(f"dropped {_n_ft_top3} keywords by free-trial-AND-top-3 rule")
 
 # group by campaign/location. Key on (campaignName, businessId): dozens of distinct
 # free-trial businesses share the generic campaignName "Free Trial" and must not
@@ -210,12 +240,12 @@ def build_session(kw_id, platform):
     body = json.dumps({"keyword_id": kw_id, "platform": platform.lower()}).encode()
     req = urllib.request.Request(f"{ADMIN}/api/llm/build-session", data=body,
                                  headers={**H, "Content-Type": "application/json"}, method="POST")
-    for attempt in range(4):
+    for attempt in range(6):
         try:
             return json.load(urllib.request.urlopen(req, timeout=60))
         except (urllib.error.URLError, TimeoutError, OSError):
-            if attempt == 3:
-                raise
+            if attempt == 5:
+                return None   # persistent failure: caller drops this one session
             time.sleep(2 * (attempt + 1))
 
 
@@ -254,11 +284,19 @@ def make_job(kw, biz, plat, sess):
 
 
 print(f"\nfetching {len(specs)} build-session prompts…", flush=True)
+failed = []   # (keyword_id, platform) whose build-session persistently 500'd
 def fetch(s):
     kw, biz, plat = s
-    return make_job(kw, biz, plat, build_session(kw["id"], plat))
-with ThreadPoolExecutor(max_workers=10) as ex:
-    jobs = list(ex.map(fetch, specs))
+    sess = build_session(kw["id"], plat)
+    if sess is None:
+        failed.append((kw["id"], plat))
+        return None
+    return make_job(kw, biz, plat, sess)
+with ThreadPoolExecutor(max_workers=8) as ex:
+    jobs = [j for j in ex.map(fetch, specs) if j is not None]
+if failed:
+    print(f"WARN: dropped {len(failed)} sessions on persistent build-session failure: "
+          f"{failed[:20]}{'…' if len(failed) > 20 else ''}")
 
 # wave-pack (10/wave, no same client_id or campaign_id within a wave)
 random.shuffle(jobs)
