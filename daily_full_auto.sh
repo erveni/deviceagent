@@ -5,7 +5,11 @@
 # session teardown and reboots. Mae source is the tracked mae_plan.json (Mae excluded
 # from the deliverable via the dailyonly-swap before consolidation).
 set -u
-export PATH="/Library/Frameworks/Python.framework/Versions/3.14/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/Library/Frameworks/Python.framework/Versions/3.14/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# node lives under nvm (not on the launchd PATH) — the Ollama-fallback build-server
+# needs it. Resolve the newest installed version and prepend its bin.
+NVM_BIN=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
+[ -n "$NVM_BIN" ] && export PATH="$NVM_BIN:$PATH"
 cd /Users/seolocalph/projects/device-agent
 
 DATE="${1:-$(date +%Y-%m-%d)}"
