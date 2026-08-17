@@ -14,15 +14,37 @@ LOG="/private/tmp/daily_auto_${DATE}.log"
 
 export SSL_CERT_FILE=$(python3 -c "import certifi;print(certifi.where())")
 export EXECUTOR_TOKEN=$(aws secretsmanager get-secret-value --secret-id aeo-admin/prod --profile aeo-admin --region us-east-1 --query SecretString --output text | python3 -c "import sys,json;print(json.load(sys.stdin).get('EXECUTOR_TOKEN',''))")
+_ov_provider="${PROXY_PROVIDER:-}"   # a caller-exported provider wins over .env.dev
 set -a; source .env.dev; set +a
-# RESIDENTIAL daily proxy — Decodo (DataImpulse removed: out of GB, 2026-06-24).
-# Runs AFTER the .env.dev source so it wins over any .env.dev proxy vars.
-export PROXY_PROVIDER=decodo \
-       PROXY_HOST=gate.decodo.com PROXY_PORT=10001 \
-       PROXY_USER=user-spmqebjuzf \
-       PROXY_PASS="${DECODO_PASS:?set DECODO_PASS in .env.dev (gitignored) — never hardcode}" \
-       USE_SNI_RELAY=0 PROXY_TARGET=country-us
-echo "[daily ${DATE}] proxy: Decodo residential (gate.decodo.com:10001)" | tee -a "$LOG"
+[ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
+# RESIDENTIAL daily proxy. Default Decodo; set PROXY_PROVIDER=dataimpulse in .env.dev
+# to switch to the DataImpulse gateway (TEMPORARY, while Decodo funding). Runs AFTER
+# the .env.dev source so it wins over stale proxy host/port. Note: DataImpulse only
+# targets country-US (no per-zip), so geo is coarser than Decodo's zip targeting.
+if [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
+  export PROXY_PROVIDER=dataimpulse \
+         PROXY_HOST=gw.dataimpulse.com PROXY_PORT=823 \
+         PROXY_USER="${DATAIMPULSE_USER:?set DATAIMPULSE_USER in .env.dev (gitignored)}" \
+         PROXY_PASS="${DATAIMPULSE_PASS:?set DATAIMPULSE_PASS in .env.dev (gitignored)}" \
+         USE_SNI_RELAY=0 PROXY_TARGET=country-us
+  echo "[daily ${DATE}] proxy: DataImpulse (TEMPORARY — Decodo funding)" | tee -a "$LOG"
+elif [ "${PROXY_PROVIDER:-decodo}" = "rayobyte" ]; then
+  # Rayobyte residential via HTTP endpoint :8000 (gost uses an http connector for it);
+  # targeting + sticky session go in the password. TRIAL creds — watch bandwidth.
+  export PROXY_PROVIDER=rayobyte \
+         PROXY_HOST=la.residential.rayobyte.com PROXY_PORT=8000 \
+         PROXY_USER="${RAYOBYTE_USER:?set RAYOBYTE_USER in .env.dev (gitignored)}" \
+         PROXY_PASS="${RAYOBYTE_PASS:?set RAYOBYTE_PASS in .env.dev (gitignored)}" \
+         USE_SNI_RELAY=0 PROXY_TARGET=country-us
+  echo "[daily ${DATE}] proxy: Rayobyte (HTTP :8000, TRIAL)" | tee -a "$LOG"
+else
+  export PROXY_PROVIDER=decodo \
+         PROXY_HOST=gate.decodo.com PROXY_PORT=10001 \
+         PROXY_USER=user-spmqebjuzf \
+         PROXY_PASS="${DECODO_PASS:?set DECODO_PASS in .env.dev (gitignored) — never hardcode}" \
+         USE_SNI_RELAY=0 PROXY_TARGET=country-us
+  echo "[daily ${DATE}] proxy: Decodo residential (gate.decodo.com:10001)" | tee -a "$LOG"
+fi
 export ONLY_ONLINE=1
 # Auto-detect which phones are actually alive (adb + app health) and size the run
 # to them — no stale hardcoded exclude list. Caller can still override by exporting

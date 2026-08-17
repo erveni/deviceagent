@@ -22,9 +22,23 @@ export EXECUTOR_TOKEN=$(printf '%s' "$_SECRET" | python3 -c "import sys,json;pri
 export READ_API_TOKEN=$(printf '%s' "$_SECRET" | python3 -c "import sys,json;print(json.load(sys.stdin).get('READ_API_TOKEN',''))")
 unset _SECRET
 set -a; source .env.dev; set +a
-# RANKING is RESIDENTIAL — .env.dev sets PROXY_PORT=7000 (mobile); force 10001.
-export PROXY_HOST=gate.decodo.com PROXY_PORT=10001
-export PROXY_BASE_USER=user-spmqebjuzf PROXY_PASSWORD="${DECODO_PASS:?set DECODO_PASS in .env.dev}" USE_SNI_RELAY=0
+# RANKING is RESIDENTIAL. Default Decodo (zip-level geo). Temporary DataImpulse
+# fallback while Decodo is unfunded: set PROXY_PROVIDER=dataimpulse in .env.dev —
+# DataImpulse has no zip targeting, so ranking geo drops to state/country (coarser).
+export USE_SNI_RELAY=0
+if [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
+  # DataImpulse gateway; creds under DATAIMPULSE_* in .env.dev (gitignored).
+  # RANKING needs a STICKY exit IP — the audit capture holds one session ~150s and
+  # the rotating 823 gateway swaps the IP mid-capture → generation timeout. Sticky
+  # ports 10000-10010 pin one IP per __sid. (The daily uses 823: its jobs are short.)
+  export PROXY_HOST=gw.dataimpulse.com PROXY_PORT="${DATAIMPULSE_STICKY_PORT:-10000}"
+  export PROXY_BASE_USER="${DATAIMPULSE_USER:?set DATAIMPULSE_USER in .env.dev}"
+  export PROXY_PASSWORD="${DATAIMPULSE_PASS:?set DATAIMPULSE_PASS in .env.dev}"
+  echo "[rank ${DATE}] proxy=DataImpulse host=${PROXY_HOST} port=${PROXY_PORT} (state/country geo — no zip)" | tee -a "$LOG"
+else
+  export PROXY_HOST=gate.decodo.com PROXY_PORT=10001
+  export PROXY_BASE_USER=user-spmqebjuzf PROXY_PASSWORD="${DECODO_PASS:?set DECODO_PASS in .env.dev}"
+fi
 export DATE AUDIT_CSV="$CSV" KEYWORD_IDS_FILE="$KW_IDS"
 
 # auto-detect live phones; ranking caps workers (router stability — the audit path

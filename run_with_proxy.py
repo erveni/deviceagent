@@ -29,6 +29,10 @@ def build_upstream_user(sid, zip_=None, state=None, country=None):
     zip_   — optional retry geo: Decodo appends -zip-<zip>; DataImpulse has no
              zip targeting, so US country is kept (city-level would be __city.X).
     """
+    if PROXY_PROVIDER == "rayobyte":
+        # Rayobyte targets via the PASSWORD (see gost_start), so the username is the
+        # plain account; geo/session live in the password string.
+        return PROXY_USER
     if PROXY_PROVIDER == "dataimpulse":
         return f"{PROXY_USER}__cr.us__sid.{sid}"
     if (country or "us").lower() == "ca":
@@ -89,23 +93,23 @@ _relays_by_cfg = {}              # gost cfg path -> [relay Popen, ...]
 _relays_lock = threading.Lock()
 
 DEVICES = [
-    ("device-101", "adb-R83L112EVWK-PydBnX._adb-tls-connect._tcp"),
-    ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
-    ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
+    ("device-101", "adb-R83L112EVWK-PydBnX (2)._adb-tls-connect._tcp"),
+    ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y (2)._adb-tls-connect._tcp"),
+    ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),
     ("device-105", "adb-149145555W005208-27c1FH._adb-tls-connect._tcp"),
     ("device-106", "adb-149145555W006477-JjonPV._adb-tls-connect._tcp"),
     ("device-107", "adb-149145555W006788-Vb9M0e (2)._adb-tls-connect._tcp"),
     ("device-108", "adb-1490455613010287-g9bnc8 (2)._adb-tls-connect._tcp"),
     ("device-109", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
-    ("device-110", "adb-149145555W006589-2W7yzb._adb-tls-connect._tcp"),
+    ("device-110", "adb-149145555W006589-2W7yzb (2)._adb-tls-connect._tcp"),
     ("device-111", "adb-129143748T010173-6zhzYl._adb-tls-connect._tcp"),
     ("device-112", "adb-129143748T079638-YjN1XH._adb-tls-connect._tcp"),
     ("device-113", "adb-129143749A011759-fEoBDp._adb-tls-connect._tcp"),
     ("device-114", "adb-1490455572007706-HQWNyz._adb-tls-connect._tcp"),
     ("device-115", "adb-R83L103VCVH-uvv2pp._adb-tls-connect._tcp"),
-    ("device-116", "adb-1490455615007763-aoRAJa._adb-tls-connect._tcp"),
-    ("device-117", "adb-1490455613010774-txpX1j._adb-tls-connect._tcp"),
+    ("device-116", "adb-1490455615007763-aoRAJa (2)._adb-tls-connect._tcp"),
+    ("device-117", "adb-1490455613010774-txpX1j (2)._adb-tls-connect._tcp"),
     # Added 2026-07-17: 8 new Infinix X6725 / Android 15 phones. They shipped with a
     # differently-signed agent 0.6.3 (install -r fails INSTALL_FAILED_UPDATE_INCOMPATIBLE),
     # so each was uninstalled and reinstalled with the fleet build 0.9.52 (versionCode 71).
@@ -217,9 +221,15 @@ def gost_start(specs):
                   f'    listener: {{type: tcp}}']
     lines.append("chains:")
     for i, s in enumerate(specs):
+        # Rayobyte uses an HTTP upstream endpoint (:8000) and targets via the password
+        # (country + sticky session); everyone else is socks5 with the global password.
+        if PROXY_PROVIDER == "rayobyte":
+            ctype = "http"; upw = f"{PROXY_PASS}-country-US-session-{s['sid']}"
+        else:
+            ctype = "socks5"; upw = PROXY_PASS
         lines += [f'  - name: c{i}', f'    hops:', f'      - name: h{i}', f'        nodes:',
                   f'          - name: d{i}', f'            addr: {PROXY_HOST}:{PROXY_PORT}',
-                  f'            connector: {{type: socks5, auth: {{username: "{s["upstream_user"]}", password: "{PROXY_PASS}"}}}}',
+                  f'            connector: {{type: {ctype}, auth: {{username: "{s["upstream_user"]}", password: "{upw}"}}}}',
                   f'            dialer: {{type: tcp}}']
     cfg = f"/tmp/gost_{os.getpid()}_{specs[0]['port']}.yaml"
     with open(cfg, "w") as f: f.write("\n".join(lines)+"\n")

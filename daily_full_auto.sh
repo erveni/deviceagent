@@ -32,7 +32,9 @@ if [ -s "$PLAN" ]; then
   say "plan already present, skip build"
 else
   say "building plan…"
+  _ov_provider="${PROXY_PROVIDER:-}"   # a caller-exported provider wins over .env.dev
   set -a; source .env.dev 2>/dev/null; set +a
+  [ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
   # Route the build through a local build-only api-server so DeepSeek-402 auto-falls
   # to Ollama instead of starving the plan. Best-effort: if it can't start, ADMIN_BASE
   # stays unset and the build hits the deployed endpoint (DeepSeek-only) as before.
