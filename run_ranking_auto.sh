@@ -21,12 +21,18 @@ export EXECUTOR_TOKEN=$(printf '%s' "$_SECRET" | python3 -c "import sys,json;pri
 # build_ranking_dueset.py reads /api/ranking-reports, which is Bearer-gated.
 export READ_API_TOKEN=$(printf '%s' "$_SECRET" | python3 -c "import sys,json;print(json.load(sys.stdin).get('READ_API_TOKEN',''))")
 unset _SECRET
+_ov_provider="${PROXY_PROVIDER:-}"   # a caller-exported provider wins over .env.dev
 set -a; source .env.dev; set +a
-# RANKING is RESIDENTIAL. Default Decodo (zip-level geo). Temporary DataImpulse
-# fallback while Decodo is unfunded: set PROXY_PROVIDER=dataimpulse in .env.dev —
-# DataImpulse has no zip targeting, so ranking geo drops to state/country (coarser).
+[ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
+# RANKING is RESIDENTIAL. Default Decodo (zip geo). DataImpulse = state/country only.
+# Rayobyte = zip geo via HTTP :8000 (gost http connector, targeting in password).
 export USE_SNI_RELAY=0
-if [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
+if [ "${PROXY_PROVIDER:-decodo}" = "rayobyte" ]; then
+  export PROXY_HOST=la.residential.rayobyte.com PROXY_PORT=8000
+  export PROXY_BASE_USER="${RAYOBYTE_USER:?set RAYOBYTE_USER in env}"
+  export PROXY_PASSWORD="${RAYOBYTE_PASS:?set RAYOBYTE_PASS in env}"
+  echo "[rank ${DATE}] proxy=Rayobyte host=${PROXY_HOST} port=${PROXY_PORT} (zip geo, HTTP connector)" | tee -a "$LOG"
+elif [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
   # DataImpulse gateway; creds under DATAIMPULSE_* in .env.dev (gitignored).
   # RANKING needs a STICKY exit IP — the audit capture holds one session ~150s and
   # the rotating 823 gateway swaps the IP mid-capture → generation timeout. Sticky
