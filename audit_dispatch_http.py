@@ -1410,10 +1410,18 @@ def dispatch_audit_job(
                 gost.stop()
             except Exception:
                 pass
-            ocr_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
+            # Canadian jobs keep country-ca city-tier here too — a US state-good zip
+            # would re-capture a BC business from a US exit (Gemini OCR re-capture is
+            # its most common path, so this bit hard). See the initial/retry branches.
+            if state_code.upper() in _CA_PROVINCES:
+                ocr_country, ocr_zip = "ca", ""
+            else:
+                ocr_country = "us"
+                ocr_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
             gost = GostManager(
                 [{"device_id": gost_key, "zip": ocr_zip, "state": state_code,
-                  "country": "us", "session_duration": 30}],
+                  "city": entry.get("city", ""),
+                  "country": ocr_country, "session_duration": 30}],
                 base_port=gost_port,
             )
             gost.start(wait_seconds=2.0)
