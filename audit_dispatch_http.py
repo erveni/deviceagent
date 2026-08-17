@@ -1307,13 +1307,23 @@ def dispatch_audit_job(
             # Dropping straight to _STATE_GOOD_ZIP audited e.g. a Sacramento
             # business from Beverly Hills 90210 on every retry → false no_rank.
             _retry_city = entry.get("city", "")
-            _retry_city_zip = _city_to_zip(_retry_city, state_code) if _retry_city else ""
-            # Avoid re-using the exact zip that just failed; the session rotation
-            # below still gives a fresh exit if the city has only one usable zip.
-            if _retry_city_zip and _retry_city_zip != biz_zip:
-                retry_zip = _retry_city_zip
+            # Canadian retry: keep country-ca + city-tier. US zip resolution maps a
+            # BC city (_city_to_zip hits the US-only zippopotam) to a NYC fallback →
+            # the re-capture lands a random US IP and the rank is meaningless. The
+            # session rotation below still yields a fresh CA exit.
+            _retry_is_ca = state_code.upper() in _CA_PROVINCES
+            if _retry_is_ca:
+                retry_country = "ca"
+                retry_zip = ""
             else:
-                retry_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
+                retry_country = "us"
+                _retry_city_zip = _city_to_zip(_retry_city, state_code) if _retry_city else ""
+                # Avoid re-using the exact zip that just failed; the session rotation
+                # below still gives a fresh exit if the city has only one usable zip.
+                if _retry_city_zip and _retry_city_zip != biz_zip:
+                    retry_zip = _retry_city_zip
+                else:
+                    retry_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
             print(
                 f"  [retry] {reason} — zip={biz_zip or '(none)'} → {retry_zip}"
                 f" ({_retry_city or state_code}), rotating Decodo session",
@@ -1328,11 +1338,13 @@ def dispatch_audit_job(
                 gost.stop()
             except Exception:
                 pass
-            # New gost with no zip (state-only fallback) and fresh session_id
+            # Fresh session_id; country/city mirror the initial spec so a CA retry
+            # stays country-ca city-tier instead of collapsing to a US exit.
             gost = GostManager(
                 [{
                     "device_id": gost_key, "zip": retry_zip, "state": state_code,
-                    "country": "us", "session_duration": 30,
+                    "city": _retry_city,
+                    "country": retry_country, "session_duration": 30,
                 }],
                 base_port=gost_port,
             )
