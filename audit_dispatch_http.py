@@ -1137,6 +1137,10 @@ def dispatch_audit_job(
     gost = GostManager(
         [{
             "device_id": gost_key, "zip": biz_zip, "state": state_code,
+            # City drives Rayobyte's CA city-tier (a country-only CA exit lands a
+            # random Canadian IP — a Toronto exit ranks a Burnaby business wrong).
+            # US zip-tier and Decodo/DataImpulse ignore this key.
+            "city": entry.get("city", ""),
             "country": country, "session_duration": 30,
         }],
         base_port=gost_port,
