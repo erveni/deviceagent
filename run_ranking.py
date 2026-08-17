@@ -32,6 +32,9 @@ from run_with_proxy import DEVICES
 import datetime as _dt
 ANCHOR_DATE = os.environ.get("DATE", "2026-06-08")
 CUTOFF = (_dt.date.fromisoformat(ANCHOR_DATE) - _dt.timedelta(days=14)).isoformat()
+# FORCE_RERANK=1: re-rank targeted keywords even if ranked within the 14-day window
+# (ad-hoc single-client "check top-3 now" runs where freshness would otherwise skip).
+FORCE_RERANK = os.environ.get("FORCE_RERANK") == "1"
 TARGET_DATE_ISO = f"{ANCHOR_DATE}T18:00:00-07:00"
 SOURCE_TAG = os.environ.get("SOURCE_TAG", f"ranking_{ANCHOR_DATE}")
 EXCLUDED_BIZ_NAMES = {
@@ -162,7 +165,7 @@ for k in active_kws:
         if last is None:
             job_specs.append((k, b, p, "INITIAL_RANKING"))
             n_initial += 1
-        elif last <= CUTOFF:
+        elif last <= CUTOFF or FORCE_RERANK:
             job_specs.append((k, b, p, "RANKING"))
             n_ranking += 1
         else:
@@ -227,6 +230,12 @@ _STATE_NAME_TO_CODE = {
 # Valid 2-letter codes — case-insensitive parsing can match junk 2-letter tokens
 # (e.g. "of"), so accept a parsed state only when it is a real US code.
 _VALID_ST = frozenset(_STATE_NAME_TO_CODE.values())
+# Canadian province codes. Free-trial campaigns in Canada (e.g. MyOasis/Heer in BC)
+# carry 'City, BC' only in kw_geo_override.json; without accepting the province code
+# here _parse_loc returns empty state → dispatch defaults them to NY 10001. A CA code
+# flows through as-is; dispatch_audit_job maps it to country-ca (no US zip).
+_CA_PROVINCES = frozenset({"ON", "QC", "BC", "AB", "MB", "SK", "NS", "NB", "NL",
+                           "PE", "NT", "YT", "NU"})
 # 'City, Full State Name' — anchored on the KNOWN state names so the second group
 # only matches a real state. A generic \w+ second group greedily matched the wrong
 # comma pair ("495 Fred Taylor Road, Siletz" instead of "Siletz, Oregon") and never
@@ -252,7 +261,7 @@ def _parse_loc(addr: str) -> tuple[str, str, str]:
     matches = _CITY_ST_RE.findall(cleaned)
     for c, s in reversed(matches):
         s = s.strip().upper()
-        if s in _VALID_ST:
+        if s in _VALID_ST or s in _CA_PROVINCES:
             return (c.strip(), s, "")
     # Fall back to 'City, FullStateName' → map the name to a 2-letter code.
     for c, s in _CITY_STATENAME_RE.findall(cleaned):
