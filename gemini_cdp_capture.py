@@ -42,10 +42,12 @@ def is_bootstrap_payload(text):
     return any(m in text for m in BOOTSTRAP_MARKERS)
 
 
-# Remove the leaked user-prompt bubble before the screenshot so the shot frames the
-# ANSWER (top-3 + [RANK]) and not the question. Located by a phrase that only ever
-# appears in the prompt, never in Gemini's answer; we climb to its bubble container
-# and drop it. Still a real Gemini screenshot — just without the query echo on top.
+# Strip logged-out Gemini chrome before the screenshot so the shot frames the ANSWER
+# (top-3 + [RANK] + summary) the same way ChatGPT/Perplexity shots are cleaned — not
+# the question, the sign-in/app-install promos, the top nav, or a stale composer
+# draft left over from a prior job on this phone. Every element is located by a text
+# phrase that only appears in that chrome, never in Gemini's answer; we climb to its
+# container and drop it. Still a REAL Gemini screenshot — just without the chrome.
 _GEMINI_STRIP_PROMPT_JS = r"""
 (()=>{
   const kill=(needle)=>{
@@ -60,7 +62,16 @@ _GEMINI_STRIP_PROMPT_JS = r"""
     return false;};
   const out=[];
   if(kill('numbered 1-3')) out.push('prompt');     // the leaked query bubble (early phrase — survives Gemini's "Show more" truncation)
-  if(kill('Now available on Google Play')) out.push('banner');  // app-install promo overlapping the answer
+  // Promo cards that overlap the answer. Both variants appear geo/session-dependent.
+  if(kill('Now available on Google Play')) out.push('play');
+  if(kill('Sign in to connect to Google')) out.push('signin_promo');
+  // Logged-out top nav (renders as a garbled desktop bar over mobile). Drop each
+  // link by its unique label; none occur in a ranking answer.
+  for(const t of ['Get Gemini App','For Business','Subscriptions']){ if(kill(t)) out.push('nav'); }
+  // Empty the composer so a leftover draft from a prior job (e.g. a Citedlogic
+  // capture prompt) doesn't show in the frame — mirrors the empty "Ask Gemini" box.
+  document.querySelectorAll('[contenteditable="true"],textarea,input').forEach(e=>{
+    try{ if(e.isContentEditable){e.textContent='';} else {e.value='';} }catch(_){} });
   return out.join(',')||'none';
 })()
 """
