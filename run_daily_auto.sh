@@ -60,6 +60,12 @@ echo "[daily ${DATE}] $(date) START" | tee -a "$LOG"
 if [ ! -f "$PLAN" ]; then echo "[daily ${DATE}] FATAL: $PLAN not found — build it first" | tee -a "$LOG"; exit 1; fi
 echo "[daily ${DATE}] plan jobs: $(python3 -c "import json;print(json.load(open('$PLAN'))['total_jobs'])")" | tee -a "$LOG"
 
+# Fleet mutex: block until any other daily/ranking run frees the fleet, then hold it
+# for this whole run. Closes the gate race where the 20:00 auto-daily slipped past
+# daily_full_auto's pgrep check during a resumed run's REMAIN-round gaps (2026-08-21).
+source ./_fleet_lock.sh
+fleet_lock_acquire "daily-${DATE}"   # NOT piped: a pipe subshell would fire the EXIT-release early
+
 pkill -f "gost -C"; pkill -f sni_relay.py; sleep 1
 pgrep -f reconnect_watcher >/dev/null || nohup ./reconnect_watcher.sh >/tmp/rw.log 2>&1 &
 # SKIP_BASE=1 resumes an interrupted run: skip the full-plan base wave so the retry

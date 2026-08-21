@@ -63,6 +63,11 @@ fi
 [ -f "$KW_IDS" ] || { echo "[rank ${DATE}] FATAL: no kw-ids file" | tee -a "$LOG"; exit 1; }
 echo "[rank ${DATE}] kw-ids: $(python3 -c "import json;print(len(json.load(open('$KW_IDS'))))") keywords" | tee -a "$LOG"
 
+# Fleet mutex: hold the fleet for this whole ranking run so a daily (or another
+# ranking run) can't start concurrently and cross-wire the phones. See _fleet_lock.sh.
+source ./_fleet_lock.sh
+fleet_lock_acquire "rank-${DATE}"   # NOT piped: a pipe subshell would fire the EXIT-release early
+
 # 2) clean proxies, base run
 pkill -f "gost -C"; pkill -f sni_relay.py; sleep 1
 pgrep -f reconnect_watcher >/dev/null || nohup ./reconnect_watcher.sh >/tmp/rw.log 2>&1 &
