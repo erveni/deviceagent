@@ -26,6 +26,12 @@ set -a; source .env.dev; set +a
 [ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
 # RANKING is RESIDENTIAL. Default Decodo (zip geo). DataImpulse = state/country only.
 # Rayobyte = zip geo via HTTP :8000 (gost http connector, targeting in password).
+# ONLY_ONLINE=1: run_with_proxy prunes DEVICES to currently-online phones and
+# refreshes each entry's serial to the live mDNS name by hardware core. Without it
+# the ranking path used the hardcoded (stale, serial-flipped) DEVICES entries, so
+# forwards went to dead serials and every job failed (2026-08-23: free-trial 0/105).
+# The daily already sets this; the ranking path must too.
+export ONLY_ONLINE=1
 export USE_SNI_RELAY=0
 if [ "${PROXY_PROVIDER:-decodo}" = "rayobyte" ]; then
   export PROXY_HOST=la.residential.rayobyte.com PROXY_PORT=8000
