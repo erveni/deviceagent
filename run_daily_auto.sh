@@ -28,6 +28,16 @@ if [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
          PROXY_PASS="${DATAIMPULSE_PASS:?set DATAIMPULSE_PASS in .env.dev (gitignored)}" \
          USE_SNI_RELAY=0 PROXY_TARGET=country-us
   echo "[daily ${DATE}] proxy: DataImpulse (TEMPORARY — Decodo funding)" | tee -a "$LOG"
+elif [ "${PROXY_PROVIDER:-decodo}" = "evomi" ]; then
+  # Evomi residential via HTTP endpoint :1000 (gost http connector, like Rayobyte);
+  # targeting + sticky session go in the password (_country-US_session-<sid>). State-
+  # level only (no zip) — fine for the daily, which targets country-US. ~$0.49/GB.
+  export PROXY_PROVIDER=evomi \
+         PROXY_HOST=core-residential.evomi.com PROXY_PORT=1000 \
+         PROXY_USER="${EVOMI_USER:?set EVOMI_USER in .env.dev (gitignored)}" \
+         PROXY_PASS="${EVOMI_PASS:?set EVOMI_PASS in .env.dev (gitignored)}" \
+         USE_SNI_RELAY=0 PROXY_TARGET=country-us
+  echo "[daily ${DATE}] proxy: Evomi (HTTP :1000, state-level, ~\$0.49/GB)" | tee -a "$LOG"
 elif [ "${PROXY_PROVIDER:-decodo}" = "rayobyte" ]; then
   # Rayobyte residential via HTTP endpoint :8000 (gost uses an http connector for it);
   # targeting + sticky session go in the password. TRIAL creds — watch bandwidth.

@@ -29,9 +29,9 @@ def build_upstream_user(sid, zip_=None, state=None, country=None):
     zip_   — optional retry geo: Decodo appends -zip-<zip>; DataImpulse has no
              zip targeting, so US country is kept (city-level would be __city.X).
     """
-    if PROXY_PROVIDER == "rayobyte":
-        # Rayobyte targets via the PASSWORD (see gost_start), so the username is the
-        # plain account; geo/session live in the password string.
+    if PROXY_PROVIDER in ("rayobyte", "evomi"):
+        # Rayobyte/Evomi target via the PASSWORD (see gost_start), so the username is
+        # the plain account; geo/session live in the password string.
         return PROXY_USER
     if PROXY_PROVIDER == "dataimpulse":
         return f"{PROXY_USER}__cr.us__sid.{sid}"
@@ -225,6 +225,10 @@ def gost_start(specs):
         # (country + sticky session); everyone else is socks5 with the global password.
         if PROXY_PROVIDER == "rayobyte":
             ctype = "http"; upw = f"{PROXY_PASS}-country-US-session-{s['sid']}"
+        elif PROXY_PROVIDER == "evomi":
+            # Evomi: HTTP upstream (:1000), password-targeting with underscore
+            # separators; same session id twice -> same exit IP (verified).
+            ctype = "http"; upw = f"{PROXY_PASS}_country-US_session-{s['sid']}"
         else:
             ctype = "socks5"; upw = PROXY_PASS
         lines += [f'  - name: c{i}', f'    hops:', f'      - name: h{i}', f'        nodes:',
