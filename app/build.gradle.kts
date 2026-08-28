@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 71
-        versionName = "0.9.52-keepalive-fix"
+        versionCode = 73
+        versionName = "0.9.56-gemini-mic-guard"
     }
 
     buildTypes {

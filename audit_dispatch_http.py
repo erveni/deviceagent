@@ -81,7 +81,11 @@ _STATE_GOOD_ZIP: dict[str, str] = {
     # exits (66.162.x Hawaiian Telcom, 72.235.x Spectrum, 141.239.x).
     "HI": "96813",
     "IL": "60601", "IN": "46202", "KY": "40422", "MD": "21701", "MS": "38103",
-    "NC": "28303", "NJ": "08736", "NY": "10001", "OH": "34200", "PA": "19102",
+    "NC": "28303", "NJ": "08736", "NY": "10001",
+    # OH fixed 2026-08-27: was "34200", which is not an Ohio ZIP (OH is 430-459;
+    # 342xx is unassigned, inside Florida's range) — every Ohio job reaching the
+    # retry path targeted a bogus ZIP. Columbus 43215 is central and in-state.
+    "OH": "43215", "PA": "19102",
     "RI": "02904", "TN": "37402", "TX": "76016", "UT": "84041", "VA": "24502",
     "WA": "98115",
     # Added 2026-06-12: city/state-only campaigns (no zip) in states absent from the
@@ -423,6 +427,62 @@ def _screenshot_has_answer(path: str) -> bool:
     return False
 
 
+# OCR rank fallback. ChatGPT's logged-out page renders the answer but returns
+# nothing through the a11y tree, so the phone reports completed with rank 0 and an
+# empty response_text while the screenshot shows a perfect "[RANK: X/Y]". The
+# pixels are then the only copy of the result.
+_OCR_RANK_RE = re.compile(r"\[?rank:\s*(\d+)\s*/\s*(\d+\+?)\]?", re.I)
+# The audit prompt embeds the literal example "[RANK: 19/19]"; when the prompt
+# bubble is on screen OCR sees it too. The example is always introduced by "e.g."
+# immediately before the bracket, so only that short lookback is inspected — a
+# wider window would also swallow the real answer when OCR packs the prompt and
+# the reply close together.
+# Both audit templates embed an example rank. ChatGPT's reads "(e.g. [RANK: 19/19])";
+# Gemini's reads "(e.g. 3 rank -> 4th of 4 -> [RANK: 4/4])", where the "e.g." sits too
+# far left to catch, so the "->" immediately before the bracket is the marker there.
+_OCR_EG_LOOKBACK = 24
+_OCR_EG_RE = re.compile(r"(?:e\s*\.\s*g\s*\.?|->|\u2192)\s*[\(\[]?\s*$", re.I)
+
+
+def _parse_rank_markers(txt: str, tag: str) -> tuple[str, str, str, str] | None:
+    """First non-example "[RANK: X/Y]" in txt -> (status, position, total, context).
+
+    Mirrors _classify's normalisation: X>Y clamps Y up, and an unranked [RANK: 0/Y]
+    becomes last place (Y+1 of Y+1) with status no_rank. None when txt carries no
+    rank line, or only the prompt's own example."""
+    for m in _OCR_RANK_RE.finditer(txt or ""):
+        if _OCR_EG_RE.search(txt[max(0, m.start() - _OCR_EG_LOOKBACK):m.start()]):
+            continue
+        pos = int(m.group(1))
+        total = int(m.group(2).rstrip("+"))
+        if pos == 0:
+            if total < 1:
+                continue
+            y = total
+            return ("no_rank", str(y + 1), str(y + 1),
+                    f"[RANK: 0/{y} \u2192 last {y + 1}/{y + 1}] ({tag})")
+        if total < pos:
+            total = pos
+        return ("success", str(pos), str(total), f"[RANK: {pos}/{total}] ({tag})")
+    return None
+
+
+def _recover_rank_via_ocr(path: str) -> tuple[str, str, str, str] | None:
+    """Read the rank off the screenshot when the a11y extraction came back empty.
+
+    Returns (status, rank_position, rank_total, rank_context) or None when the OCR
+    tool is missing, OCR fails, or every match is the prompt's own example. Mirrors
+    _classify's normalisation: X>Y clamps Y up, and an unranked [RANK: 0/Y] becomes
+    last place (Y+1 of Y+1) with status no_rank."""
+    if not path or not os.path.exists(path) or not os.path.exists(_OCR_BIN):
+        return None
+    try:
+        txt = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40).stdout
+    except Exception:
+        return None
+    return _parse_rank_markers(txt, "ocr")
+
+
 def _shows_list_and_rank(path: str) -> bool:
     """Stricter ChatGPT/Perplexity audit gate: the shot must show BOTH the numbered top
     list AND the [RANK: X/Y] line. Rejects framing misses where the list scrolled off and
@@ -657,11 +717,30 @@ def _keyword_text(entry: dict, keyword_id: int) -> str:
 # ── HTTP audit call ──
 
 AUDIT_HTTP_TIMEOUT_S = 420  # caps a single platform call (240s wait_gen [v0.9.23] + ~60s load + ~40s capture + buffer)
+# Perplexity needs its own, larger cap: it reaches the input box ~138s in (median
+# over the 340 flow_failed rows of 2026-08-24/25) and then wants a longer
+# generation wait, which together overrun the 420s shared cap.
+AUDIT_HTTP_TIMEOUT_PERPLEXITY_S = int(os.environ.get("AUDIT_HTTP_TIMEOUT_PERPLEXITY_S", "540"))
 # Per-request generation-wait for ranking audits. The app default is 240s (good
 # for the daily), but for high-throughput ranking across all phones that makes
 # every flaky attempt hold its gost/Decodo session ~2x longer -> session
 # contention + glacial throughput. 150s covers real generation without that.
 AUDIT_GEN_TIMEOUT_SEC = int(os.environ.get("AUDIT_GEN_TIMEOUT_SEC", "150"))
+# Perplexity runs a visible research step ("Finished N steps") before it writes the
+# answer, so 150s truncates real generations rather than flaky ones: EVERY
+# flow_failed sample on 2026-08-24/25 ends "wait_generation FAILED 150s" — the cap
+# itself, 340 rows. ChatGPT/Gemini keep 150s.
+AUDIT_GEN_TIMEOUT_PERPLEXITY_SEC = int(os.environ.get("AUDIT_GEN_TIMEOUT_PERPLEXITY_SEC", "240"))
+
+
+def _gen_timeout_for(platform: str) -> int:
+    return (AUDIT_GEN_TIMEOUT_PERPLEXITY_SEC if platform.lower() == "perplexity"
+            else AUDIT_GEN_TIMEOUT_SEC)
+
+
+def _http_timeout_for(platform: str) -> int:
+    return (AUDIT_HTTP_TIMEOUT_PERPLEXITY_S if platform.lower() == "perplexity"
+            else AUDIT_HTTP_TIMEOUT_S)
 # Skip the Mac-side preflight exit-IP curl (best-effort, only populates proxy_ip).
 # Under fleet-wide ranking it adds a 2nd Decodo session + a 15s timeout per job,
 # which is the main source of concurrent-session contention (preflight rc=28).
@@ -677,7 +756,7 @@ def _post_audit(local_port: int, body: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=AUDIT_HTTP_TIMEOUT_S) as r:
+        with urllib.request.urlopen(req, timeout=_http_timeout_for(body.get("platform", ""))) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         # Phone returns 500 when result.status=="error" — body still has the JSON
@@ -927,7 +1006,8 @@ def _cdp_strip_map_screenshot(serial: str, device_idx: int, platform: str, keywo
     cleaned viewport (at the [RANK]-line scroll position the app left). ChatGPT
     ignores the 'no maps' prompt instruction, so we strip the map from the DOM.
     Returns the local path, or '' on failure (caller keeps the app screenshot)."""
-    substr = "perplexity.ai" if platform.lower() == "perplexity" else "chatgpt.com"
+    substr = {"perplexity": "perplexity.ai", "gemini": "gemini.google.com"}.get(
+        platform.lower(), "chatgpt.com")
     tmp = f"/tmp/cdp_shot_{platform.lower()}_{keyword_id}.png"
     try:
         os.remove(tmp)
@@ -1242,7 +1322,12 @@ def dispatch_audit_job(
         # works through the proxy where CDP submit doesn't); their deliverable shot is
         # produced post-audit — ChatGPT via cdp_js_frame (positions ranks 1-3 below the
         # header), Perplexity via cdp_strip_map (see _classify path ~line 1256).
-        if platform.lower() == "gemini" and capture_prompt is None:
+        # GEMINI_CDP=1 restores the old CDP path. Default is the app-audit flow below,
+        # the same one ChatGPT/Perplexity use: CDP attaches to an existing gemini tab and
+        # returns NOTHING when that tab isn't ready (no text, no screenshot, no rank) —
+        # 621 of 622 gemini jobs on 2026-08-26 and 57% of failures on 2026-08-28.
+        if (platform.lower() == "gemini" and capture_prompt is None
+                and os.environ.get("GEMINI_CDP") == "1"):
             return _gemini_cdp_rank(serial, device_idx, entry, int(keyword_id))
         if capture_prompt is not None:
             body = {
@@ -1268,8 +1353,21 @@ def dispatch_audit_job(
                 "searchAddress": _addr_no_zip(entry.get("search_address", "")),
                 "keyword": _keyword_text(entry, int(keyword_id)),
                 "platform": platform.lower(),
-                "genTimeoutSec": AUDIT_GEN_TIMEOUT_SEC,
+                "genTimeoutSec": _gen_timeout_for(platform),
             }
+        # TRUE first-run Chrome before every job. The on-device wipe drives Settings ->
+        # Storage -> Clear storage via accessibility and silently degrades to the weak
+        # in-app "Delete browsing data" when the OEM's Settings labels don't match,
+        # leaving a dirty profile. Perplexity then served its logged-out "Sign up and
+        # repeat your request." page instead of an answer (2026-08-25: perplexity
+        # 253/534 vs chatgpt 455/537, and 3 phones at 0-4%). `pm clear` is the
+        # device-owner clearApplicationUserData equivalent and always works over adb.
+        # Best-effort: never fail a job over the clear itself.
+        if os.environ.get("CHROME_HARD_CLEAR", "1") == "1":
+            try:
+                _adb(serial, "shell", "pm", "clear", "com.android.chrome", timeout=30)
+            except Exception as e:
+                print(f"  [chrome-clear] {serial}: {type(e).__name__} {e} — continuing")
         return _post_audit(http_port, body)
 
     try:
@@ -1293,10 +1391,16 @@ def dispatch_audit_job(
             or "proxy_unreachable" in combined
             or "input failed" in combined
             or "generation timeout" in combined
+            or "signup_wall" in combined
             or "cdp_no_capture" in combined
         ):
             if "proxy_unreachable" in combined: reason = "proxy_unreachable"
             elif "input failed" in combined: reason = "input_failed"
+            # Perplexity served the logged-out sign-up wall: this exit IP is burned
+            # for anonymous use, so only a fresh IP helps. Measured 2026-08-27 on
+            # device-101: every proxy exit walled on its first query while the Mac's
+            # own IP answered repeatedly.
+            elif "signup_wall" in combined: reason = "signup_wall"
             elif "generation timeout" in combined: reason = "generation_timeout"
             elif "cdp_no_capture" in combined: reason = "cdp_no_capture"  # Gemini reset on a flagged exit → fresh IP
             else: reason = "navigate"
@@ -1370,7 +1474,7 @@ def dispatch_audit_job(
         # (it frames 1-3 on its own — no auto-scroll fight). Both fall through to the
         # app screenshot if CDP fails.
         if (not ss_local and capture_prompt is None
-                and platform.lower() in ("chatgpt", "perplexity")
+                and platform.lower() in ("chatgpt", "perplexity", "gemini")
                 and status in ("success", "no_rank")):
             if platform.lower() == "chatgpt":
                 ss_local = _cdp_js_frame_screenshot(serial, device_idx, platform, int(keyword_id))
@@ -1386,6 +1490,25 @@ def dispatch_audit_job(
         # for archival, BUT the DB column gets the actual text blob (not the path).
         resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
         response_text_path = _write_response_text(resp_text_blob, platform, int(keyword_id))
+
+        # The app's a11y parse takes the FIRST "[RANK: X/Y]" in the page text, which is
+        # the prompt's own "(e.g. [RANK: 19/19])" whenever the prompt bubble sits in the
+        # tree — 166 of 753 chatgpt rows in the 2026-08-24 set carry that literal instead
+        # of the answer. Re-parse the same blob with the e.g. guard; the answer wins.
+        _txt_rank = _parse_rank_markers(resp_text_blob, "text")
+        if _txt_rank and (_txt_rank[1], _txt_rank[2]) != (rank_pos, rank_total):
+            print(f"  [rank] app read {rank_pos or '-'}/{rank_total or '-'} but answer text says "
+                  f"{_txt_rank[1]}/{_txt_rank[2]} kw{keyword_id} {platform} — using text", flush=True)
+            status, rank_pos, rank_total, rank_ctx = _txt_rank
+
+        # a11y read came back empty (ChatGPT logged-out) -> the screenshot is the
+        # only copy of the rank. OCR it before the answer-gate below judges the row.
+        if not rank_pos and ss_local and capture_prompt is None:
+            _rec = _recover_rank_via_ocr(ss_local)
+            if _rec:
+                status, rank_pos, rank_total, rank_ctx = _rec
+                print(f"  [ocr] rank recovered from screenshot kw{keyword_id} {platform}: "
+                      f"{rank_pos}/{rank_total}", flush=True)
 
         # 4b. Inline screenshot validation. A 'success'/'no_rank' row MUST visibly
         # show the answer — OCR the screenshot, and if it's blank / prompt-only /
@@ -1436,6 +1559,15 @@ def dispatch_audit_job(
             resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
             response_text_path = _write_response_text(resp_text_blob, platform, int(keyword_id))
             duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
+            _txt_rank = _parse_rank_markers(resp_text_blob, "text")
+            if _txt_rank and (_txt_rank[1], _txt_rank[2]) != (rank_pos, rank_total):
+                status, rank_pos, rank_total, rank_ctx = _txt_rank
+            if not rank_pos and ss_local and capture_prompt is None:
+                _rec = _recover_rank_via_ocr(ss_local)
+                if _rec:
+                    status, rank_pos, rank_total, rank_ctx = _rec
+                    print(f"  [ocr] rank recovered from re-capture kw{keyword_id} {platform}: "
+                          f"{rank_pos}/{rank_total}", flush=True)
             if status in ("success", "no_rank") and (not ss_local or not _answer_ok(ss_local)
                     or _rank_inconsistent(resp_text_blob, entry["biz_name"], platform)):
                 status = "ocr_no_answer"  # non-terminal -> outer retry loop re-runs it

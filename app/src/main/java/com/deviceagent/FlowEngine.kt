@@ -656,6 +656,20 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return false
     }
 
+    /** True when Gemini's composer actually holds text.
+     *
+     * Gemini swaps the composer's right-hand button by state: MIC when empty, SEND
+     * once text is present. The submit fallbacks below tap that button's fixed screen
+     * position, so tapping while the composer is empty opens voice input instead of
+     * sending — the job then stalls until its generation timeout. Gate every blind tap
+     * on this. */
+    private fun composerHasText(): Boolean {
+        val n = s.findInputField(hintText = null, timeoutMs = 800) ?: return false
+        val t = n.text?.toString() ?: ""
+        n.recycle()
+        return t.isNotBlank()
+    }
+
     fun submit(platform: String = ""): Boolean {
         s.log("── SUBMIT (${platform.ifBlank { "?" }}) ──")
         ensureChromeForeground()
@@ -668,8 +682,15 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             if (node == null) {
                 s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
                 Thread.sleep(600)
-                if (!isGenerating()) { s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f); Thread.sleep(1200) }
-                return true
+                if (isGenerating()) return true
+                if (!composerHasText()) {
+                    s.log("Submit[gemini]: no send button and composer is EMPTY — text never committed; " +
+                          "NOT tapping (that position is the mic)")
+                    return false
+                }
+                s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
+                Thread.sleep(1200)
+                return didSend()
             }
             val r = android.graphics.Rect(); node.getBoundsInScreen(r)
             s.clickNode(node); node.recycle()
@@ -684,8 +705,14 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             }
             s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
             Thread.sleep(600)
-            if (!didSend()) { s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f); Thread.sleep(1200) }
-            return true
+            if (didSend()) return true
+            if (!composerHasText()) {
+                s.log("Submit[gemini]: composer EMPTY after fallbacks — NOT tapping the mic position")
+                return false
+            }
+            s.gestureTap(s.screenWidth() * 0.864f, s.screenHeight() * 0.925f)
+            Thread.sleep(1200)
+            return didSend()
         }
 
         // ── ChatGPT: the new logged-out chatgpt.com UI ignores ACTION_CLICK on the
