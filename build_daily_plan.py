@@ -23,6 +23,11 @@ from concurrent.futures import ThreadPoolExecutor
 os.environ.setdefault("SSL_CERT_FILE", __import__("certifi").where())
 ADMIN = os.environ.get("ADMIN_BASE", "https://jjm59vpn3y.us-east-1.awsapprunner.com")
 TOKEN = os.environ["EXECUTOR_TOKEN"]
+# Tunable: the local Ollama build server is model-bound, not network-bound. Measured on
+# qwen2.5:7b, 8 workers gives only 2.1x the throughput of 1 and pushes latency to ~50s,
+# which crowds the default 60s call timeout.
+BUILD_WORKERS = int(os.environ.get("BUILD_WORKERS", "8"))
+BUILD_TIMEOUT_S = int(os.environ.get("BUILD_TIMEOUT_S", "60"))
 H = {"X-Executor-Token": TOKEN}
 DATE = os.environ.get("DATE", "2026-06-08")
 PLAN_PATH = os.environ.get(
@@ -242,7 +247,7 @@ def build_session(kw_id, platform):
                                  headers={**H, "Content-Type": "application/json"}, method="POST")
     for attempt in range(6):
         try:
-            return json.load(urllib.request.urlopen(req, timeout=60))
+            return json.load(urllib.request.urlopen(req, timeout=BUILD_TIMEOUT_S))
         except (urllib.error.URLError, TimeoutError, OSError):
             if attempt == 5:
                 return None   # persistent failure: caller drops this one session
@@ -292,7 +297,7 @@ def fetch(s):
         failed.append((kw["id"], plat))
         return None
     return make_job(kw, biz, plat, sess)
-with ThreadPoolExecutor(max_workers=8) as ex:
+with ThreadPoolExecutor(max_workers=BUILD_WORKERS) as ex:
     jobs = [j for j in ex.map(fetch, specs) if j is not None]
 if failed:
     print(f"WARN: dropped {len(failed)} sessions on persistent build-session failure: "

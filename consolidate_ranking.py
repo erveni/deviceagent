@@ -31,6 +31,15 @@ LASTRANK_FILE = os.environ.get("LASTRANK_FILE", "/tmp/kw_lastrank.json")
 lastrank_by_id = {}
 if USE_14DAY:
     lastrank_by_id = {int(k): v for k, v in json.load(open(LASTRANK_FILE)).items()}
+# LASTRANK_PP_FILE: per-(keyword,platform) last-rank map, keys "kwid|platform". When
+# set, USE_14DAY dates each row by ITS platform's last rank +14 — a keyword fresh on
+# one platform but stale on another dates each platform independently, so a stale
+# platform's row is never anchored to a fresh platform's recent date (which would
+# overshoot into the future). Falls back to the per-keyword date when a pair is absent.
+lastrank_pp = {}
+_pp_file = os.environ.get("LASTRANK_PP_FILE")
+if USE_14DAY and _pp_file and os.path.exists(_pp_file):
+    lastrank_pp = json.load(open(_pp_file))
 # OUT_NAME overrides the output filename stem (e.g. ranking_stale_<DATE>).
 _OUT_NAME = os.environ.get("OUT_NAME") or f"ranking_initial_{DATE}_consolidated.csv"
 SOURCES = sorted(glob.glob(os.path.join(HERE, f"rabbitmq_audit_results_{DATE}_ranking*.csv")))
@@ -135,7 +144,7 @@ no_created = 0
 for (cid, plat), r in best.items():
     kwid = kw_id_from_campaign(cid)
     if USE_14DAY:
-        lr = lastrank_by_id.get(kwid)
+        lr = lastrank_pp.get(f"{kwid}|{plat}") or lastrank_by_id.get(kwid)
         if lr:
             cd = (dt.date.fromisoformat(lr) + dt.timedelta(days=14)).isoformat()
         else:

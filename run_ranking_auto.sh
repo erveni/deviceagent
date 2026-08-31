@@ -34,10 +34,20 @@ set -a; source .env.dev; set +a
 export ONLY_ONLINE=1
 export USE_SNI_RELAY=0
 if [ "${PROXY_PROVIDER:-decodo}" = "rayobyte" ]; then
-  export PROXY_HOST=la.residential.rayobyte.com PROXY_PORT=8000
+  export PROXY_HOST="${RAYOBYTE_HOST:-us-east.gw.rayobyte.com}" PROXY_PORT=8000
   export PROXY_BASE_USER="${RAYOBYTE_USER:?set RAYOBYTE_USER in env}"
   export PROXY_PASSWORD="${RAYOBYTE_PASS:?set RAYOBYTE_PASS in env}"
   echo "[rank ${DATE}] proxy=Rayobyte host=${PROXY_HOST} port=${PROXY_PORT} (zip geo, HTTP connector)" | tee -a "$LOG"
+elif [ "${PROXY_PROVIDER:-decodo}" = "evomi" ]; then
+  # Evomi Core Residential: HTTP connector, targeting in the password with
+  # underscore-separated keys. Zip targeting VERIFIED 2026-08-27 — 231/308 client
+  # zips have a pool and every hit returned the exact requested zip; the other 77
+  # answer HTTP 412 (no silent widening), so gost_manager probes the ladder
+  # zip -> city -> region -> country per job.
+  export PROXY_HOST=core-residential.evomi.com PROXY_PORT=1000
+  export PROXY_BASE_USER="${EVOMI_USER:?set EVOMI_USER in .env.dev}"
+  export PROXY_PASSWORD="${EVOMI_PASS:?set EVOMI_PASS in .env.dev}"
+  echo "[rank ${DATE}] proxy=Evomi host=${PROXY_HOST} port=${PROXY_PORT} (zip geo, HTTP connector)" | tee -a "$LOG"
 elif [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
   # DataImpulse gateway; creds under DATAIMPULSE_* in .env.dev (gitignored).
   # RANKING needs a STICKY exit IP — the audit capture holds one session ~150s and
@@ -48,8 +58,12 @@ elif [ "${PROXY_PROVIDER:-decodo}" = "dataimpulse" ]; then
   export PROXY_PASSWORD="${DATAIMPULSE_PASS:?set DATAIMPULSE_PASS in .env.dev}"
   echo "[rank ${DATE}] proxy=DataImpulse host=${PROXY_HOST} port=${PROXY_PORT} (state/country geo — no zip)" | tee -a "$LOG"
 else
+  # DECODO_USER/DECODO_PASS override the legacy account so a second Decodo
+  # subscription can be used without editing this file.
   export PROXY_HOST=gate.decodo.com PROXY_PORT=10001
-  export PROXY_BASE_USER=user-spmqebjuzf PROXY_PASSWORD="${DECODO_PASS:?set DECODO_PASS in .env.dev}"
+  export PROXY_BASE_USER="user-${DECODO_USER:-spmqebjuzf}"
+  export PROXY_PASSWORD="${DECODO_PASS:?set DECODO_PASS in .env.dev or pass it in}"
+  echo "[rank ${DATE}] proxy=Decodo host=${PROXY_HOST} port=${PROXY_PORT} user=${PROXY_BASE_USER} (zip geo)" | tee -a "$LOG"
 fi
 export DATE AUDIT_CSV="$CSV" KEYWORD_IDS_FILE="$KW_IDS"
 

@@ -75,7 +75,7 @@ TUNNEL_SETTLE_S = 3
 # on a second IP per audit_dispatch_http.py:591-598. Ported here because the
 # daily path was missing the same recovery and was tripping the consumer's
 # circuit breaker on input-failed bursts that a fresh Decodo session clears.
-RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout")
+RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout", "signup_wall")
 
 
 class DevicePool:
@@ -322,11 +322,16 @@ def _run_session(
     bk_domain = extract_domain(backlinks[0]["url"]) if backlinks else ""
 
     t0 = time.time()
+    # Logged-out Gemini renders (or fails) within seconds, but a miss otherwise burns
+    # the app's 240s default before erroring. Cap Gemini's generation wait so failures
+    # fail fast and the retry loop can re-attempt each job far more often per hour.
+    gen_timeout_sec = 90 if platform == "gemini" else 240
     http_post(port, "/session", {
         "platform": platform,
         "prompt": prompt,
         "followUp": follow_up,
         "backlinkDomain": bk_domain,
+        "genTimeoutSec": gen_timeout_sec,
     })
 
     r: dict[str, Any] = {"status": "running"}
