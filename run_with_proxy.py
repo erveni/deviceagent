@@ -64,7 +64,7 @@ WAVE_STAGGER_S = int(os.environ.get("WAVE_STAGGER_S", "0"))  # seconds between s
 # Auto-retry transient errors with a fresh Decodo session — mirrors
 # audit_dispatch_http.py:587-643 + device_dispatch.py:217. Most 'input failed'
 # bursts clear on a second IP per the audit author's empirical claim.
-RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout")
+RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout", "signup_wall")
 RETRY_MAX_ROUNDS = int(os.environ.get("RETRY_MAX_ROUNDS", "1"))
 BASE_GOST = 11001
 def _detect_mac_lan_ip():
@@ -93,7 +93,9 @@ _relays_by_cfg = {}              # gost cfg path -> [relay Popen, ...]
 _relays_lock = threading.Lock()
 
 DEVICES = [
-    ("device-101", "adb-R83L112EVWK-PydBnX (2)._adb-tls-connect._tcp"),
+    # NOTE: device-101 (samsung SM-A075F, R83L112EVWK) is reserved for Copilot/Edge
+    # automation development — kept out of the fleet so daily/ranking runs never grab it.
+    # ("device-101", "adb-R83L112EVWK-PydBnX (2)._adb-tls-connect._tcp"),
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y (2)._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),

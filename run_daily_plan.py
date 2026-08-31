@@ -10,7 +10,8 @@ OUTPUT_CSV = os.path.splitext(PLAN_PATH)[0] + "_results.csv"
 BASE_PORT = 8765
 
 DEVICES = [
-    ("device-101", "R83L112EVWK"),
+    # NOTE: reserved for Copilot/Edge automation dev — see run_with_proxy.py DEVICES.
+    # ("device-101", "R83L112EVWK"),
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002563-yWaJau._adb-tls-connect._tcp"),
