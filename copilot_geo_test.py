@@ -40,6 +40,17 @@ if os.environ["PROXY_PROVIDER"] == "evomi":
     if not os.environ.get("PROXY_BASE_USER"):
         sys.exit("set EVOMI_USER / EVOMI_PASS (they live in .env.dev): "
                  "set -a; source .env.dev; set +a")
+elif os.environ["PROXY_PROVIDER"] == "decodo":
+    # Mirrors run_ranking_auto.sh's decodo branch: residential :10001, zip geo in the
+    # username. .env.dev's own PROXY_HOST/PORT point at a different provider.
+    os.environ["PROXY_HOST"] = "gate.decodo.com"
+    os.environ["PROXY_PORT"] = "10001"
+    os.environ["PROXY_BASE_USER"] = "user-" + os.environ.get("DECODO_USER", "spmqebjuzf")
+    if os.environ.get("DECODO_PASS"):
+        os.environ["PROXY_PASSWORD"] = os.environ["DECODO_PASS"]
+    os.environ["USE_SNI_RELAY"] = "0"
+    if not os.environ.get("PROXY_PASSWORD"):
+        sys.exit("set DECODO_PASS (it lives in .env.dev): set -a; source .env.dev; set +a")
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "aeo-appium"))
 from gost_manager import GostManager  # noqa: E402
@@ -71,23 +82,44 @@ def curl_through_gost(url, t=25):
                t + 5).stdout.strip()
 
 
-gm = GostManager(
-    [{"device_id": "device-101", "zip": ZIP, "city": CITY, "state": STATE,
-      "country": "us", "session_duration": 30}],
-    base_port=PORT,
-)
-gm.start(wait_seconds=2.5)
+def start_tunnel(port):
+    """Same spec the ranking dispatcher builds in audit_dispatch_http.py."""
+    gm = GostManager(
+        [{"device_id": "device-101", "zip": ZIP, "city": CITY, "state": STATE,
+          "country": "us", "session_duration": 30}],
+        base_port=port,
+    )
+    gm.start(wait_seconds=2.5)
+    return gm
+
+
+# Providers can hand back an exit outside the requested geo while looking healthy, so
+# rotate the session until the exit really is in the target state — the dispatcher does
+# the same on a bad tunnel rather than accepting the first one it gets.
+ROTATE = int(os.environ.get("ROTATE_UNTIL_GEO", "6"))
+gm = None
+exit_city = "?"
+for attempt in range(1, ROTATE + 1):
+    port = PORT + (attempt - 1) * 2
+    gm = start_tunnel(port)
+    PORT = port
+    info = curl_through_gost("https://ipinfo.io/json")
+    try:
+        j = json.loads(info)
+        exit_city = f"{j.get('city')}, {j.get('region')}"
+        ok_geo = (j.get("region") or "").lower().startswith(STATE.lower()) or \
+                 (j.get("region") or "") in (STATE,) or \
+                 (j.get("city") or "").lower() == CITY.lower()
+        print(f"[exit try{attempt}] ip={j.get('ip')} city={exit_city} org={j.get('org')} "
+              f"in_target={'yes' if ok_geo else 'NO — rotating session'}", flush=True)
+        if ok_geo:
+            break
+    except Exception:
+        print(f"[exit try{attempt}] no exit (raw={info[:80]!r}) — rotating session", flush=True)
+    gm.stop() if hasattr(gm, "stop") else None
+
 spec = gm.specs[0]
 print(f"[gost] up on :{PORT} tier={spec.tier} zip={spec.zip_code} city={spec.city}", flush=True)
-
-exit_info = curl_through_gost("https://ipinfo.io/json")
-try:
-    j = json.loads(exit_info)
-    exit_city = f"{j.get('city')}, {j.get('region')}"
-    print(f"[exit] ip={j.get('ip')} city={exit_city} org={j.get('org')}", flush=True)
-except Exception:
-    exit_city = "?"
-    print(f"[exit-raw] {exit_info[:200]}", flush=True)
 
 run(f'adb -s "{SER}" shell am force-stop net.typeblog.socks', 5)
 time.sleep(0.5)

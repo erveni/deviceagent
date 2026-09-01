@@ -129,9 +129,20 @@ class EdgeCopilotFlow(
         s.clickNode(btn); btn.recycle()
         Thread.sleep(7000)
         val box = composer(timeoutMs = 10_000)
-        if (box == null) { s.log("[edge] Copilot composer never appeared"); return false }
-        box.recycle()
-        return true
+        if (box != null) { box.recycle(); return true }
+        // Copilot refuses some exit IPs outright ("Sorry about that / Copilot is
+        // currently unavailable") and renders no composer. Measured on a Decodo session
+        // that had silently widened out of the requested zip onto a datacenter-ish ASN;
+        // a genuine residential exit in the target metro serves normally. Without this
+        // the job reports "composer never appeared" and the proxy looks innocent — the
+        // fix is to rotate the session, not to wait longer.
+        if (s.findNode(text = "currently unavailable", timeoutMs = 1500) != null ||
+            s.findNode(text = "Sorry about that", timeoutMs = 500) != null) {
+            s.log("[edge] Copilot REFUSED this exit IP (\"currently unavailable\") — proxy problem, not a timeout")
+            return false
+        }
+        s.log("[edge] Copilot composer never appeared")
+        return false
     }
 
     // ── prompt ──

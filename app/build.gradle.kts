@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 74
-        versionName = "0.9.57-copilot-edge"
+        versionCode = 75
+        versionName = "0.9.58-copilot-exit-guard"
     }
 
     buildTypes {
