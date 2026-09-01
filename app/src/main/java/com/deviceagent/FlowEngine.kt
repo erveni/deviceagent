@@ -2,6 +2,9 @@ package com.deviceagent
 
 class FlowEngine(private val s: AgentAccessibilityService) {
 
+    /** Copilot runs in Edge, not Chrome, so none of the helpers below apply to it. */
+    val copilot: EdgeCopilotFlow by lazy { EdgeCopilotFlow(s, this) }
+
     // ── chrome reset ──
 
     /**

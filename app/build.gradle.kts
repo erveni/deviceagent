@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 73
-        versionName = "0.9.56-gemini-mic-guard"
+        versionCode = 74
+        versionName = "0.9.57-copilot-edge"
     }
 
     buildTypes {

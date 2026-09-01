@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.52-keepalive-fix"
-        const val APP_VERSION_CODE = 71
+        const val APP_VERSION_NAME = "0.9.57-copilot-edge"
+        const val APP_VERSION_CODE = 74
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -121,6 +121,35 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 return ok
             }
             try {
+                // Copilot lives in Edge behind a toolbar button, so it shares none of the
+                // Chrome steps below — reset, entry, input and submit are all its own.
+                if (platform.lowercase() == "copilot") {
+                    if (!step("reset_edge") { flowEngine.copilot.reset() }) {
+                        result.status = "error"; result.error = "reset_edge failed"; return
+                    }
+                    if (!step("open_copilot") { flowEngine.copilot.open() }) {
+                        result.status = "error"; result.error = "open_copilot failed"; return
+                    }
+                    if (!step("input") { flowEngine.copilot.inputPrompt(prompt) }) {
+                        result.status = "error"; result.error = "input failed"; return
+                    }
+                    if (!step("submit") { flowEngine.copilot.submit() }) {
+                        result.status = "error"; result.error = "submit failed"; return
+                    }
+                    if (stopAfter == "submit") {
+                        result.status = "completed"; result.error = "STOPPED_AFTER_SUBMIT"; return
+                    }
+                    if (!step("wait_generation") { flowEngine.copilot.waitForAnswer(genTimeoutSec) }) {
+                        result.status = "error"; result.error = "generation timeout"; return
+                    }
+                    step("scroll") { flowEngine.copilot.readAnswer().isNotEmpty() }
+                    if (!backlinkDomain.isNullOrBlank()) {
+                        result.steps.add("backlink: SKIPPED - not implemented for copilot")
+                    }
+                    result.status = "completed"
+                    return
+                }
+
                 // DAILY uses a FULL Chrome clear so logged-out Gemini persists the
                 // conversation long enough to click the backlink. (Audit/ranking below
                 // keep the lighter clear — they only need the screenshot.)
@@ -244,32 +273,58 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     // The full pm-clear resets Chrome entirely (tabs included) so every job
                     // starts clean — same as daily. Tradeoff: a cold first-run under the
                     // proxy is slower (mitigated by dismissChromeFreRobust).
-                    if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
-                        pr.status = "error"; pr.error = "reset_chrome failed"; continue
-                    }
-                    Thread.sleep(500)
-                    if (!step("navigate") { flowEngine.navigateTo(platform) }) {
-                        pr.status = "error"; pr.error = "navigate failed"; continue
-                    }
-                    Thread.sleep(if (platform == "chatgpt") 6000L else 3000L)
-                    step("dismiss_popups") { flowEngine.dismissPlatformPopups(platform); true }
-                    Thread.sleep(500)
-                    if (!step("input") { flowEngine.inputText(prompt) }) {
-                        pr.status = "error"; pr.error = "input failed"; continue
-                    }
-                    Thread.sleep(300)
-                    step("submit") { flowEngine.submit(platform) }
-                    // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
-                    // waste the window on a long pre-wait.
-                    Thread.sleep(if (platform == "gemini") 400 else 2000)
-                    if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
-                        pr.status = "error"; pr.error = "generation timeout"; continue
+                    // Copilot's answer is read here rather than in capture(): Edge
+                    // virtualizes the conversation, so the text only exists once the
+                    // reader has scrolled the whole answer past the viewport.
+                    var copilotAnswer = ""
+                    if (platform == "copilot") {
+                        if (!step("reset_edge") { flowEngine.copilot.reset() }) {
+                            pr.status = "error"; pr.error = "reset_edge failed"; continue
+                        }
+                        if (!step("open_copilot") { flowEngine.copilot.open() }) {
+                            pr.status = "error"; pr.error = "open_copilot failed"; continue
+                        }
+                        if (!step("input") { flowEngine.copilot.inputPrompt(prompt) }) {
+                            pr.status = "error"; pr.error = "input failed"; continue
+                        }
+                        if (!step("submit") { flowEngine.copilot.submit() }) {
+                            pr.status = "error"; pr.error = "submit failed"; continue
+                        }
+                        if (!step("wait_generation") { flowEngine.copilot.waitForAnswer(genTimeoutSec) }) {
+                            pr.status = "error"; pr.error = "generation timeout"; continue
+                        }
+                        step("read_answer") {
+                            copilotAnswer = flowEngine.copilot.readAnswer()
+                            copilotAnswer.isNotEmpty()
+                        }
+                    } else {
+                        if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
+                            pr.status = "error"; pr.error = "reset_chrome failed"; continue
+                        }
+                        Thread.sleep(500)
+                        if (!step("navigate") { flowEngine.navigateTo(platform) }) {
+                            pr.status = "error"; pr.error = "navigate failed"; continue
+                        }
+                        Thread.sleep(if (platform == "chatgpt") 6000L else 3000L)
+                        step("dismiss_popups") { flowEngine.dismissPlatformPopups(platform); true }
+                        Thread.sleep(500)
+                        if (!step("input") { flowEngine.inputText(prompt) }) {
+                            pr.status = "error"; pr.error = "input failed"; continue
+                        }
+                        Thread.sleep(300)
+                        step("submit") { flowEngine.submit(platform) }
+                        // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
+                        // waste the window on a long pre-wait.
+                        Thread.sleep(if (platform == "gemini") 400 else 2000)
+                        if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
+                            pr.status = "error"; pr.error = "generation timeout"; continue
+                        }
                     }
 
                     // Capture text + rank + screenshot. Factored so the Gemini path can
                     // run it the INSTANT generation completes (racing the wipe), while
                     // the others scroll to the rank line first for a cleaner screenshot.
-                    fun capture() {
+                    fun capture(responseText: String) {
                         // Screenshot FIRST — it's the time-critical visual. On logged-out
                         // Gemini the answer is wiped ~3s after it renders, so grab the
                         // picture before anything else (text-from-a11y is fast and runs
@@ -287,19 +342,21 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                                 null
                             }
                         }
-                        // Full response text comes from the a11y tree (all of it, even
-                        // off-screen) — no scroll required to read the [RANK: X/Y] line.
-                        val responseText = flowEngine.getResponseText()
                         val (pos, total) = flowEngine.extractRankingFromText(responseText)
                         pr.rankingPosition = pos
                         pr.rankingTotal = total
                         pr.responseText = responseText
                     }
 
-                    if (platform == "gemini") {
+                    if (platform == "copilot") {
+                        // The answer was already read above; only the shot needs framing.
+                        step("frame_shot") { flowEngine.copilot.frameAnswerForShot() }
+                        Thread.sleep(1000)
+                        capture(copilotAnswer)
+                    } else if (platform == "gemini") {
                         // RACE THE WINDOW: capture immediately, before the wipe. A 6-swipe
                         // scroll (≈6-12s) would run past it and screenshot a blank welcome.
-                        capture()
+                        capture(flowEngine.getResponseText())
                     } else {
                         // ChatGPT / Perplexity persist — position the [RANK] line for the
                         // screenshot. ChatGPT appends a Google Maps embed for local-business
@@ -312,7 +369,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                             flowEngine.scrollResponse(6)
                         }
                         Thread.sleep(1000)
-                        capture()
+                        capture(flowEngine.getResponseText())
                     }
 
                     pr.status = "completed"
