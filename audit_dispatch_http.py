@@ -1131,7 +1131,13 @@ def dispatch_audit_job(
     _answer_ok = (
         (lambda p: _capture_has_answer(p, capture_prompt))
         if capture_prompt is not None
-        else (_shows_list_and_rank if platform.lower() in ("chatgpt", "perplexity")
+        # Copilot obeys the [RANK: X/Y] instruction only most of the time — when it
+        # doesn't it states the position in prose, which _classify records as no_rank,
+        # and RETRY_KEEP_NORANK makes that terminal, so a real rank ships as "unranked"
+        # and nothing re-runs it. The strict gate demotes those captures instead, so the
+        # retry loop gets another answer. Verified on real Copilot shots: the numbered
+        # list + [RANK] line OCR cleanly (items=3, has_rank=True).
+        else (_shows_list_and_rank if platform.lower() in ("chatgpt", "perplexity", "copilot")
               else _screenshot_has_answer)
     )
     POOL.setup_forwards()
