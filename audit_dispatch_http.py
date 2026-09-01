@@ -293,7 +293,8 @@ def _write_response_text(text: str, platform: str, keyword_id: int) -> str:
     Returns the local path written, or empty string on failure / empty input."""
     if not text:
         return ""
-    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
+    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity",
+                    "copilot": "Copilot"}
     plat_dir = plat_dir_map.get(platform.lower(), platform)
     local_dir = os.path.join(AUDIT_RESULTS_DIR, plat_dir)
     os.makedirs(local_dir, exist_ok=True)
@@ -364,7 +365,8 @@ def _pull_screenshot(serial: str, remote_path: str, platform: str, keyword_id: i
     Returns the local path written, or empty string on failure."""
     if not remote_path:
         return ""
-    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
+    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity",
+                    "copilot": "Copilot"}
     plat_dir = plat_dir_map.get(platform.lower(), platform)
     date_dir = datetime.now().strftime("%Y-%m-%d")
     local_dir = os.path.join(AUDIT_RESULTS_DIR, date_dir, plat_dir)
@@ -505,6 +507,8 @@ def _shows_list_and_rank(path: str) -> bool:
 
 # ChatGPT/Perplexity render "You said:…" / the echoed query before the answer;
 # strip it so the list parse below doesn't see the prompt bubble.
+# Copilot needs no marker: EdgeCopilotFlow.readAnswer() already excludes the prompt
+# bubble on the phone, so its response_text is answer-only when it arrives here.
 _LIST_MARK = {"chatgpt": "ChatGPT said:", "perplexity": "Show more"}
 
 _STOP = {"the", "a", "an", "at", "of", "and", "in", "for", "inc", "llc", "co"}
@@ -581,7 +585,7 @@ def _rank_inconsistent(response_text: str, biz: str, platform: str, aka: str = "
     too — a DBA business ("Wichita Florist" listed as "Flower Factory Flowers") is
     genuinely in its own list, and without that it would look absent and re-capture
     forever."""
-    if platform.lower() not in ("chatgpt", "perplexity") or not response_text or not biz:
+    if platform.lower() not in ("chatgpt", "perplexity", "copilot") or not response_text or not biz:
         return False
     mk = _LIST_MARK.get(platform.lower())
     ans = (response_text.split(mk, 1)[1] if (mk and mk in response_text) else response_text).lower()
@@ -819,7 +823,8 @@ def _write_b64_screenshot(b64: str, platform: str, keyword_id: int) -> str:
     """
     if not b64:
         return ""
-    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
+    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity",
+                    "copilot": "Copilot"}
     plat_dir = plat_dir_map.get(platform.lower(), platform)
     date_dir = datetime.now().strftime("%Y-%m-%d")
     local_dir = os.path.join(AUDIT_RESULTS_DIR, date_dir, plat_dir)
@@ -857,7 +862,8 @@ def _write_stitched_screenshot(frames_b64: list, platform: str, keyword_id: int)
     frames = [f for f in (frames_b64 or []) if f]
     if not frames:
         return ""
-    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity"}
+    plat_dir_map = {"chatgpt": "ChatGPT", "gemini": "Gemini", "perplexity": "Perplexity",
+                    "copilot": "Copilot"}
     plat_dir = plat_dir_map.get(platform.lower(), platform)
     date_dir = datetime.now().strftime("%Y-%m-%d")
     local_dir = os.path.join(AUDIT_RESULTS_DIR, date_dir, plat_dir)
