@@ -20,8 +20,11 @@ local. If the user gives none of these, ask — do not invent hours.
 
 Work from `/Users/seolocalph/projects/device-agent`.
 
-**1. Check the token is present.** `worklog_jira.py` reads `JIRA_API_TOKEN` from the
-environment and never stores it. If it is unset, stop and tell the user to export it.
+**1. No token setup needed.** `worklog_jira.py` resolves the token itself: environment
+first, then the macOS Keychain (service `jira-devicefarmseolocal`), then `.env.dev`.
+The Keychain entry is already in place, so just run the commands. If the tool reports
+no token found, tell the user to re-store it — do not ask them to paste it to you, and
+never echo a token into the transcript.
 
 **2. Gather the evidence — always first, before writing anything.**
 

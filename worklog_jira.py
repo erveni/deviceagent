@@ -26,11 +26,40 @@ DESKTOP  = os.path.expanduser("~/Desktop")
 SKIP_REPOS = {"everything-claude-code"}
 
 
-def _auth():
+def _token():
+    """Resolve the API token without ever requiring an export, in this order:
+
+      1. JIRA_API_TOKEN in the environment (wins, so CI or a one-off can override)
+      2. macOS Keychain, service `jira-devicefarmseolocal` — the recommended home;
+         nothing lands on disk in plaintext. Store it once with:
+             security add-generic-password -a "$USER" -s jira-devicefarmseolocal \
+                 -w '<token>' -U
+      3. JIRA_API_TOKEN= in .env.dev next to this script (gitignored)
+    """
     tok = os.environ.get("JIRA_API_TOKEN")
-    if not tok:
-        sys.exit("JIRA_API_TOKEN not set — export it (see the header of this file).")
-    return "Basic " + base64.b64encode(f"{EMAIL}:{tok}".encode()).decode()
+    if tok:
+        return tok
+    try:
+        cp = subprocess.run(["security", "find-generic-password",
+                             "-s", "jira-devicefarmseolocal", "-w"],
+                            capture_output=True, text=True, timeout=10)
+        if cp.returncode == 0 and cp.stdout.strip():
+            return cp.stdout.strip()
+    except Exception:
+        pass
+    envf = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.dev")
+    if os.path.exists(envf):
+        for line in open(envf):
+            k, _, v = line.strip().partition("=")
+            if k.strip() == "JIRA_API_TOKEN" and v.strip():
+                return v.strip().strip("'\"")
+    sys.exit("No Jira token found. Store one in the Keychain:\n"
+             "  security add-generic-password -a \"$USER\" "
+             "-s jira-devicefarmseolocal -w '<token>' -U")
+
+
+def _auth():
+    return "Basic " + base64.b64encode(f"{EMAIL}:{_token()}".encode()).decode()
 
 
 def _api(path, data=None, method="GET"):
