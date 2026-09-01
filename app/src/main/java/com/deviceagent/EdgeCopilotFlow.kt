@@ -29,6 +29,29 @@ class EdgeCopilotFlow(
         private val ANSWER_NOISE = listOf(
             "Message Copilot", "Show all", "Smart", "Quick response", "Think Deeper"
         )
+
+        private const val FRE_TIMEOUT_MS = 180_000L
+
+        /**
+         * First-run dismissals, tried in this order each round. A fresh install shows
+         * default-browser -> sign-in -> privacy-confirm -> notifications permission.
+         *
+         * Both apostrophes for "Don't allow": the permission dialog renders the CURLY
+         * U+2019, so the straight-quote form alone never matches. The resource-id is the
+         * real workhorse (it exists on both Samsung and the fleet Infinix) and the text
+         * forms are the fallback for OEMs that rename it.
+         */
+        private val FRE_BUTTONS = listOf(
+            "text" to "Not now",
+            "id" to "fre_sign_in_later",
+            "text" to "Confirm",
+            "id" to "permission_deny_button",
+            "text" to "Don’t allow",
+            "text" to "Don't allow",
+            "text" to "Skip",
+            "text" to "Maybe later",
+            "text" to "No thanks"
+        )
     }
 
     // ── reset ──
@@ -63,22 +86,20 @@ class EdgeCopilotFlow(
     }
 
     /**
-     * Edge's first run is a fixed sequence of screens — sign-in, a data-collection
-     * confirm, then a notifications permission — each identified by one node. Poll
-     * rather than assume an order: under a proxy the screens arrive slowly and the
-     * sign-in one appears twice. Done as soon as the Copilot button is reachable.
+     * Walk Edge's first run until the Copilot button is reachable.
+     *
+     * A FRESH INSTALL shows more screens than a `pm clear`ed one — measured on the fleet
+     * Infinix: default-browser, sign-in, privacy-confirm, then the notifications
+     * permission. Poll rather than assume an order or a count; the sign-in screen can
+     * appear twice, and under a proxy the gaps between screens are long.
+     *
+     * Do NOT give up on a few idle rounds: a cold proxied start can sit on one screen
+     * for well over half a minute, and bailing early was what made every fleet job fail
+     * with "reset_edge failed" while the same code worked on the dev phone.
      */
     private fun dismissFre(): Boolean {
         s.log("── DISMISS EDGE FRE ──")
-        val buttons = listOf(
-            "text" to "Not now",
-            "id" to "fre_sign_in_later",
-            "text" to "Confirm",
-            "id" to "permission_deny_button",
-            "text" to "Don't allow",
-            "text" to "Skip"
-        )
-        val deadline = System.currentTimeMillis() + 90_000
+        val deadline = System.currentTimeMillis() + FRE_TIMEOUT_MS
         var idle = 0
         while (System.currentTimeMillis() < deadline) {
             copilotButton()?.let {
@@ -86,8 +107,11 @@ class EdgeCopilotFlow(
                 s.log("[edge] FRE done — Copilot button reachable")
                 return true
             }
+            // A failed data-clear can leave Settings in front; the FRE is then invisible
+            // and every round reads as idle. Put Edge back before looking.
+            ensureEdgeForeground()
             var tapped = false
-            for ((kind, value) in buttons) {
+            for ((kind, value) in FRE_BUTTONS) {
                 val n = if (kind == "id") s.findNode(resourceId = value, timeoutMs = 400)
                         else s.findNode(text = value, timeoutMs = 400)
                 if (n != null) {
@@ -98,10 +122,35 @@ class EdgeCopilotFlow(
                     break
                 }
             }
-            if (!tapped) { idle++; if (idle >= 8) break; Thread.sleep(2000) } else idle = 0
+            if (tapped) {
+                idle = 0
+            } else {
+                idle++
+                // Say what is actually on screen, so an unknown screen is identifiable
+                // from the job log instead of needing a phone in hand.
+                if (idle % 5 == 0) {
+                    s.log("[edge] FRE waiting (${idle} idle) on ${topPackage()}: " +
+                          visibleAnswerLines().take(4).joinToString(" | ").take(160))
+                }
+                Thread.sleep(2000)
+            }
         }
-        s.log("[edge] FRE did not reach the Copilot button")
+        s.log("[edge] FRE did not reach the Copilot button within ${FRE_TIMEOUT_MS / 1000}s " +
+              "— last screen ${topPackage()}")
         return false
+    }
+
+    private fun topPackage(): String {
+        val root = s.rootInActiveWindow ?: return "?"
+        val pkg = root.packageName?.toString() ?: "?"
+        root.recycle()
+        return pkg
+    }
+
+    private fun ensureEdgeForeground() {
+        if (topPackage() == PKG) return
+        s.log("[edge] not in foreground (${topPackage()}) — relaunching")
+        launch()
     }
 
     // ── copilot surface ──
