@@ -144,7 +144,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     }
                     step("scroll") { flowEngine.copilot.readAnswer().isNotEmpty() }
                     if (!backlinkDomain.isNullOrBlank()) {
-                        result.steps.add("backlink: SKIPPED - not implemented for copilot")
+                        result.backlinkClicked = step("backlink") {
+                            flowEngine.copilot.clickBacklink(backlinkDomain)
+                        }
                     }
                     result.status = "completed"
                     return

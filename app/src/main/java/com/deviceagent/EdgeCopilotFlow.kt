@@ -315,6 +315,152 @@ class EdgeCopilotFlow(
         }
     }
 
+    // ── backlink ──
+
+    /**
+     * Click the answer's citation for [domain] and stay on the page it opens.
+     *
+     * The Chrome flows find their link by targetUrl anywhere in the tree, offscreen
+     * included. That does not carry over: Copilot virtualizes the conversation, so a
+     * citation that has not been scrolled to simply is not in the tree. Seek downward —
+     * citations sit at the end of the answer — and check each screen.
+     */
+    fun clickBacklink(domain: String, maxScrolls: Int = 14): Boolean {
+        s.log("── COPILOT BACKLINK: \"$domain\" ──")
+        val partial = domain.substringBefore(".")
+        // readAnswer leaves the viewport at the end of the answer; without rewinding,
+        // this scan would only ever sweep past the bottom of the conversation.
+        seekConversationTop()
+        for (pass in 0..maxScrolls) {
+            val link = findCitation(domain, partial)
+            if (link != null) {
+                val label = link.text?.toString() ?: link.contentDescription?.toString() ?: "?"
+                s.log("[edge] backlink candidate \"${label.take(60)}\"")
+                val clicked = s.clickNode(link)
+                link.recycle()
+                Thread.sleep(4000)
+                // A click that reported success but left the composer on screen never
+                // navigated — count it as a miss rather than a backlink in the CSV.
+                val stillOnCopilot = composer(timeoutMs = 1500)?.also { it.recycle() } != null
+                if (!stillOnCopilot) {
+                    s.log("[edge] backlink click -> $clicked, navigated away")
+                    browseBacklinkPage()
+                    return true
+                }
+                s.log("[edge] backlink click -> $clicked but still on Copilot — keep looking")
+            }
+            s.gestureSwipe(s.screenWidth() / 2f, s.screenHeight() * 0.72f,
+                           s.screenWidth() / 2f, s.screenHeight() * 0.32f, 600)
+            Thread.sleep(1400)
+        }
+        // Distinguish "the answer never cited this domain" from "the citation was there
+        // and the matcher missed it" — the two have completely different fixes.
+        s.log("[edge] backlink NOT found for $domain; answer was:\n${readAnswer()}")
+        dumpLinkCandidates()
+        return false
+    }
+
+    /**
+     * A clickable citation for [domain].
+     *
+     * Copilot exposes no "AccessibilityNodeInfo.targetUrl" extra at all — the trick both
+     * Chrome flows rely on — and its citation card is a clickable View with empty text
+     * wrapping plain TextViews. Those hold the site NAME and page title, not always the
+     * domain: "rotorooter.com" is cited as "Roto-Rooter". So compare with punctuation
+     * stripped from both sides, and require a clickable ancestor — the same domain also
+     * appears in the answer's prose, where clicking it does nothing.
+     */
+    private fun findCitation(domain: String, partial: String): AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        val domainKey = squash(domain)
+        val partialKey = squash(partial)
+        var promptKey = ""
+        var candidate: AccessibilityNodeInfo? = null
+        fun walk(node: AccessibilityNodeInfo) {
+            val desc = node.contentDescription?.toString()
+            if (desc != null && desc.startsWith(PROMPT_BUBBLE_DESC)) {
+                // The bubble echoes the business name the citation is being matched on,
+                // so it out-matches the real citation. Record it and skip its subtree.
+                promptKey = squash(desc)
+                return
+            }
+            val hay = squash(
+                (node.extras?.getString("AccessibilityNodeInfo.targetUrl") ?: "") + " " +
+                (node.text?.toString() ?: "") + " " +
+                (node.contentDescription?.toString() ?: "")
+            )
+            val hit = domainKey in hay || (partialKey.length > 3 && partialKey in hay)
+            // The prompt also renders as a sibling TextView of the bubble. Reject it by
+            // length: an echo is long and wholly inside the prompt, a citation label
+            // ("Roto-Rooter", a page title) is short or carries text the prompt lacks.
+            val isPromptEcho = hay.length > 25 && promptKey.isNotEmpty() && hay in promptKey
+            if (hit && !isPromptEcho && hasClickableSelfOrAncestor(node)) {
+                // Keep the LAST match: citations render after the prose that names the
+                // same business, so the final hit on a screen is the clickable card.
+                candidate?.recycle()
+                candidate = AccessibilityNodeInfo.obtain(node)
+            }
+            for (i in 0 until node.childCount) {
+                val c = node.getChild(i) ?: continue
+                walk(c); c.recycle()
+            }
+        }
+        walk(root); root.recycle()
+        return candidate
+    }
+
+    private fun squash(t: String) = t.lowercase().filter { it.isLetterOrDigit() }
+
+    private fun hasClickableSelfOrAncestor(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable) return true
+        var p = node.parent
+        var up = 0
+        while (p != null && up < 5) {
+            if (p.isClickable) { p.recycle(); return true }
+            val next = p.parent
+            p.recycle()
+            p = next
+            up++
+        }
+        p?.recycle()
+        return false
+    }
+
+    /** Log every link-ish node so a miss can be diagnosed from one run's logcat. */
+    private fun dumpLinkCandidates() {
+        val root = s.rootInActiveWindow ?: return
+        val sb = StringBuilder()
+        fun walk(node: AccessibilityNodeInfo) {
+            val target = node.extras?.getString("AccessibilityNodeInfo.targetUrl")
+            val txt = node.text?.toString()
+            val desc = node.contentDescription?.toString()
+            if (!target.isNullOrBlank() || node.isClickable) {
+                sb.appendLine("  cls=${node.className} clickable=${node.isClickable} " +
+                    "target=\"${target ?: ""}\" text=\"${txt?.take(60) ?: ""}\" desc=\"${desc?.take(60) ?: ""}\"")
+            }
+            if (txt is android.text.Spanned) {
+                for (u in txt.getSpans(0, txt.length, android.text.style.URLSpan::class.java)) {
+                    sb.appendLine("  URLSpan url=\"${u.url}\"")
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val c = node.getChild(i) ?: continue
+                walk(c); c.recycle()
+            }
+        }
+        walk(root); root.recycle()
+        s.log("[edge] link candidates:\n$sb")
+    }
+
+    /** Dwell on the opened page so the visit registers as a real read. */
+    private fun browseBacklinkPage() {
+        for (i in 1..3) {
+            s.gestureSwipe(s.screenWidth() / 2f, s.screenHeight() * 0.70f,
+                           s.screenWidth() / 2f, s.screenHeight() * 0.35f, 700)
+            Thread.sleep(2000)
+        }
+    }
+
     // ── screenshot framing ──
 
     /**
