@@ -75,6 +75,24 @@ json.dump(p, open(PLAN,"w"))
 print(f"[dailyfull] merged Mae {len(mae)} -> total_jobs={p['total_jobs']}")
 PY
 
+# 2b) OPTIONAL Copilot trial slice. Unset = no change at all; Perplexity runs in full.
+# Set COPILOT_SLICE=N to move N Perplexity jobs onto Copilot for ONE night so its
+# backlink rate can be compared against Perplexity's 26% before any real swap.
+# The nightly runs unattended from a LaunchAgent, which carries no env, so the trial is
+# armed by dropping the job count into .copilot_slice. It is consumed and DELETED here:
+# a one-night trial must not quietly become the permanent config because nobody
+# remembered to unset it.
+if [ -z "${COPILOT_SLICE:-}" ] && [ -f .copilot_slice ]; then
+  COPILOT_SLICE="$(tr -dc '0-9' < .copilot_slice)"
+  rm -f .copilot_slice
+  say "copilot slice armed for tonight only: ${COPILOT_SLICE:-none} (marker consumed)"
+fi
+if [ -n "${COPILOT_SLICE:-}" ]; then
+  COPILOT_SLICE="$COPILOT_SLICE" python3 slice_copilot_into_plan.py "$PLAN" >>"$LOG" 2>&1 \
+    && say "copilot slice applied (${COPILOT_SLICE} jobs)" \
+    || say "WARN: copilot slice failed — continuing with the unmodified plan"
+fi
+
 # 3) wake + unlock fleet
 python3 - >>"$LOG" 2>&1 <<'PY'
 import subprocess
