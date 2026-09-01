@@ -114,17 +114,29 @@ def _rows(path):
 
 
 def artifacts_on(date):
-    """Deliverables on the Desktop whose name carries this date, either as
-    jun07_/aug31_ style or a full 2026-06-07 stamp."""
+    """Deliverables relevant to `date`, matched two independent ways.
+
+    A nightly starts in the evening and lands after midnight, so the file NAMED for
+    a date is usually written the following morning, and the file written ON a date
+    is usually the previous date's deliverable. Reporting only one of those hides
+    real work (e.g. shipping a backfill of an earlier date). Both are returned,
+    labelled, so the narrative can tell "named for this date" from "produced on it".
+    """
     d = dt.date.fromisoformat(date)
     short = d.strftime("%b").lower() + d.strftime("%d")          # 'sep01'
-    found = []
+    named, produced = [], []
     for base in ("Daily", "Rankings"):
         for p in glob.glob(f"{DESKTOP}/{base}/*"):
             b = os.path.basename(p)
+            if not os.path.isfile(p):
+                continue
+            rec = {"file": b, "rows": _rows(p) if b.endswith(".csv") else None,
+                   "modified": dt.datetime.fromtimestamp(os.path.getmtime(p)).strftime("%Y-%m-%d %H:%M")}
             if b.lower().startswith(short) or date in b:
-                found.append({"file": b, "rows": _rows(p) if b.endswith(".csv") else None})
-    return found
+                named.append(rec)
+            elif rec["modified"][:10] == date:
+                produced.append(rec)
+    return {"named_for_date": named, "modified_on_date": produced}
 
 
 def runlogs_on(date):
@@ -185,11 +197,20 @@ def build_adf(heading, body_text, ev):
                 subs.append([_t(f"…and {len(byrepo[repo]) - 10} more in this repo")])
             items.append(_li([_b(repo), _t(f" — {len(byrepo[repo])} commit(s)")], subs))
         content.append(_ul(items))
-    if ev["artifacts"]:
+    arts = ev["artifacts"]
+    named, produced = arts["named_for_date"], arts["modified_on_date"]
+    if named or produced:
         content.append(_h(4, "Artifacts confirmed on disk"))
-        content.append(_ul([
-            _li([_code(a["file"])] + ([_t(f" — {a['rows']:,} rows")] if a["rows"] else []))
-            for a in sorted(ev["artifacts"], key=lambda a: a["file"])]))
+        items = []
+        for a in sorted(named, key=lambda a: a["file"]):
+            items.append(_li([_code(a["file"])]
+                             + ([_t(f" — {a['rows']:,} rows")] if a["rows"] else [])
+                             + [_t(f" (written {a['modified']})")]))
+        for a in sorted(produced, key=lambda a: a["file"]):
+            items.append(_li([_code(a["file"])]
+                             + ([_t(f" — {a['rows']:,} rows")] if a["rows"] else [])
+                             + [_t(f" — shipped this day ({a['modified']})")]))
+        content.append(_ul(items))
     if ev["runs"]:
         content.append(_h(4, "Run logs"))
         content.append(_ul([
@@ -220,7 +241,10 @@ def main():
     g = sub.add_parser("gather"); g.add_argument("--date", required=True)
     s = sub.add_parser("suggest"); s.add_argument("--date", required=True)
     c = sub.add_parser("create")
-    c.add_argument("--date", required=True)
+    c.add_argument("--date", required=True, help="date the worklog is LOGGED against")
+    c.add_argument("--evidence-date", help="date the work actually describes; "
+                                           "defaults to --date. Use when a Sunday's "
+                                           "work is logged on the Monday.")
     c.add_argument("--hours", required=True, help="Jira format: 8h, 1d, 1d 1h, 2h30m")
     c.add_argument("--issue", required=True)
     c.add_argument("--heading", required=True)
@@ -239,7 +263,7 @@ def main():
         (key, summary), gap = suggest_issue(a.date)
         print(f"{key}  ({summary}) — nearest existing worklog is {gap} day(s) away"); return
 
-    ev = gather(a.date)
+    ev = gather(a.evidence_date or a.date)
     adf = build_adf(a.heading, open(a.body_file).read(), ev)
     started = f"{a.date}T{a.start_time}:00.000{a.tz_offset}"
     payload = {"started": started, "timeSpent": a.hours, "comment": adf}
@@ -248,7 +272,9 @@ def main():
         print(f"  issue   {a.issue}")
         print(f"  started {started}")
         print(f"  time    {a.hours}")
-        print(f"  evidence: {len(ev['commits'])} commits, {len(ev['artifacts'])} artifacts, {len(ev['runs'])} run log(s)")
+        na = len(ev["artifacts"]["named_for_date"]); pa = len(ev["artifacts"]["modified_on_date"])
+        print(f"  evidence for {ev['date']}: {len(ev['commits'])} commits, "
+              f"{na} named for that date, {pa} shipped that day, {len(ev['runs'])} run log(s)")
         print(json.dumps(adf)[:600] + " …")
         return
     r = _api(f"/rest/api/3/issue/{a.issue}/worklog?adjustEstimate=leave&notifyUsers=false",

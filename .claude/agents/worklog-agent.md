@@ -31,8 +31,21 @@ never echo a token into the transcript.
     python3 worklog_jira.py gather --date <DATE>
 
 Returns JSON: `commits` (deduped by SHA across every local repo, all branches, so
-work pushed to devicefarm1 counts), `artifacts` (deliverables on ~/Desktop with real
-row counts), `runs` (ok/err counts from the daily and ranking logs).
+work pushed to devicefarm1 counts), `runs` (ok/err counts from the daily and ranking
+logs), and `artifacts` split two ways:
+
+  - `named_for_date` — files whose NAME carries the date. A nightly lands after
+    midnight, so these are usually written the following morning.
+  - `modified_on_date` — files actually written that day, typically the PREVIOUS
+    date's deliverable being shipped.
+
+Use both. Describe the first as produced for that date and the second as shipped
+that day; do not merge them into one claim.
+
+**Logging one date while describing another.** If the user wants, say, Sunday's work
+logged on the Monday, pass `--date` for the day it is logged against and
+`--evidence-date` for the day the work describes. The evidence is gathered for
+`--evidence-date`; the worklog is stamped with `--date`.
 
 **3. Pick the issue.**
 
