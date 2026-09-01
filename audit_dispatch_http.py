@@ -542,6 +542,22 @@ def _name_candidates(biz: str, aka: str = ""):
     seg = _norm_name(biz.split(",")[0])
     if seg and seg != out[0][0]:
         out.append((seg, True))
+    # Drop a trailing location segment: campaigns are named "Name, Detail, City" while
+    # the answer lists just "Name, Detail". The full-name candidate is LONGER than what
+    # is listed, and _name_matches only tests `cand in listed`, so a business listed at
+    # its own #1 scored as absent and the row was demoted as a fabrication. Measured on
+    # "Leo Lapuerta, MD Plastic Surgery, Pearland" vs the listed "Leo Lapuerta, MD
+    # Plastic Surgery".
+    #
+    # Only when TWO or more segments remain, so this stays distinctive. Dropping the
+    # tail of a two-part "Chimney Sweep, Vancouver WA" would leave the bare category
+    # "chimney sweep", which is exactly the generic substring that once matched the
+    # COMPETITOR "Vancouver Chimney Sweep" and passed a fabricated row.
+    parts = [p for p in biz.split(",") if p.strip()]
+    if len(parts) >= 3:
+        trimmed = _norm_name(",".join(parts[:-1]))
+        if trimmed and trimmed not in {c for c, _ in out}:
+            out.append((trimmed, False))
     out += [(_norm_name(a), False) for a in (aka or "").split(",")]
     return [(c, strict) for c, strict in out if len(c) >= 3]
 
