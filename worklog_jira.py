@@ -19,6 +19,14 @@ Auth comes from the environment, never from this file:
 """
 import argparse, base64, collections, datetime as dt, glob, json, os, re, subprocess, sys, urllib.request
 
+# This Mac's Python has no usable default CA bundle — without this every Jira call
+# dies with CERTIFICATE_VERIFY_FAILED before it leaves the machine. Same guard the
+# other runners in this repo use.
+try:
+    os.environ.setdefault("SSL_CERT_FILE", __import__("certifi").where())
+except Exception:
+    pass
+
 SITE  = os.environ.get("JIRA_SITE", "https://devicefarmseolocal.atlassian.net")
 EMAIL = os.environ.get("JIRA_EMAIL", "erven.i@appstango.com")
 PROJECTS = os.path.expanduser("~/projects")
