@@ -18,7 +18,30 @@ FLEET_LOCK="${FLEET_LOCK:-/tmp/fleet.lock}"
 PKG="com.microsoft.emmx"
 MAX_WAIT_S="${MAX_WAIT_S:-21600}"   # 6h ceiling so a stuck nightly can't hang this forever
 
+INSTALL_TIMEOUT_S="${INSTALL_TIMEOUT_S:-180}"
+
 say(){ echo "[edge-install $(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
+
+# `adb install` of a 251MB APK over wireless adb usually takes ~35s but can wedge
+# indefinitely — one phone hung for 9 minutes and stalled the whole sweep. macOS has no
+# timeout(1), so run it detached and reap it on a deadline.
+install_one(){
+  local ser="$1" out="/tmp/_edge_install_out.$$"
+  adb -s "$ser" install -r "$APK" > "$out" 2>&1 &
+  local pid=$! waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 5
+    waited=$((waited + 5))
+    if [ "$waited" -ge "$INSTALL_TIMEOUT_S" ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      echo "TIMEOUT after ${INSTALL_TIMEOUT_S}s" > "$out"
+      return 124
+    fi
+  done
+  wait "$pid" 2>/dev/null
+  return 0
+}
 
 [ -f "$APK" ] || { say "APK missing: $APK"; exit 1; }
 
@@ -47,7 +70,9 @@ total=$(wc -l < /tmp/_edge_serials.txt | tr -d ' ')
 say "installing on $total phones"
 
 ok=0; skip=0; fail=0
-while IFS= read -r s; do
+# Read the list on fd 3: `adb install` reads stdin and would otherwise swallow every
+# remaining serial, so the loop installed on exactly one phone and reported success.
+while IFS= read -r s <&3; do
   [ -z "$s" ] && continue
   have=$(adb -s "$s" shell "pm list packages $PKG" 2>/dev/null | tr -d '\r')
   if [ -n "$have" ]; then
@@ -56,7 +81,8 @@ while IFS= read -r s; do
     skip=$((skip + 1))
     continue
   fi
-  res=$(adb -s "$s" install -r "$APK" 2>&1 | tail -1)
+  install_one "$s"
+  res=$(tail -1 "/tmp/_edge_install_out.$$" 2>/dev/null)
   if echo "$res" | grep -q Success; then
     vc=$(adb -s "$s" shell "dumpsys package $PKG" 2>/dev/null | grep -m1 versionCode | tr -d '\r')
     say "OK    $s$vc"
@@ -65,6 +91,6 @@ while IFS= read -r s; do
     say "FAIL  $s $res"
     fail=$((fail + 1))
   fi
-done < /tmp/_edge_serials.txt
+done 3< /tmp/_edge_serials.txt
 
 say "done: ok=$ok skip=$skip fail=$fail (log: $LOG)"
