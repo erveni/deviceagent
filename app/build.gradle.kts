@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 76
-        versionName = "0.9.59-edge-fre-virgin"
+        versionCode = 77
+        versionName = "0.9.60-async-session"
     }
 
     buildTypes {

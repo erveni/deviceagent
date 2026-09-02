@@ -767,7 +767,24 @@ def _http_timeout_for(platform: str) -> int:
 _SKIP_PREFLIGHT = os.environ.get("AEO_SKIP_PREFLIGHT") == "1"
 
 
+# Poll the phone instead of holding one HTTP request open for the whole job.
+# A ranking job runs 130-350s, and a request held that long across an adb forward is the
+# single biggest failure cause measured on this fleet: every platform lost a job to
+# "RemoteDisconnected: Remote end closed connection without response", and the daily's
+# largest bucket is the same fault under the name "http fail" (132 of 156). The
+# automation was fine in all of those — only the socket died, and the job was then
+# re-run at full bandwidth cost. AEO_ASYNC_SESSION=0 restores the blocking POST.
+_ASYNC_SESSION = os.environ.get("AEO_ASYNC_SESSION", "1") == "1"
+_POLL_EVERY_S = float(os.environ.get("AEO_POLL_EVERY_S", "5"))
+
+
 def _post_audit(local_port: int, body: dict) -> dict:
+    if _ASYNC_SESSION:
+        return _post_audit_async(local_port, body)
+    return _post_audit_blocking(local_port, body)
+
+
+def _post_audit_blocking(local_port: int, body: dict) -> dict:
     payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         f"http://localhost:{local_port}/session",
@@ -785,6 +802,58 @@ def _post_audit(local_port: int, body: dict) -> dict:
             return json.loads(e.read().decode("utf-8"))
         except Exception:
             return {"status": "error", "error": f"HTTP {e.code} (no body)"}
+
+
+def _post_audit_async(local_port: int, body: dict) -> dict:
+    """Kick the job off, then poll /result until it stops running.
+
+    Every request is short, so a dropped socket costs one retried poll instead of the
+    whole job. Falls back to the blocking result if the phone runs an APK without the
+    async path (pre-v77), so a mixed-version fleet keeps working.
+    """
+    payload = json.dumps({**body, "async": True}).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://localhost:{local_port}/session",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            ack = json.loads(r.read().decode("utf-8"))
+        if not ack.get("async"):
+            # Old APK ignored the flag and ran it synchronously — this IS the result.
+            return ack
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return {"status": "error", "error": f"HTTP {e.code} (no body)"}
+    except Exception as e:
+        return {"status": "error", "error": f"async start failed: {type(e).__name__}: {e}"}
+
+    deadline = time.time() + _http_timeout_for(body.get("platform", ""))
+    misses = 0
+    last: dict = {}
+    while time.time() < deadline:
+        time.sleep(_POLL_EVERY_S)
+        try:
+            with urllib.request.urlopen(
+                f"http://localhost:{local_port}/result", timeout=30
+            ) as r:
+                last = json.loads(r.read().decode("utf-8"))
+            misses = 0
+        except Exception:
+            # A single poll can fail while the job is perfectly healthy — that is the
+            # whole point of this path. Only give up after a sustained silence.
+            misses += 1
+            if misses >= 12:
+                return {"status": "error", "error": "phone unreachable while polling /result"}
+            continue
+        if not last.get("running", False):
+            return {k: v for k, v in last.items() if k != "running"}
+    return {"status": "error", "error": "generation timeout (async poll deadline)",
+            **{k: v for k, v in last.items() if k != "running"}}
 
 
 def _classify(response: dict, platform: str) -> tuple[str, str, str, str, str, str]:

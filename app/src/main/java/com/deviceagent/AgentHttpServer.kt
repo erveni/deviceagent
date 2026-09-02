@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.59-edge-fre-virgin"
-        const val APP_VERSION_CODE = 76
+        const val APP_VERSION_NAME = "0.9.60-async-session"
+        const val APP_VERSION_CODE = 77
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -620,6 +620,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 path == "/status" || path == "/status/" -> {
                     handleStatus(writer)
                 }
+                path == "/result" || path == "/result/" -> {
+                    handleResult(writer)
+                }
                 path == "/health" || path == "/health/" -> {
                     handleHealth(writer)
                 }
@@ -667,6 +670,29 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             // Per-request override of the generation-wait timeout (default 240s).
             genTimeoutSec = json.optInt("genTimeoutSec", 240)
 
+            // ASYNC: acknowledge immediately and run the job on a worker thread; the Mac
+            // polls /result. A job runs 130-350s, and holding one HTTP request open
+            // across an adb forward for that long is the fleet's single biggest failure
+            // cause — 132 of the daily's 156 failures were "http fail", and the clean
+            // ranking sample lost one job per platform to RemoteDisconnected. Nothing
+            // about the automation was wrong in those; only the connection died.
+            if (json.optBoolean("async", false)) {
+                respond(writer, 202, JSONObject().apply {
+                    put("accepted", true)
+                    put("type", sessionType)
+                    put("async", true)
+                }.toString())
+                Thread {
+                    try {
+                        runSessionInline(sessionType, json)
+                    } catch (e: Exception) {
+                        Log.e("DeviceAgent", "Async session error: ${e.stackTraceToString()}")
+                        lastResult.get()?.let { it.status = "error"; it.error = e.message }
+                    }
+                }.start()
+                return
+            }
+
             when (sessionType) {
                 "audit" -> handleAuditSession(writer, json)
                 "capture" -> handleCaptureSession(writer, json)
@@ -676,6 +702,94 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             Log.e("DeviceAgent", "Session error: ${e.message}")
             respond(writer, 400, """{"error":"${e.message?.replace("\"", "'")}"}""")
         }
+    }
+
+    /** Run a session to completion with no writer — the async path's body. Leaves the
+     *  finished SessionResult in [lastResult] for /result to serve. */
+    private fun runSessionInline(sessionType: String, json: JSONObject) {
+        when (sessionType) {
+            "audit" -> {
+                val result = SessionResult(platform = "all", status = "running", type = "audit")
+                lastResult.set(result)
+                executeAuditSession(
+                    result,
+                    json.optString("bizName", ""), json.optString("bizUrl", ""),
+                    json.optString("city", ""), json.optString("state", ""),
+                    json.optString("keyword", ""),
+                    json.optString("platform", "").let { if (it.isBlank()) null else it },
+                    json.optString("searchAddress", "").let { if (it == "null") "" else it },
+                )
+            }
+            else -> {
+                val platform = json.optString("platform", "gemini")
+                val result = SessionResult(
+                    platform = platform,
+                    status = "running",
+                    prompt = json.optString("prompt", ""),
+                    backlinkDomain = json.optString("backlinkDomain", "")
+                        .let { if (it.isBlank()) null else it },
+                    type = "daily",
+                )
+                lastResult.set(result)
+                executeSession(
+                    result, platform, result.prompt,
+                    json.optString("followUp", "").let { if (it.isBlank() || it == "null") null else it },
+                    result.backlinkDomain,
+                    json.optString("stopAfter", "").let { if (it.isBlank() || it == "null") null else it },
+                    json.optBoolean("useIme", false),
+                )
+            }
+        }
+    }
+
+    /** Full result of the last (or in-flight) session — the SAME JSON the blocking POST
+     *  returns, plus `running` so a poller knows when to stop. */
+    private fun handleResult(writer: OutputStreamWriter) {
+        val result = lastResult.get()
+        if (result == null) {
+            respond(writer, 200, """{"running":false,"status":"idle"}""")
+            return
+        }
+        val json = if (result.type == "audit") auditResultJson(result) else dailyResultJson(result)
+        json.put("running", result.status == "running")
+        respond(writer, 200, json.toString())
+    }
+
+    private fun auditResultJson(result: SessionResult) = JSONObject().apply {
+        put("status", result.status)
+        put("type", "audit")
+        put("prompt", result.prompt)
+        put("ranking_position", result.rankingPosition ?: 0)
+        put("ranking_total", result.rankingTotal ?: "")
+        put("error", result.error ?: "")
+        put("proxy_ip", result.proxyIp ?: "")
+        put("steps", result.steps.size)
+        put("step_log", org.json.JSONArray(result.steps))
+        val platformsJson = JSONObject()
+        for ((name, pr) in result.platforms) {
+            platformsJson.put(name, JSONObject().apply {
+                put("status", pr.status)
+                put("ranking_position", pr.rankingPosition ?: 0)
+                put("ranking_total", pr.rankingTotal ?: "")
+                put("screenshot_path", pr.screenshotPath ?: "")
+                // Base64 PNG bytes — Mac decodes + writes locally; saves an adb pull.
+                put("screenshot_b64", pr.screenshotB64 ?: "")
+                put("response_text", pr.responseText ?: "")
+                put("error", pr.error ?: "")
+            })
+        }
+        put("platforms", platformsJson)
+    }
+
+    private fun dailyResultJson(result: SessionResult) = JSONObject().apply {
+        put("status", result.status)
+        put("type", "daily")
+        put("platform", result.platform)
+        put("backlink_clicked", result.backlinkClicked)
+        put("backlink_domain", result.backlinkDomain ?: "")
+        put("error", result.error ?: "")
+        put("steps", result.steps.size)
+        put("step_log", org.json.JSONArray(result.steps))
     }
 
     private fun handleDailySession(writer: OutputStreamWriter, json: JSONObject) {
