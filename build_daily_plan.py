@@ -33,7 +33,7 @@ DATE = os.environ.get("DATE", "2026-06-08")
 PLAN_PATH = os.environ.get(
     "PLAN_PATH", f"/Users/seolocalph/projects/device-agent/daily_plan_{DATE}.json")
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
-PLATFORMS = ["ChatGPT", "Gemini", "Perplexity"]
+PLATFORMS = ["ChatGPT", "Gemini", "Copilot"]
 CAP = 8
 PRIORITY_TARGET = 12
 random.seed(20260607)
@@ -52,9 +52,9 @@ def is_priority(biz_id, campaign_name):
 # force-cover: campaignName substrings -> platform that MUST appear.
 FORCE_PLATFORM = [
     (("Calderon", "454 San Jose"), "ChatGPT"),
-    (("Alpha Dental Excellence", "Langhorne"), "Perplexity"),
+    (("Alpha Dental Excellence", "Langhorne"), "Copilot"),
     (("Source Pest Control", "Temecula"), "ChatGPT"),
-    (("Vellum Architecture", "Asheville"), "Perplexity"),
+    (("Vellum Architecture", "Asheville"), "Copilot"),
 ]
 # force-cover: campaignName substrings -> keyword text that MUST be included.
 # Force-include a specific keyword for a campaign (matched on exact keywordText).
@@ -188,7 +188,7 @@ for camp_off, ((camp, _gbid), its) in enumerate(by_campaign.items()):
 
     # fill to target: one platform per fresh keyword first, then repeat on new platforms.
     # Round-robin the platform across assignments so the campaign (and the day) splits
-    # roughly evenly across ChatGPT/Gemini/Perplexity instead of piling onto avail[0].
+    # roughly evenly across ChatGPT/Gemini/Copilot instead of piling onto avail[0].
     i = 0
     guard = 0
     while len(chosen) < target and guard < target * 8:
