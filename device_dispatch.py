@@ -75,7 +75,14 @@ TUNNEL_SETTLE_S = 3
 # on a second IP per audit_dispatch_http.py:591-598. Ported here because the
 # daily path was missing the same recovery and was tripping the consumer's
 # circuit breaker on input-failed bursts that a fresh Decodo session clears.
-RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout", "signup_wall")
+# "open_copilot failed" is a PROXY symptom, not an Edge one: Copilot refuses some exit
+# IPs and Edge then renders "Network issues" plus a sign-in upsell instead of the
+# composer, so the job dies with no answer. Measured 2026-09-04 — device-113 went 0/23
+# on the nightly's exits, then answered first try on a fresh session; device-110 failed
+# unproxied and captured 277 chars proxied, same phone minutes apart. It was 62 of
+# Copilot's 78 errors that night, so rotating the session is worth the extra ~9 MB.
+RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout",
+                  "signup_wall", "open_copilot failed")
 
 
 class DevicePool:
