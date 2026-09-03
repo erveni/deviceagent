@@ -125,3 +125,87 @@ The dollar figures are close estimates. Two inputs would make them exact:
 
 1. **Real price per GB** — from each provider's latest invoice.
 2. **Real data per check** — from the provider dashboard (GB used ÷ checks over a known window).
+
+---
+
+## 9. Measured usage — 2026-09-03 (supersedes the estimates above)
+
+**Version:** 1.1 · Everything below is read from the provider's own meter
+(`evomi_balance.py`) either side of a controlled run — not modelled.
+
+### 9.1 The headline correction
+
+§3 assumes **~3 MB per check for both workloads**. That is right for the daily and
+**wrong for ranking by roughly 6x**:
+
+| Workload | §3 estimate | **Measured** | Basis |
+|---|---:|---:|---|
+| Daily engagement | ~3 MB | **1.96 MB/job** | 1,702 jobs, 3,338 MB, 2026-09-02 |
+| Ranking (one clean pass) | ~3 MB | **16.6 MB/job** | 21 jobs, 348 MB, retries off |
+| Ranking (as actually run) | ~3 MB | **~34 MB/job** | includes retry re-runs |
+
+### 9.2 Per platform (ranking, Evomi, retries off)
+
+| Platform | MB/job | MB per *successful* job |
+|---|---:|---:|
+| **Copilot** | **8.99** | 12.59 |
+| ChatGPT | 16.28 | 22.79 |
+| Gemini | 24.38 | 42.66 |
+
+Copilot is the cheapest platform by a wide margin — about a third of Gemini. That is a
+real argument for the Perplexity -> Copilot swap independent of ranking quality.
+
+### 9.3 Where ranking's extra data goes
+
+Ruled OUT by reading the code: both flows do a full Chrome clear (`fullClear = true`),
+and ranking actually waits *less* (150s vs the daily's 240s). Neither explains the gap.
+What remains:
+
+1. **Retries.** ~51% of real-world ranking cost. A "job" is often several full page
+   loads: `audit_dispatch_http.py` builds a `GostManager` at three points (initial,
+   retry, OCR re-capture) and `run_ranking_auto.sh` loops up to 40 retry rounds.
+2. **Screenshots + re-renders.** The daily takes **zero** screenshots; ranking captures
+   one and may re-render the page again via `_cdp_js_frame_screenshot` /
+   `_cdp_strip_map_screenshot`.
+3. **Richer answers.** Ranking asks for a local top-3, so platforms render place cards
+   and map embeds (images); the daily's conversational prompts render mostly text.
+4. **Scrolling.** `scrollToRankLine` up to 14 swipes lazy-loads content the daily never
+   reaches.
+5. **Tunnels.** One gost per *job* for ranking; one per *wave* for the daily.
+
+### 9.4 Failure rate is a bandwidth problem
+
+Every failed attempt still pays full freight, so the failure rate IS a cost driver:
+
+| Workload | Success | Dominant failure |
+|---|---:|---|
+| Daily | 91% | `http fail` — 132 of 156 |
+| Ranking | 65-67% | `RemoteDisconnected` on the opening POST |
+
+Measured 2026-09-03: making the phone run sessions asynchronously (v77, `/result`
+polling) did **not** move the ranking rate (65% vs 67%). The disconnect happens on the
+*initial* request, not from holding one open — only 1 of 230 jobs died while polling.
+The remaining cause is the phone's HTTP server refusing connections at connect time.
+
+Copilot specifically ran 45% (36/80) under 15-worker concurrency, with 23 of its 40
+errors being Edge first-run faults (`reset_edge` x12, `open_copilot` x11) — every job
+`pm clear`s Edge and must re-walk a 4-screen wizard. Not exercised by single-phone tests.
+
+### 9.5 Provider status and runway
+
+§7's provider table is out of date. As of 2026-09-03:
+
+| Provider | State |
+|---|---|
+| **Evomi** | **Working.** Zip targeting verified; the only pool in use. |
+| Decodo | **Refusing auth** (`rejected by the SOCKS5 server (1 3)`) since ~2026-09-02 |
+| DataImpulse | Dead (per 2026-08-29) |
+
+At 45.8 GB remaining:
+
+- Daily only: **~14 nights** (3.3 GB/night)
+- Remaining stale ranking set (3,287 jobs): **53 GB** clean, **109 GB** at the observed
+  retry rate — **does not fit either way**
+
+The stale set cannot be completed on the current balance. Cutting the failure rate is
+worth more than buying traffic: halving retries saves more than the whole set costs.
