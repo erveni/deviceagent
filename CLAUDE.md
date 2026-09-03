@@ -31,6 +31,14 @@ python3 run_daily_plan.py /path/to/daily_plan.json   # legacy rolling runner
 
 - Don't commit a rebuilt `device-agent.apk` without bumping `versionCode`/`versionName` in `app/build.gradle.kts`.
 - Don't hardcode credentials in `run_*.py`. Move to env vars before pushing.
+- Don't resolve a phone by picking the SHORTEST matching mDNS name. Some phones are live
+  under the `(2)` variant and some under the bare one; resolve against what
+  `adb devices` actually lists. Guessing produced three "dead phone" reports on
+  2026-09-04 that were all healthy (device-104, device-110).
+- Don't dispatch a test job to a phone without waking it first
+  (`KEYCODE_WAKEUP`, `KEYCODE_MENU`, swipe up). A locked phone returns
+  `reset_edge failed`, which reads exactly like a real Edge fault.
+- Don't run `uiautomator dump` while a job is in flight — see the Copilot section.
 
 ---
 
@@ -179,7 +187,8 @@ the job fails fast as `input_failed` instead of stalling for minutes.
 | v74 `0.9.57-copilot-edge` | c4c9f35 | Copilot as an in-app platform via Edge. Also fixed `/health` reporting a hardcoded version. |
 | v75 `0.9.58-copilot-exit-guard` | 48dc401 | Names the "Copilot is currently unavailable" refused-exit screen instead of reporting a generic composer timeout. |
 | v76 `0.9.59-edge-fre-virgin` | 7eaba66 | Edge first-run walk for a VIRGIN install (a `pm clear`ed Edge shows fewer screens than a never-launched one). Deployed 17/17. |
-| v77 `0.9.60-async-session` | 68fe119 | `/session {"async":true}` + `/result` polling. Deployed 17/17. |
+| v77 `0.9.60-async-session` | 68fe119 | `/session {"async":true}` + `/result` polling. Deployed 17/17 — still what the fleet runs as of 2026-09-04. |
+| v78 `0.9.61-edge-light-reset` | UNCOMMITTED | Built + device-tested 2026-09-04, NOT deployed. Replaces the Edge storage wipe with in-app "Delete browsing data" (39s, no first-run walk) and adds an InPrivate-exit guard plus a check that refuses to type a prompt into Edge's ADDRESS BAR when Copilot is not open. Deliberately parked: it targets `reset_edge`, which stopped mattering once device-122 got Edge — the real Copilot loss was the proxy exit. |
 `/health`'s version comes from HAND-MAINTAINED constants `APP_VERSION_NAME` /
 `APP_VERSION_CODE` in `AgentHttpServer.kt` (~line 22), not from BuildConfig. They were
 stale for years and `/health` lied after every bump; they are correct as of v77 and MUST
@@ -245,10 +254,99 @@ none of the Chrome helpers. Measured facts that shaped it:
 - Screenshots are framed by parking the PROMPT BUBBLE just off the top, not by targeting
   the rank line — the latter clips rank #1 on long lists.
 
-Known weak spot: every job `pm clear`s Edge, forcing a 4-screen first-run walk. Under
-15-worker concurrency that failed 23 times in 80 jobs (`reset_edge failed` x12,
-`open_copilot failed` x11) for a 45% success rate, against ChatGPT 83% / Gemini 69%.
-Single-phone testing never exercised it. Fixing this means not wiping Edge every job.
+### `open_copilot failed` is a PROXY failure, not an Edge one (measured 2026-09-04)
+
+It reads like an app bug and was treated as one for a whole session. It is not. Copilot
+REFUSES some exit IPs; Edge then renders "Network issues" plus a "Sign in for the full
+experience / Continue with Microsoft" sheet where the composer belongs, and the job dies
+with no answer. The sheet is the SYMPTOM of a refused exit, not a sign-in gate — chasing
+it as a gate is a dead end (BACK, `touch_outside` and swipes all fail to clear it, and
+swiping closes Copilot itself).
+
+Same phones, minutes apart, on the 2026-09-04 nightly:
+
+| phone | on the nightly's exit | on a fresh proxy session |
+|---|---|---|
+| device-113 | **0/23** | answered first try, 344 chars |
+| device-116 | 7/28 | 982 chars |
+| device-110 | unproxied -> "composer never appeared" | 277 chars |
+
+That was 62 of Copilot's 78 errors that night. It also explains the two things a
+Microsoft-side gate never could: the decay from 44% to 33% as exits get reused, and wildly
+different per-phone rates on IDENTICAL Edge builds (device-110 32/32 while device-113 was
+0/23).
+
+Fix: `"open_copilot failed"` is in `RETRY_TRIGGERS` (`device_dispatch.py`), so the existing
+rotate-the-session retry fires. `reset_edge failed` is deliberately NOT a trigger — that
+one was a phone with no Edge installed, which a new exit cannot fix.
+
+Do NOT diagnose Copilot from an unproxied phone. Every manual test on office wifi
+reproduces the sign-in sheet and proves nothing; that false lead cost most of a session.
+
+Also do not trust `uiautomator dump` during a live job — UiAutomator contends with the
+AccessibilityService the agent drives and makes healthy phones fail. A 15-phone probe that
+sampled the screen mid-job reported ALL phones broken including one that was 32/32
+minutes earlier. Read `/sdcard/Android/data/com.deviceagent/files/logs/agent.log` AFTER
+the job instead.
+
+Known weak spot (still true, lower priority): every job `pm clear`s Edge, forcing a
+4-screen first-run walk. That shows up as `reset_edge failed`, which was a minor error
+class once the missing-Edge phone was fixed.
+
+## Daily plan build: DeepSeek 402 is already handled by Ollama (2026-09-04)
+
+Do NOT treat "DeepSeek Insufficient Balance" as a blocker for the nightly build, and do
+not top it up on that basis alone. `daily_full_auto.sh` routes the build through a LOCAL
+api-server (`_build_server_lib.sh`, port 8788) whose `chatCompletion` falls back to Ollama
+`qwen2.5:7b` on any DeepSeek error. This was already live on 2026-09-03: DeepSeek 402'd
+all night and all 977 ChatGPT+Gemini prompts still built.
+
+- The local server talks to the PROD RDS directly and runs build-only
+  (`TRIAL_SWEEP_MINUTES=0`, so no Stripe/e-mail side effects).
+- AEOAdmin's `dist/` is gitignored, so a pulled-but-unbuilt tree serves STALE route code.
+  `start_build_server` now rebuilds before the dist check — that is how the `copilot`
+  platform whitelist stayed invisible even after the source was fixed.
+- `BUILD_TIMEOUT_S` defaults to 180 in the nightly. Ollama answers serially behind 8
+  build workers; the DeepSeek-era 60s crowded that (see the note at
+  `build_daily_plan.py:26`).
+- Cost: ~61 min to build 1438 sessions, vs minutes on DeepSeek. Budget for it.
+
+`copilot` is ACCEPTED by `/api/llm/build-session` as of AEOAdmin `95d16f9`. Before that it
+returned `400 platform must be one of chatgpt, gemini, perplexity`, which silently dropped
+all 461 Copilot sessions from the 2026-09-03 plan (977 jobs shipped instead of 1438).
+Note the deployed App Runner instance only picks this up once the branch reaches `main`;
+the nightly is unaffected because it builds against the local server.
+
+## PROXY_PROVIDER lives in the LaunchAgent, not in .env.dev
+
+`.env.dev` says `PROXY_PROVIDER=dataimpulse`, which is DEAD. The working value
+(`evomi`) exists ONLY in `~/Library/LaunchAgents/com.deviceagent.dailyfull.plist`
+under `EnvironmentVariables`. Launching `daily_full_auto.sh` by hand therefore runs the
+entire night on a dead provider, and the only visible sign is one line:
+
+```
+[daily 2026-09-04] proxy: DataImpulse (TEMPORARY — Decodo funding)   # WRONG
+[daily 2026-09-04] proxy: Evomi (HTTP :1000, state-level, ~$0.49/GB) # what it should say
+```
+
+Always hand-launch as `PROXY_PROVIDER=evomi ./daily_full_auto.sh <DATE>` and CHECK that
+line. `PROXY_HOST` has the same problem — it stays `gate.decodo.com` regardless of
+`PROXY_PROVIDER`.
+
+## Fleet state (2026-09-04)
+
+16 phones answer adb; 15 dispatch. Edge `151.0.4129.101` is on all 16.
+
+- **device-102** — AccessibilityService is DEAD: `/health` returns nothing and its log
+  repeats `not in foreground (?)`, where `?` means a null a11y root. It is in
+  `DEVICE_EXCLUDE` for that reason and adb alone cannot revive it; it needs a hand on the
+  phone. Do not "fix" it by reinstalling the APK.
+- **device-122** (`...S003287`) — had NO Edge, so every Copilot job on it died
+  `reset_edge failed` (0/15). Fixed by sideloading `~/apks/edge_151.0.4129.101.apk`;
+  it went 4/5 within a minute. That phone is the one the earlier handover flagged as
+  "adb bulk transfer hangs".
+- The other 8 entries in `DEVICES` have been dark for at least two nights — stale roster
+  entries, not a regression. The plan is sized to the phones that answer.
 
 ## Async sessions (v77)
 
