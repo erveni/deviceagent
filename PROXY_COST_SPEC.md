@@ -141,8 +141,15 @@ The dollar figures are close estimates. Two inputs would make them exact:
 | Workload | §3 estimate | **Measured** | Basis |
 |---|---:|---:|---|
 | Daily engagement | ~3 MB | **1.96 MB/job** | 1,702 jobs, 3,338 MB, 2026-09-02 |
-| Ranking (one clean pass) | ~3 MB | **16.6 MB/job** | 21 jobs, 348 MB, retries off |
-| Ranking (as actually run) | ~3 MB | **~34 MB/job** | includes retry re-runs |
+| Ranking (single pass) | ~3 MB | **16.6 MB/job** | 21 jobs, 348 MB, 2026-09-03 |
+| Ranking (single pass, repeat) | ~3 MB | **16.98 MB/job** | 230 jobs, 3,904 MB, 2026-09-03 |
+
+An earlier note records **~34 MB/job** for ranking (2026-08-29), attributed there to
+"full Chrome clear + screenshots". That figure is NOT reproduced by either measurement
+above and its conditions are unknown. The likeliest difference is platform mix: it
+predates Copilot, which is the cheapest platform at 8.99 MB and pulls the average down,
+and it was taken on a different provider. **Treat 16.6-17 MB/job as the current number
+and 34 as unexplained** until someone re-measures a with-retries run.
 
 ### 9.2 Per platform (ranking, Evomi, retries off)
 
@@ -161,9 +168,12 @@ Ruled OUT by reading the code: both flows do a full Chrome clear (`fullClear = t
 and ranking actually waits *less* (150s vs the daily's 240s). Neither explains the gap.
 What remains:
 
-1. **Retries.** ~51% of real-world ranking cost. A "job" is often several full page
-   loads: `audit_dispatch_http.py` builds a `GostManager` at three points (initial,
-   retry, OCR re-capture) and `run_ranking_auto.sh` loops up to 40 retry rounds.
+1. **Retries — NOT yet measured.** Both figures above are single-pass
+   (`run_ranking.py` directly). A production run uses `run_ranking_auto.sh`, which
+   loops up to 40 retry rounds, and `audit_dispatch_http.py` builds a `GostManager` at
+   three points (initial, retry, OCR re-capture), so a planned "job" can be several
+   full page loads. The multiplier is plausible but UNQUANTIFIED — do not budget with
+   a number for it until a retry-loop run is metered.
 2. **Screenshots + re-renders.** The daily takes **zero** screenshots; ranking captures
    one and may re-render the page again via `_cdp_js_frame_screenshot` /
    `_cdp_strip_map_screenshot`.
@@ -204,8 +214,10 @@ errors being Edge first-run faults (`reset_edge` x12, `open_copilot` x11) — ev
 At 45.8 GB remaining:
 
 - Daily only: **~14 nights** (3.3 GB/night)
-- Remaining stale ranking set (3,287 jobs): **53 GB** clean, **109 GB** at the observed
-  retry rate — **does not fit either way**
+- Remaining stale ranking set (3,287 jobs): **~53 GB** at the measured single-pass rate.
+  A production run adds retries on top, so the true figure is higher by an unmeasured
+  margin — **it does not fit within 45.8 GB either way**
 
-The stale set cannot be completed on the current balance. Cutting the failure rate is
-worth more than buying traffic: halving retries saves more than the whole set costs.
+The stale set cannot be completed on the current balance at either rate. Cutting the
+failure rate should help — every failed attempt pays full freight — but the size of that
+saving is not yet measured, so it is a direction, not a costed plan.
