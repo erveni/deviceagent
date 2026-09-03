@@ -45,7 +45,10 @@ else
   else
     say "local build-server unavailable — building against deployed endpoint"
   fi
-  DATE="$DATE" EXECUTOR_TOKEN="$TOK" python3 -u build_daily_plan.py >>"$LOG" 2>&1
+  # Local Ollama serves every session serially behind 8 build workers, so a single
+  # call queues far longer than the DeepSeek-era default of 60s.
+  DATE="$DATE" EXECUTOR_TOKEN="$TOK" BUILD_TIMEOUT_S="${BUILD_TIMEOUT_S:-180}" \
+    python3 -u build_daily_plan.py >>"$LOG" 2>&1
   stop_build_server >>"$LOG" 2>&1 || true
   unset ADMIN_BASE
   [ -s "$PLAN" ] || { say "FATAL: build produced no $PLAN"; exit 1; }

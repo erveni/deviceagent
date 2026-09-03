@@ -22,6 +22,10 @@ BUILD_SERVER_PID=""
 # (caller then falls back to the deployed ADMIN endpoint — best effort, never fatal).
 start_build_server() {
   command -v node >/dev/null 2>&1 || { echo "[build-server] no node — skip"; return 1; }
+  # dist/ is gitignored, so a pulled-but-unbuilt tree serves stale route code (this is
+  # how the copilot platform whitelist silently stayed absent). Rebuild before the
+  # existence check so a missing dist is produced rather than skipped.
+  ( cd "$BUILD_SERVER_DIR" && node ./build.mjs ) >/dev/null 2>&1 || echo "[build-server] rebuild failed — using existing dist"
   [ -f "$BUILD_SERVER_DIR/dist/index.mjs" ] || { echo "[build-server] no dist — skip"; return 1; }
   # Ollama is the whole point of the fallback; if it's down, the local server offers
   # no advantage over the deployed one — skip and let the caller use the deployed API.
