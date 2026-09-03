@@ -1,6 +1,6 @@
 # device-agent
 
-Android `com.deviceagent` app (Kotlin) that automates ChatGPT / Gemini / Perplexity via AccessibilityService, exposed over HTTP on phone port 8765. Plus Python runners that orchestrate the 10-phone fleet from the Mac.
+Android `com.deviceagent` app (Kotlin) that automates ChatGPT / Gemini / Copilot via AccessibilityService, exposed over HTTP on phone port 8765. Plus Python runners that orchestrate the 10-phone fleet from the Mac.
 
 ## Commands
 
@@ -176,8 +176,14 @@ the job fails fast as `input_failed` instead of stalling for minutes.
 | v72 `0.9.53-gemini-foreground-guard` | **NEVER COMMITTED** | What 15 of 17 fleet phones ran as of 2026-08-28. `git log --all -S"versionCode = 72"` finds nothing on any branch, local or remote — the tree it was built from is gone. Only recoverable as a binary: `adb shell pm path com.deviceagent` then `adb pull` off a phone still running it. |
 | v73 `0.9.56-gemini-mic-guard` | this commit | Built from the v71 tree + the Gemini submit fix, so it does NOT contain whatever v72 added. Installed on one phone (`...W002563`) for testing, not the fleet. |
 
-`/health` reports a HARDCODED version string (`0.9.52-keepalive-fix` / 71) regardless of
-what is installed — it lies after any build bump. The only reliable check is
+| v74 `0.9.57-copilot-edge` | c4c9f35 | Copilot as an in-app platform via Edge. Also fixed `/health` reporting a hardcoded version. |
+| v75 `0.9.58-copilot-exit-guard` | 48dc401 | Names the "Copilot is currently unavailable" refused-exit screen instead of reporting a generic composer timeout. |
+| v76 `0.9.59-edge-fre-virgin` | 7eaba66 | Edge first-run walk for a VIRGIN install (a `pm clear`ed Edge shows fewer screens than a never-launched one). Deployed 17/17. |
+| v77 `0.9.60-async-session` | 68fe119 | `/session {"async":true}` + `/result` polling. Deployed 17/17. |
+`/health`'s version comes from HAND-MAINTAINED constants `APP_VERSION_NAME` /
+`APP_VERSION_CODE` in `AgentHttpServer.kt` (~line 22), not from BuildConfig. They were
+stale for years and `/health` lied after every bump; they are correct as of v77 and MUST
+be edited alongside `app/build.gradle.kts`. Cross-check with
 `adb -s <serial> shell dumpsys package com.deviceagent | grep versionCode`.
 
 ### Deploying APK to a new Mac
@@ -187,9 +193,11 @@ cd ~/projects/device-agent && git pull
 for s in $(adb devices | awk -F'\t' 'NR>1 && $2=="device" {print $1}'); do
   adb -s "$s" install -r device-agent.apk
 done
-# Then MANUALLY toggle Settings → Accessibility → DeviceAgent on each phone
-# (Android 13+ doesn't honor the shell-trick `settings put secure
-#  enabled_accessibility_services` after force-stop).
+# Prefer ./deploy_agent_fleet.sh — it installs, force-stops, then RETRIES the
+# accessibility rebind up to 5x while polling /health, and prints a list of any phone
+# that still needs a hand. A single `settings put` does fail on Android 13+; the retry
+# loop does not. It rebound 17/17 phones unattended on 2026-09-02 and 2026-09-03, so do
+# NOT plan a deploy around walking the fleet by hand.
 ```
 
 ## JobRecord shape — dual-compat (2026-05-24)
@@ -213,6 +221,44 @@ orchestrator adds that we don't read yet is harmless extra data.
 ## Catalog file lives in aeo-appium
 
 `audit_dispatch_http.py` reads `/Users/seolocalph/projects/aeo-appium/clients_audit_targets.json` for per-business audit config (`proxy.zip`, `biz_url`, city/state). See `aeo-appium/CLAUDE.md` for the entry shape + how to add a new business. Without an entry the dispatcher falls back to NY zip 10001 and the AI platform rejects the audit on geo-mismatch.
+
+## Copilot (replaced Perplexity, 2026-09-02)
+
+Perplexity is RETIRED. `build_daily_plan.py:36` is
+`PLATFORMS = ["ChatGPT", "Gemini", "Copilot"]`, and the two `FORCE_PLATFORM` pins that
+named Perplexity moved to Copilot as well.
+
+Copilot answers ONLY inside Microsoft Edge (`com.microsoft.emmx`) — copilot.microsoft.com
+in Chrome hits a hard sign-in wall with no skip. `EdgeCopilotFlow.kt` drives it and shares
+none of the Chrome helpers. Measured facts that shaped it:
+
+- Entry is the toolbar button `edge_location_bar_copilot_button`, not a URL.
+- The composer swaps MIC <-> SEND by state exactly like Gemini, so submit is gated on
+  composer-has-text or an empty composer starts a voice call.
+- The answer is VIRTUALIZED: only near-viewport nodes are in the a11y tree and the
+  viewport parks on the prompt, so a single read returns nothing. `readAnswer()` scrolls
+  and accumulates; `waitForAnswer()` keys on the streaming indicator, not on text.
+- The prompt bubble's text is a SIBLING of its `"Sent by you."` marker, not a child, so
+  answer lines are filtered against that desc — otherwise the prompt's own
+  `[RANK: 19/19]` example lands in the response.
+- Copilot honors the existing audit template, so `extractRankingFromText` needs no change.
+- Screenshots are framed by parking the PROMPT BUBBLE just off the top, not by targeting
+  the rank line — the latter clips rank #1 on long lists.
+
+Known weak spot: every job `pm clear`s Edge, forcing a 4-screen first-run walk. Under
+15-worker concurrency that failed 23 times in 80 jobs (`reset_edge failed` x12,
+`open_copilot failed` x11) for a 45% success rate, against ChatGPT 83% / Gemini 69%.
+Single-phone testing never exercised it. Fixing this means not wiping Edge every job.
+
+## Async sessions (v77)
+
+`/session` accepts `"async": true` -> 202 immediately, job runs on a worker thread, and
+`/result` returns the same JSON the blocking POST does plus a `running` flag. The Mac
+polls it (`AEO_ASYNC_SESSION=0` reverts). Measured: this did NOT move the ranking failure
+rate (65% vs 67%) — the `RemoteDisconnected` happens on the OPENING request, not from
+holding one open; only 1 of 230 jobs died while polling. Do not re-attempt this fix
+expecting a different result; the remaining cause is the phone refusing connections at
+connect time.
 
 ## See also
 
