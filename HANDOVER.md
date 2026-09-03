@@ -1,174 +1,133 @@
-# Session Handover — 2026-09-02 ~05:30 UTC (2026-09-01 21:30 PST)
+# Session Handover — 2026-09-04 ~00:20 PST
 **Project:** /Users/seolocalph/projects/device-agent
-**Branch:** feat/top3-deepdive-ranking-geo-fix — pushed to **devicefarm1** (last commit `15b6002`)
+**Branch:** feat/top3-deepdive-ranking-geo-fix — pushed to **devicefarm1** (`bbba26c`)
 
-## ⚠️ NEXT TASK — replace Perplexity with Copilot in the daily run
+## ⚠️ TWO BLOCKERS FOUND AT THE END OF THIS SESSION — START HERE
 
-**As of today, Perplexity is retired from the runs. Copilot (via Edge) replaces it.**
-Nothing has been changed for this yet — it is the first job of the new session.
+### 1. `build-session` REJECTS `copilot` — this is why no Copilot ran tonight
 
-Where the platform set is defined:
+```
+POST /api/llm/build-session {"keyword_id":47,"platform":"copilot"}
+-> HTTP 400 {"error":"platform must be one of chatgpt, gemini, perplexity"}
+```
 
-- `build_daily_plan.py:36` — `PLATFORMS = ["ChatGPT", "Gemini", "Perplexity"]`
-- Used at `:182` (`PLATFORMS[pi % 3]`), `:198` (per-keyword availability), `:201`
-  (`PLATFORMS[(len(chosen) + camp_off) % 3]`). All three assume a 3-platform rotation,
-  so swapping the name is necessary but not sufficient — the app must be able to run
-  the platform too.
-- Today's plan (`daily_plan_2026-09-01.json`) split ChatGPT 566 / Gemini 544 /
-  Perplexity 533, so a swap moves ~533 jobs/day onto Copilot.
+`build_daily_plan.py` assigned Copilot correctly — the 2026-09-03 build log line 12 reads
+`platform split: {'ChatGPT': 502, 'Gemini': 475, 'Copilot': 461}` — and then line 32:
+`WARN: dropped 461 sessions on persistent build-session failure`, all Copilot. The plan
+shipped 977 jobs instead of ~1650 and **zero Copilot ran**.
 
-**What already exists for Copilot** (proven on-device this session, see below):
-`copilot_edge_probe.py` drives Edge end-to-end — clears app, walks the 4 first-run
-screens, opens Copilot, submits a prompt, returns the answer. It is a **probe, not a
-platform**: there is no `FlowEngine` support, no dispatcher route, no rank parsing, no
-screenshot/strip, and the backlink `targetUrl` extra is untested on Copilot. Those are
-the gap between the probe and a daily-capable platform.
+Everything on OUR side is ready (app v77 on 17/17, dispatcher, ranking path). The gate is
+the AEOAdmin endpoint's platform whitelist. Two ways forward:
+
+- **Proper:** AEOAdmin adds `copilot` to the accepted list.
+- **Stopgap:** request the prompt under an accepted platform and dispatch it to Copilot.
+  The daily prompt is conversational, platform-agnostic copy ("Anyone tried X for Y near
+  Z?"), so this is very likely safe — but VERIFY the returned prompt has no
+  platform-specific wording before relying on it.
+
+### 2. DeepSeek is OUT OF BALANCE right now
+
+```
+platform=chatgpt    -> HTTP 500 "DeepSeek API error 402: Insufficient Balance"
+platform=perplexity -> HTTP 500 (same)
+```
+
+Tomorrow's 20:00 build will fail completely unless topped up. This is the known
+"build hangs at `fetching N build-session prompts`" symptom — check this BEFORE
+debugging anything else in the chain.
+
+### 3. Perplexity is NOT fully retired — `mae_plan.json`
+
+`PLATFORMS` is `["ChatGPT","Gemini","Copilot"]` (37e665a) but `mae_plan.json` is a tracked,
+PRE-BUILT file merged in after the rotation: `{ChatGPT:70, Gemini:70, Perplexity:70}`.
+Those 70 Perplexity jobs ran tonight. Edit that file to finish the retirement.
 
 ## Completed This Session
 
-### Jira worklog rewrite — all 142, complete
-- Rewrote every worklog comment on **devicefarmseolocal.atlassian.net**, project DVFRM
-  (59 issues, 2026-03-16 → 2026-08-29): **189,611 → ~269,000 chars**.
-- **Never touched `started`, `timeSpent` or author** — re-verified after every batch.
-- March + April were rebuilt a second time to preserve the user's original wording
-  **verbatim** (first pass had paraphrased them; 25/25 now verbatim).
-- Evidence sections added: commits mined across every local repo (all branches),
-  deliverables confirmed on disk with real row counts, run-log ok/err figures.
-- Transitioned **all 59 issues Done → To Do** (prior statuses saved to
-  `scratchpad/issue_status_backup.json`; resolution field cleared as a side effect).
+- **Copilot shipped as a real in-app platform** (`EdgeCopilotFlow.kt`): audit/ranking
+  flow, daily flow, and backlink clicking. Copilot answers only inside Edge —
+  copilot.microsoft.com in Chrome is a hard sign-in wall.
+- **Perplexity retired** from `build_daily_plan.py` (`PLATFORMS` + both `FORCE_PLATFORM`
+  pins) — 37e665a.
+- **Fleet: app v77 + accessibility on 17/17, Edge on 16/17.** `deploy_agent_fleet.sh`
+  tracked (d3f6d41); it rebinds accessibility unattended — the "manual toggle per phone"
+  in CLAUDE.md was WRONG and is corrected.
+- **Ranking dispatcher understands Copilot** (69fd3d2) + rank-marker gate (a44b4fa).
+- **Name-matching fix** (51eb828): a business listed WITHOUT its trailing city segment
+  was judged absent from its own #1 listing and demoted as a fabrication. Fires on ALL
+  platforms — 183 of 395 `ocr_no_answer` rows across the last 6 ranking CSVs carry a
+  comma-segment `biz_name` (138 perplexity, 45 chatgpt).
+- **Async sessions v77** (68fe119): `/session {"async":true}` + `/result` polling.
+- **Measured bandwidth analysis** written into `PROXY_COST_SPEC.md` §9 (df226fc,
+  corrected in 2d303ad).
 
-### Worklog agent — built, committed, working
-- `worklog_jira.py` — `gather` / `suggest` / `create`. Token resolves from **macOS
-  Keychain** (`jira-devicefarmseolocal`), then `.env.dev`; `SSL_CERT_FILE` set from
-  certifi internally. **No exports needed at all.**
-- `.claude/agents/worklog-agent.md` — invoke by saying "worklog for <date>, <hours>".
-- Two worklogs created with it on **DVFRM-164**: `11627` (Aug 31, 06:00) and `11628`
-  (Sunday Aug 30's work logged Monday Aug 31 08:00 via `--evidence-date`).
-- Jira displays `1d` for `8h` — the site's workday is 8h. `timeSpentSeconds=28800`.
+## Key Measurements (all at the provider meter, not modelled)
 
-### Timesheet xlsx
-- `~/Desktop/Weekly Normal Time Sheet UPDATED.xlsx` — 124 SEOLocal comments (row 20)
-  updated from Jira; hours/dates/other clients' notes untouched; original in Downloads
-  unchanged. Matching was by **text**, not position — which caught that the
-  **"Apr 20 - Apr 24 paid" tab carries the wrong dates** (header + row 12 say Apr 13-19,
-  duplicating the prior tab). Not fixed — it is a timesheet correction, not a comment one.
-- That file predates the March/April rebuild, so **16 of its cells (Apr 13-30) are one
-  version behind Jira**; May-Aug are byte-identical.
+| | |
+|---|---|
+| Daily | 1.96 MB/job, 91% success (1,702 jobs) |
+| Ranking single-pass | 16.55 MB/job (21 jobs), 16.98 MB/job (230 jobs) |
+| Copilot | **8.99 MB/job — cheapest**; ChatGPT 16.28; Gemini 24.38 |
+| Daily backlinks 2026-09-02 | **Perplexity 51%**, Gemini 33%, ChatGPT **0%** |
+| Copilot under 15-worker load | 45% success (36/80) vs ChatGPT 83%, Gemini 69% |
+| Evomi remaining | ~45.8 GB — ~14 nights of daily; stale set needs ~53 GB+, does NOT fit |
+| Decodo | REFUSING AUTH (`rejected by the SOCKS5 server (1 3)`) since 2026-09-02 |
 
-### Copilot-via-Edge — feasibility proven
-- Works **logged-out**, no sign-in wall, answers in ~10s.
-- **Geo follows the proxy**: over an Evomi tunnel targeted at Denver 80202, a prompt
-  naming no city answered "near you in Aurora, CO" with Denver addresses. A second run
-  resolved to Colorado Springs — right state, wrong metro, so **state-level geo is
-  proven, metro-level is not**.
-- Citations navigate to real pages (Chrome Custom Tab, `cityvetted.com`, containing the
-  same businesses Copilot ranked).
-- Copilot swaps its right-edge button MIC↔SEND exactly like Gemini — submit must be
-  gated on composer-has-text or it starts a voice call.
-- Demo video: `~/Desktop/copilot_edge_demo_2026-08-31.mp4` (2:02).
+## Things I Got Wrong (do not repeat)
 
-### Fleet
-- Samsung **device-101** (`R83L112EVWK`, SM-A075F) commented out of `DEVICES` in
-  `run_with_proxy.py` and `run_daily_plan.py` — reserved for Copilot work. Verified out
-  of the nightly (no forward on the 8765 range).
-- **09-01 nightly was found crippled and restarted.** It ran at 47% on only 12 phones
-  with a cross-wired forward table (one phone bound to two ports). Stopped it,
-  `adb kill-server`, restarted with `SKIP_BASE=1` — probe went 12 → **15 good phones**,
-  forward table came back clean, `remaining=1618` (the 25 done jobs were not re-run).
-  **At handover time: ok=1137 / err=29 and still running.**
-
-## Current State
-
-- 09-01 nightly **running**, healthy, ~1137/1643 done. Evomi balance **56,339 MB**.
-- Everything committed and pushed to **devicefarm1** (`15b6002`). Branch also exists on
-  `origin` from earlier in the session; tracking is now devicefarm1.
-- Nothing else in flight.
+- **Never measured 34 MB/job.** I inherited it from a 2026-08-29 note and presented it as
+  measured "with retries", then derived a "51% retry amplification" from the gap. Both
+  corrected in 2d303ad. The retry multiplier has NEVER been metered — one
+  `run_ranking_auto.sh` run with balance reads either side would settle it.
+- **The async fix did NOT reduce the ranking failure rate** (65% vs 67%). The
+  `RemoteDisconnected` happens on the OPENING request, not from holding one open — only
+  1 of 230 jobs died while polling. Don't re-attempt it expecting a different result.
+- **Changed `PLATFORMS` without verifying the backend accepts the value.** That is
+  blocker #1 above.
 
 ## Open Items
 
-1. **Replace Perplexity with Copilot in the daily** (see top of this file).
-2. **Rotate the Jira API token** — it is in the previous session's transcript in
-   plaintext. Then `security add-generic-password -a "$USER" -s jira-devicefarmseolocal
-   -w '<new>' -U` — one command, nothing else to change.
-3. `evomi_balance.py` still has the Evomi API key **hardcoded** and is therefore
-   uncommitted; `watch_nightly31.sh` depends on it.
-4. Ranking **2026-08-24 still parked** at 2,943/4,036 terminal-good. Nothing schedules it.
-5. `device_dispatch` still marks a job errored without capturing the phone's raw
-   `/status` — the Aug-29 blank-error mode remains undiagnosable if it returns.
-6. **DVFRM-69 (Apr 28)** duplicates DVFRM-66's Onboarding API text; git shows that work
-   landed Apr 19. Formatted faithfully, real Apr 28 commits appended separately.
-7. ~20 CSV worklog dates have no Jira worklog (05-24, 06-07, 07-19, 08-30, plus spans
-   like `2026-04-30-05-03`). Left alone by instruction.
-8. `run_daily_auto.sh:63` prints `[ONLY_ONLINE]: command not found` — cosmetic, the
-   `eval` still sets `DOWN`/`GOOD` correctly, but it would mask a real probe error.
-
-## Key Decisions
-
-- **Preserve the user's wording verbatim; add, never paraphrase.** The first pass on
-  March/April/May rewrote prose and *shrank* entries (week 20 by 31%). Fixed by
-  splitting the original into sentences/lines and only adding structure + evidence.
-  Every entry ends up longer than it started.
-- **Match by text, not position.** How the mis-dated April timesheet tab was caught.
-- **Only touch row 20 in the xlsx.** Rows 15-19 and 21 are other clients (WebPros/WEME)
-  plus manager notes — never candidates.
-- **Push to devicefarm1 only** — the team's remote. Branch re-pointed with `git branch -u`.
-- **Keychain over dotfiles for secrets** — a dotfile gets backed up, synced and pasted;
-  Keychain is encrypted at rest and survives reboots.
-- **Don't hand-repair forwards on a live run** — `run_rolling_plan` rebuilds them each
-  round; the fix is stop → `adb kill-server` → `SKIP_BASE=1`.
-
-## Files Modified
-
-- `worklog_jira.py` — **new.** Evidence-gathering Jira worklog tool.
-- `.claude/agents/worklog-agent.md` — **new.** The agent definition.
-- `copilot_edge_probe.py`, `_copilot_demo_record.py` — **new.** Copilot/Edge driver + recorder.
-- `run_with_proxy.py`, `run_daily_plan.py` — Samsung device-101 commented out of DEVICES.
-- `watch_nightly31.sh` — **new.** Nightly watcher (reads `daily_auto_<date>.log`).
-- `run_ranking_auto.sh`, `consolidate_ranking.py`, `device_dispatch.py`,
-  `build_daily_plan.py` — Evomi ranking branch, per-platform +14 dating, 90s Gemini cap,
-  tunable build workers (all committed this session).
-- `HANDOVER.md` — this file (previous version backed up in the session scratchpad).
-- **Not committed:** `evomi_balance.py` (hardcoded API key).
+1. Unblock Copilot in `build-session` (whitelist or stopgap) — nothing else matters until
+   this is done; Copilot cannot run in the daily at all.
+2. Top up DeepSeek or tomorrow's build fails.
+3. Remove Perplexity from `mae_plan.json`.
+4. **Copilot's Edge weak spot:** every job `pm clear`s Edge, forcing a 4-screen first-run.
+   Under concurrency that caused 23 of its 40 errors (`reset_edge` x12, `open_copilot`
+   x11). Fix = clear cookies/site data instead of a full wipe so the FRE never re-runs.
+5. Decodo: dashboard check — exhausted, suspended, or rotated again?
+6. One phone (`...S003287`) has no Edge; adb bulk transfer hangs. Needs a physical bounce.
+7. Ranking stale set: 3,287 jobs remaining, does not fit in the Evomi balance.
 
 ## Next Action
 
-> Retire Perplexity from the daily and stand Copilot up in its place. Start by reading
-> `build_daily_plan.py:36` and the three `PLATFORMS` uses at :182/:198/:201, then decide
-> whether Copilot ships as a real `FlowEngine` platform (needs Kotlin work: flow,
-> dispatcher route, rank parse for its markdown tables, screenshot/strip, backlink
-> `targetUrl`) or as an interim Mac-side path reusing `copilot_edge_probe.py`. Do not
-> flip `PLATFORMS` until the app can actually run Copilot — otherwise ~533 jobs/day fail.
+> Verify what the daily prompt looks like when requested under an accepted platform, then
+> either get `copilot` whitelisted in AEOAdmin's `/api/llm/build-session` or ship the
+> stopgap mapping. Check DeepSeek balance first — both platforms 402'd at 00:15.
 
 ---
 ## Session Opener (paste at start of next session)
 
 ```
-device-agent, continuing from the Jira worklog rewrite + Copilot feasibility session.
+device-agent, continuing the Perplexity->Copilot switchover.
 Read HANDOVER.md first.
 
-TOP PRIORITY / NEW DIRECTIVE: as of today we STOP running Perplexity in the daily and
-replace it with Copilot (via Edge). Nothing has been changed for this yet. The platform
-set lives at build_daily_plan.py:36 (PLATFORMS = ChatGPT/Gemini/Perplexity) and is used
-at :182, :198 and :201, all assuming a 3-way rotation. Today's plan was ChatGPT 566 /
-Gemini 544 / Perplexity 533, so the swap moves ~533 jobs/day onto Copilot. Do NOT flip
-PLATFORMS until the app can actually run Copilot, or those jobs just fail.
+Copilot is fully built and deployed (app v77 on 17/17 phones, Edge on 16/17, ranking
+dispatcher + backlink + rank gate all done, Perplexity retired from PLATFORMS in
+37e665a). It measured CHEAPEST per job of any platform: 8.99 MB vs ChatGPT 16.28 and
+Gemini 24.38.
 
-What exists: copilot_edge_probe.py drives Edge end-to-end and is PROVEN on-device —
-logged-out, no sign-in wall, ~10s answers, citations that navigate to real pages, and
-geo that follows an Evomi proxy at state level (Denver target answered Aurora CO once,
-Colorado Springs another time — metro precision is NOT proven). It is a probe, not a
-platform: no FlowEngine flow, no dispatcher route, no rank parsing for its markdown
-tables, no screenshot/strip, backlink targetUrl untested. Samsung device-101
-(R83L112EVWK) is already held out of the fleet for this work.
+BUT zero Copilot jobs ran on 2026-09-03. AEOAdmin's /api/llm/build-session rejects it:
+HTTP 400 "platform must be one of chatgpt, gemini, perplexity". All 461 assigned Copilot
+sessions were dropped and the night shipped 977 jobs instead of ~1650. Fix that first —
+either whitelist copilot server-side, or request the prompt under an accepted platform
+and dispatch to Copilot (the daily prompt is platform-agnostic conversational copy, but
+verify before trusting it).
 
-State: all 142 Jira worklogs rewritten and verified (dates/times never touched), all 59
-DVFRM issues moved Done -> To Do, worklog-agent built and working (say "worklog for
-<date>, <hours>"; token in macOS Keychain, no exports needed). The 09-01 nightly was
-found crippled at 47% on 12 phones from a cross-wired adb forward table, stopped, adb
-reset, restarted with SKIP_BASE=1 — now 15 phones and healthy. Everything pushed to
-devicefarm1 (15b6002).
+Also urgent: DeepSeek returned 402 Insufficient Balance at 00:15, so tomorrow's 20:00
+build will fail unless topped up. And Perplexity is not fully retired — mae_plan.json is
+a tracked pre-built file with 70 Perplexity jobs that bypasses PLATFORMS.
 
-Still open: rotate the Jira API token (it is in the old transcript in plaintext);
-evomi_balance.py has a hardcoded API key and is uncommitted; ranking 2026-08-24 is
-parked at 2,943/4,036.
+Known weak spot to fix after: Copilot pm-clears Edge every job, forcing a 4-screen
+first-run walk; under 15-worker concurrency that gave 45% success vs ChatGPT 83% /
+Gemini 69%. Fix = clear cookies instead of a full wipe.
 ```
