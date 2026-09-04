@@ -88,7 +88,9 @@ def redate_screenshot(path, day):
 
 # PLATFORMS env restricts which platforms ship (e.g. "chatgpt,perplexity" to skip
 # a platform whose data is unreliable this run). Unset = all platforms.
-_PLAT_FILTER = {p.strip().lower() for p in os.environ.get("PLATFORMS", "").split(",") if p.strip()}
+# Perplexity is retired (37e665a); the 2026-09-02 stale resume still dispatched ~105
+# Perplexity jobs before its platform default was fixed, so exclude by default.
+_PLAT_FILTER = {p.strip().lower() for p in os.environ.get("PLATFORMS", "chatgpt,gemini,copilot").split(",") if p.strip()}
 
 # INCLUDE_NORANK_LAST=1: a genuinely-unranked business (deep-dive [RANK: 0/Y]) is
 # recorded at LAST place — position Y+1 of Y+1 — instead of being dropped, so every
