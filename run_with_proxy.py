@@ -215,11 +215,25 @@ def _relay_start(listen_port, gost_port):
     return subprocess.Popen([RELAY_PY, "-u", RELAY_SCRIPT, str(listen_port), str(gost_port)],
                             stdout=open(log, "a"), stderr=subprocess.STDOUT)
 
+# Android's system resolver speaks DNS-over-TLS to the DNS server socksdroid hands it
+# (8.8.8.8:853). Evomi answers CONNECT on 853 with "501 Not Implemented" — 226 such
+# CONNECTs against 241 501s in the 2026-09-04 nightly's gost logs. Chrome never notices
+# because it resolves over DoH on :443; Edge/Copilot leans on the system resolver and
+# dies with "Network issues / Failed to send". Send the public resolvers direct from the
+# Mac; every page byte still exits via the chain. GOST_DNS_BYPASS=0 restores the old path.
+GOST_DNS_BYPASS = os.environ.get("GOST_DNS_BYPASS", "1") == "1"
+DNS_BYPASS_HOSTS = ("8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1")
+
 def gost_start(specs):
-    lines = ["services:"]
+    lines = []
+    if GOST_DNS_BYPASS:
+        lines += ["bypasses:", "  - name: dnsdirect",
+                  "    matchers: [" + ", ".join(f'"{h}"' for h in DNS_BYPASS_HOSTS) + "]"]
+    lines.append("services:")
+    byp = ", bypass: dnsdirect" if GOST_DNS_BYPASS else ""
     for i, s in enumerate(specs):
         lines += [f'  - name: s{i}', f'    addr: ":{_gost_listen_port(s["port"])}"',
-                  f'    handler: {{type: socks5, chain: c{i}, auth: {{username: anon, password: anon}}}}',
+                  f'    handler: {{type: socks5, chain: c{i}, auth: {{username: anon, password: anon}}{byp}}}',
                   f'    listener: {{type: tcp}}']
     lines.append("chains:")
     for i, s in enumerate(specs):

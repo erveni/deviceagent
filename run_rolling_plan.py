@@ -51,6 +51,13 @@ from run_with_proxy import (
 )
 
 MAX_PARALLEL = int(os.environ.get("MAX_PARALLEL", "3"))
+# Copilot fails as a function of how many Copilot sessions are open at once from the
+# same residential pool — measured 2026-09-04 on Evomi with the same phones: 1 in flight
+# ~70% success, ~5 of 15 (base wave) 28-38%, ~15 (retry round, almost all Copilot) 8%,
+# 8 simultaneous 0/7. ChatGPT/Gemini are unaffected by the same load. Cap Copilot
+# in-flight fleet-wide; Chrome jobs keep the remaining phones busy.
+COPILOT_MAX_PARALLEL = int(os.environ.get("COPILOT_MAX_PARALLEL", "4"))
+_COPILOT_SLOTS = threading.BoundedSemaphore(COPILOT_MAX_PARALLEL)
 PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")
 DURATION = int(os.environ.get("PROXY_DURATION", "60"))
 SLEEP_BETWEEN_JOBS_S = float(os.environ.get("SLEEP_BETWEEN_JOBS_S", "3"))
@@ -211,6 +218,14 @@ def main() -> None:
                 job = job_q.get(block=False)
             except queue.Empty:
                 return
+            is_copilot = (job.get("platform") or "").lower() == "copilot"
+            if is_copilot and not _COPILOT_SLOTS.acquire(blocking=False):
+                # Cap reached: hand this Copilot job back and take a non-Copilot one so
+                # the phone keeps working. If the queue is all Copilot (retry rounds),
+                # pace instead of spinning.
+                job_q.put(job)
+                time.sleep(3 if job_q.qsize() > MAX_PARALLEL else 15)
+                continue
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
             biz = (job.get("biz_name") or "")[:25]
             plat = job.get("platform") or "?"
@@ -223,6 +238,9 @@ def main() -> None:
                     flush=True,
                 )
                 row = None
+            finally:
+                if is_copilot:
+                    _COPILOT_SLOTS.release()
             done_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
             with count_lock:
                 done = ok_count + err_count + 1
