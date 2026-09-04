@@ -30,6 +30,21 @@ class EdgeCopilotFlow(
             "Message Copilot", "Show all", "Smart", "Quick response", "Think Deeper"
         )
 
+        private const val OVERFLOW_BUTTON_ID = "overflow_button_bottom"
+        private const val CLEAR_BUTTON_ID = "clear_button"
+        private const val INPRIVATE_BUTTON_ID = "edge_incognito_button"
+        private const val SIGN_IN_SWIPE_ATTEMPTS = 4
+
+        /** Whatever Edge currently shows in the time-range spinner, so it can be opened. */
+        private val TIME_RANGE_LABELS = listOf(
+            "Last hour", "Last 15 minutes", "Last 24 hours", "Last 7 days", "Last 4 weeks", "All time"
+        )
+
+        /** Rows to tick before deleting. Passwords/autofill are left alone. */
+        private val CLEAR_TARGET_LABELS = listOf(
+            "Browsing history", "Cookies and site data", "Cached images and files"
+        )
+
         private const val FRE_TIMEOUT_MS = 180_000L
 
         /**
@@ -57,12 +72,64 @@ class EdgeCopilotFlow(
     // ── reset ──
 
     /**
-     * Wipe Edge to first-run, relaunch it and walk the FRE until Copilot is reachable.
-     * The wipe is what keeps every job logged out and cookie-free, the same reason the
-     * Chrome flows use a full clear rather than "Delete browsing data".
+     * Drop the previous job's session state and leave Edge on the Copilot surface.
+     *
+     * Prefers Edge's own "Delete browsing data" over a Settings storage wipe. Both end
+     * up logged out and cookie-free, but the wipe also resets Edge to FIRST RUN, and the
+     * FRE walk is what actually breaks under load: 23 of 80 jobs failed at 15-worker
+     * concurrency (reset_edge x12, open_copilot x11) for a 45% success rate against
+     * ChatGPT's 83%. Chrome's [FlowEngine.resetChrome] defaults to the same in-app
+     * delete for the same reason — the full clear is fragile behind a residential proxy.
+     *
+     * The wipe stays as the fallback: on a phone whose Edge has never been through the
+     * FRE there is no menu to drive, and only the wipe-then-walk path can get there.
      */
     fun reset(): Boolean {
         s.log("── RESET EDGE ──")
+        launch()
+        leaveInPrivate()
+        if (clearBrowsingData()) {
+            // The clear leaves us deep in Settings; get back to the browser so the
+            // Copilot button is reachable.
+            launch()
+            if (copilotButton()?.also { it.recycle() } != null) {
+                s.log("[edge] light reset done (no FRE)")
+                return true
+            }
+            s.log("[edge] light reset left no Copilot button — falling back to full wipe")
+        }
+        return fullWipeReset()
+    }
+
+    /**
+     * Leave InPrivate if a previous job (or an operator) left a private tab in front.
+     *
+     * InPrivate swaps the toolbar's Copilot button for [INPRIVATE_BUTTON_ID], so Copilot
+     * is simply unreachable there — and neither the light clear nor the FRE walk exits
+     * the mode on its own, so a stuck private tab burns the full 180s FRE timeout and
+     * reports "reset_edge failed" with nothing actually wrong.
+     */
+    private fun leaveInPrivate() {
+        val marker = s.findNode(resourceId = INPRIVATE_BUTTON_ID, timeoutMs = 800)
+            ?: s.findNode(text = "Browse InPrivate", timeoutMs = 500)
+            ?: return
+        marker.recycle()
+        s.log("[edge] InPrivate tab in front — leaving it")
+        val exit = s.findNode(resourceId = "exit_inprivate_button", timeoutMs = 1500)
+            ?: s.findNode(text = "Exit InPrivate mode", timeoutMs = 1000)
+        if (exit != null) {
+            clickSelfOrParent(exit); exit.recycle(); Thread.sleep(2500)
+        } else {
+            s.log("[edge] no exit-InPrivate button — relaunching Edge instead")
+            s.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            Thread.sleep(800)
+            launch()
+        }
+    }
+
+    /** Settings-storage wipe + FRE walk. Slow and load-fragile; fallback only. */
+    private fun fullWipeReset(): Boolean {
+        s.log("── RESET EDGE (full wipe) ──")
         val cleared = try {
             flow.clearChromeData(PKG)
         } catch (e: Exception) {
@@ -71,6 +138,112 @@ class EdgeCopilotFlow(
         s.log("[edge] clearData -> $cleared")
         launch()
         return dismissFre()
+    }
+
+    /**
+     * Browser menu -> Settings -> Privacy and security -> Clear browsing data, tick
+     * history + cookies + cache over "All time", then "Delete data".
+     *
+     * Selectors verified on a real device (Edge on Samsung SM-A075F, 2026-09-04). Ids are
+     * used where Edge provides stable ones ([OVERFLOW_BUTTON_ID], [CLEAR_BUTTON_ID]) and
+     * label text elsewhere; every step returns false rather than guessing, so a layout
+     * change degrades to the full wipe instead of silently skipping the clear.
+     */
+    private fun clearBrowsingData(): Boolean {
+        s.log("── EDGE CLEAR BROWSING DATA ──")
+        val menu = s.findNode(resourceId = OVERFLOW_BUTTON_ID, timeoutMs = 6000)
+            ?: s.findNode(contentDesc = "Browser menu", timeoutMs = 1500)
+            ?: run { s.log("[edge] browser menu not found"); return false }
+        s.clickNode(menu); menu.recycle()
+        Thread.sleep(1500)
+
+        val settings = s.findNode(contentDesc = "Settings", timeoutMs = 4000)
+            ?: s.findNode(text = "Settings", timeoutMs = 1500)
+            ?: run { s.log("[edge] Settings entry not found"); return false }
+        s.clickNode(settings); settings.recycle()
+        Thread.sleep(2500)
+
+        val privacy = s.findNode(text = "Privacy and security", timeoutMs = 5000)
+            ?: s.findNode(text = "Privacy, search, and services", timeoutMs = 1500)
+            ?: run { s.log("[edge] Privacy entry not found"); return false }
+        clickSelfOrParent(privacy)
+        Thread.sleep(2000)
+
+        val entry = s.findNode(text = "Clear browsing data", timeoutMs = 5000)
+            ?: s.findNode(text = "Delete browsing data", timeoutMs = 1500)
+            ?: run { s.log("[edge] Clear browsing data entry not found"); return false }
+        clickSelfOrParent(entry)
+        Thread.sleep(2500)
+
+        selectAllTimeRange()
+        tickClearTargets()
+
+        val go = s.findNode(resourceId = CLEAR_BUTTON_ID, timeoutMs = 4000)
+            ?: s.findNode(text = "Delete data", timeoutMs = 1500)
+            ?: s.findNode(text = "Clear data", timeoutMs = 1000)
+            ?: run { s.log("[edge] Delete data button not found"); return false }
+        clickSelfOrParent(go)
+        Thread.sleep(3000)
+        // Edge asks again when history is included on a signed-in profile.
+        s.findNode(text = "Clear", timeoutMs = 1200)?.let { clickSelfOrParent(it); Thread.sleep(1500) }
+        s.log("[edge] browsing data cleared")
+        return true
+    }
+
+    /** Default range is "Last hour", which would leave older cookies in place. */
+    private fun selectAllTimeRange() {
+        val spinner = TIME_RANGE_LABELS.firstNotNullOfOrNull { s.findNode(text = it, timeoutMs = 800) }
+        if (spinner == null) { s.log("[edge] time range spinner not found — leaving default"); return }
+        clickSelfOrParent(spinner)
+        Thread.sleep(1200)
+        val allTime = s.findNode(text = "All time", timeoutMs = 3000)
+        if (allTime == null) { s.log("[edge] 'All time' not offered"); return }
+        clickSelfOrParent(allTime)
+        Thread.sleep(1000)
+    }
+
+    /**
+     * Tick history, cookies and cache if they are not already ticked. Edge remembers the
+     * previous selection, so blind tapping would UNTICK them on the second job.
+     */
+    private fun tickClearTargets() {
+        for (label in CLEAR_TARGET_LABELS) {
+            val row = s.findNode(text = label, timeoutMs = 1500) ?: continue
+            val box = checkboxFor(row)
+            if (box == null) { row.recycle(); s.log("[edge] no checkbox for '$label'"); continue }
+            if (!box.isChecked) { s.clickNode(box); Thread.sleep(500) }
+            box.recycle(); row.recycle()
+        }
+    }
+
+    /** Walk up to the row container, then down to its checkbox. */
+    private fun checkboxFor(row: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var container: AccessibilityNodeInfo? = row.parent
+        repeat(3) {
+            val c = container ?: return null
+            findCheckbox(c)?.let { return it }
+            container = c.parent
+        }
+        return null
+    }
+
+    private fun findCheckbox(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.className?.toString()?.contains("CheckBox") == true) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findCheckbox(child)?.let { return it }
+        }
+        return null
+    }
+
+    private fun clickSelfOrParent(node: AccessibilityNodeInfo) {
+        var n: AccessibilityNodeInfo? = node
+        repeat(5) {
+            val cur = n ?: return
+            if (cur.isClickable) { s.clickNode(cur); return }
+            n = cur.parent
+        }
+        s.clickNode(node)
     }
 
     private fun launch() {
@@ -177,7 +350,19 @@ class EdgeCopilotFlow(
         val btn = copilotButton() ?: run { s.log("[edge] Copilot button not found"); return false }
         s.clickNode(btn); btn.recycle()
         Thread.sleep(7000)
-        val box = composer(timeoutMs = 10_000)
+        // Swiping the sign-in sheet away also closes the Copilot panel underneath, so
+        // Copilot has to be opened a second time once the sheet is gone.
+        if (dismissSignInSheet()) {
+            val again = copilotButton()
+            if (again == null) {
+                s.log("[edge] Copilot button gone after dismissing the sign-in sheet")
+                return false
+            }
+            s.clickNode(again); again.recycle()
+            Thread.sleep(7000)
+            dismissSignInSheet()
+        }
+        val box = if (copilotSurfaceUp()) composer(timeoutMs = 10_000) else null
         if (box != null) { box.recycle(); return true }
         // Copilot refuses some exit IPs outright ("Sorry about that / Copilot is
         // currently unavailable") and renders no composer. Measured on a Decodo session
@@ -193,6 +378,61 @@ class EdgeCopilotFlow(
         s.log("[edge] Copilot composer never appeared")
         return false
     }
+
+    /**
+     * Copilot greets a cookie-free profile with a "Sign in for the full experience"
+     * bottom sheet whose only button is "Continue with Microsoft" — no skip, and BACK
+     * does not close it. It renders OVER the composer, so the job would otherwise die as
+     * "composer never appeared" with Copilot itself perfectly healthy.
+     *
+     * The sheet is drag-dismissible: swiping it toward the bottom of the screen sends it
+     * away. Measured on a real device, it takes two swipes — the first only drags the
+     * card partway down — so swipe until the sheet is gone rather than a fixed count.
+     */
+    private fun dismissSignInSheet(): Boolean {
+        var acted = false
+        repeat(SIGN_IN_SWIPE_ATTEMPTS) { attempt ->
+            val sheet = signInSheet() ?: return acted
+            sheet.recycle()
+            if (attempt == 0) s.log("[edge] Copilot sign-in sheet up — swiping it away")
+            acted = true
+            val h = screenHeight()
+            s.gestureSwipe(0.5f * screenWidth(), 0.40f * h, 0.5f * screenWidth(), 0.99f * h, 350)
+            Thread.sleep(1200)
+        }
+        signInSheet()?.let {
+            it.recycle()
+            s.log("[edge] sign-in sheet still up after $SIGN_IN_SWIPE_ATTEMPTS swipes")
+        }
+        return acted
+    }
+
+    private fun signInSheet(): AccessibilityNodeInfo? =
+        s.findNode(text = "Sign in for the full experience", timeoutMs = 800)
+            ?: s.findNode(text = "Continue with Microsoft", timeoutMs = 400)
+
+    /**
+     * True only when Copilot's own surface is in front.
+     *
+     * [AgentAccessibilityService.findInputField] returns the first EditText it can see,
+     * and when Copilot is NOT open that is Edge's ADDRESS BAR. A job that trusted it
+     * typed a client's prompt into the URL bar, reported "input" OK and then died at
+     * submit looking for a Send button that was never there. Gate on Copilot's own
+     * composer hint before accepting any input field.
+     */
+    private fun copilotSurfaceUp(): Boolean {
+        val marker = s.findNode(text = "Message Copilot", timeoutMs = 4000)
+            ?: s.findNode(contentDesc = "Message Copilot", timeoutMs = 1000)
+        if (marker == null) {
+            s.log("[edge] Copilot surface not up (would have grabbed Edge's address bar)")
+            return false
+        }
+        marker.recycle()
+        return true
+    }
+
+    private fun screenWidth(): Float = s.resources.displayMetrics.widthPixels.toFloat()
+    private fun screenHeight(): Float = s.resources.displayMetrics.heightPixels.toFloat()
 
     // ── prompt ──
 

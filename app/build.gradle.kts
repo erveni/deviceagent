@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 77
-        versionName = "0.9.60-async-session"
+        versionCode = 78
+        versionName = "0.9.61-edge-light-reset"
     }
 
     buildTypes {
