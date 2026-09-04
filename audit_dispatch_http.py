@@ -1465,6 +1465,17 @@ def dispatch_audit_job(
                 _adb(serial, "shell", "pm", "clear", "com.android.chrome", timeout=30)
             except Exception as e:
                 print(f"  [chrome-clear] {serial}: {type(e).__name__} {e} — continuing")
+        # Same for Edge on Copilot jobs. The daily gets this in device_dispatch._run_session;
+        # the ranking path never did (a617830 missed it). Without it the app's in-app reset
+        # leaves the Microsoft sign-in sheet behind on some phones: 104/113/119/123 went
+        # 0/20 on the 2026-09-05 ranking with the sheet up every time, while the daily ran
+        # the same phones at 95%.
+        if platform.lower() == "copilot" and os.environ.get("COPILOT_PM_CLEAR", "1") == "1":
+            for cmd in (("pm", "clear", "com.microsoft.emmx"), ("am", "force-stop", "com.microsoft.emmx")):
+                try:
+                    _adb(serial, "shell", *cmd, timeout=60)
+                except Exception as e:
+                    print(f"  [edge-clear] {serial}: {type(e).__name__} {e} — continuing")
         return _post_audit(http_port, body)
 
     try:
