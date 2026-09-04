@@ -230,10 +230,9 @@ def gost_start(specs):
         lines += ["bypasses:", "  - name: dnsdirect",
                   "    matchers: [" + ", ".join(f'"{h}"' for h in DNS_BYPASS_HOSTS) + "]"]
     lines.append("services:")
-    byp = ", bypass: dnsdirect" if GOST_DNS_BYPASS else ""
     for i, s in enumerate(specs):
         lines += [f'  - name: s{i}', f'    addr: ":{_gost_listen_port(s["port"])}"',
-                  f'    handler: {{type: socks5, chain: c{i}, auth: {{username: anon, password: anon}}{byp}}}',
+                  f'    handler: {{type: socks5, chain: c{i}, auth: {{username: anon, password: anon}}}}',
                   f'    listener: {{type: tcp}}']
     lines.append("chains:")
     for i, s in enumerate(specs):
@@ -247,8 +246,13 @@ def gost_start(specs):
             ctype = "http"; upw = f"{PROXY_PASS}_country-US_session-{s['sid']}"
         else:
             ctype = "socks5"; upw = PROXY_PASS
+        # gost v3: a bypass on the chain NODE skips that node for matched targets, i.e.
+        # they dial direct. On the handler it merely loads and never matches (measured:
+        # "load items 4" x14, zero matches, 255 x 501 in two minutes).
+        node_byp = [f'            bypass: dnsdirect'] if GOST_DNS_BYPASS else []
         lines += [f'  - name: c{i}', f'    hops:', f'      - name: h{i}', f'        nodes:',
                   f'          - name: d{i}', f'            addr: {PROXY_HOST}:{PROXY_PORT}',
+                  *node_byp,
                   f'            connector: {{type: {ctype}, auth: {{username: "{s["upstream_user"]}", password: "{upw}"}}}}',
                   f'            dialer: {{type: tcp}}']
     cfg = f"/tmp/gost_{os.getpid()}_{specs[0]['port']}.yaml"
