@@ -1,11 +1,14 @@
-# Session Handover — 2026-09-04 ~14:50 PST
+# Session Handover — 2026-09-04 19:20 PST
 **Project:** /Users/seolocalph/projects/device-agent
 **Branch:** feat/top3-deepdive-ranking-geo-fix — pushed to **devicefarm1** (`8cd47f0`)
 
-## Result: Copilot 28% -> 98%, matching ChatGPT/Gemini
+## Result: Copilot 28% -> 90-98%, at parity with ChatGPT/Gemini
 
-Post-fix window (from 14:08): **Copilot 61/62**, ChatGPT 84/90, Gemini 91/91.
-Thirteen of fourteen phones 100% on Copilot. Two Mac-side changes, no APK deployed:
+Run finished 19:16 **ALL SUCCESS 100%** (461/461 Copilot, 572/572 ChatGPT, 545/545
+Gemini unique jobs), consolidated to `~/Desktop/Daily/sep04_daily_ALL_SUCCESS_consolidated.csv`.
+Post-fix window 14:08-19:16, every attempt incl. retries: **Copilot 441/489 = 90%**,
+ChatGPT 490/587 = 83%, Gemini 498/565 = 88%. Best 60-row stretch: Copilot 61/62 = 98%,
+thirteen of fourteen phones at 100%. Two Mac-side changes, no APK deployed:
 
 | lever | env | effect |
 |---|---|---|
