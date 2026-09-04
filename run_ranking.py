@@ -43,7 +43,7 @@ EXCLUDED_BIZ_NAMES = {
     "Smith's Enterprise",
 }
 PLATFORMS = tuple(
-    p.strip() for p in os.environ.get("PLATFORMS", "chatgpt,gemini,perplexity").split(",") if p.strip()
+    p.strip() for p in os.environ.get("PLATFORMS", "chatgpt,gemini,copilot").split(",") if p.strip()
 )
 CSV_PATH = os.environ.get(
     "AUDIT_CSV",
