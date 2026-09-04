@@ -254,44 +254,51 @@ none of the Chrome helpers. Measured facts that shaped it:
 - Screenshots are framed by parking the PROMPT BUBBLE just off the top, not by targeting
   the rank line — the latter clips rank #1 on long lists.
 
-### `open_copilot failed` is a PROXY failure, not an Edge one (measured 2026-09-04)
+### Copilot: cap it at 4 in flight and pm-clear Edge from the Mac (measured 2026-09-04)
 
-It reads like an app bug and was treated as one for a whole session. It is not. Copilot
-REFUSES some exit IPs; Edge then renders "Network issues" plus a "Sign in for the full
-experience / Continue with Microsoft" sheet where the composer belongs, and the job dies
-with no answer. The sheet is the SYMPTOM of a refused exit, not a sign-in gate — chasing
-it as a gate is a dead end (BACK, `touch_outside` and swipes all fail to clear it, and
-swiping closes Copilot itself).
+Copilot went from 28% to **95%** (19/20; ChatGPT 31/31, Gemini 31/31 in the same
+window) with two Mac-side changes and no APK. Both live in `run_rolling_plan.py`:
 
-Same phones, minutes apart, on the 2026-09-04 nightly:
+- `COPILOT_MAX_PARALLEL=4` — Copilot's rate tracks how many Copilot sessions are open
+  at once from the same residential pool: ~70% one at a time, 28-38% at ~5 of 15
+  (base wave), 8% at ~15 (retry rounds, almost all Copilot), 0/7 at 8 simultaneous.
+  ChatGPT/Gemini are unaffected by the same load. A worker that cannot get a slot hands
+  the Copilot job back and takes a Chrome job, so phones never idle.
+- `COPILOT_PM_CLEAR=1` — the app resets Edge by driving Android's Settings UI; that
+  logs `clearData -> true` and sometimes does not take (device-113 sat on the previous
+  job's conversation and timed out walking a first-run that never came, 0/4). `adb
+  shell pm clear com.microsoft.emmx` from the Mac before each Copilot dispatch cured it
+  (113 -> 4/4, 120 2/6 -> 3/3). The phone log then shows a real first-run walk
+  (`FRE: tapped 'Not now'` x2, `'Confirm'`).
 
-| phone | on the nightly's exit | on a fresh proxy session |
+Dead ends, each stated confidently that day and each wrong — do not re-chase:
+
+| theory | why it looked right | what killed it |
 |---|---|---|
-| device-113 | **0/23** | answered first try, 344 chars |
-| device-116 | 7/28 | 982 chars |
-| device-110 | unproxied -> "composer never appeared" | 277 chars |
+| Microsoft sign-in wall | every manual test showed the sheet | all were unproxied or on a dead tunnel; hundreds of jobs succeeded |
+| rotate the proxy exit | 3 hand-picked fresh sessions succeeded | 144 rotations in the retry round, 138 still failed |
+| "it's the phone" | a 2x2 matrix tracked the phone | conflated `reset_edge` (stuck FRE) with `open_copilot` |
+| Microsoft blocks the pool | ChatGPT fine, Copilot not | the same phones ran ~70% Copilot one at a time |
+| DNS bypass (Evomi 501s on 8.8.8.8:853) | 241 real 501s in the nightly's logs | dialing DoT direct from a GMT+8 Mac resolved names for Asia: Google :443 targets moved to 172.217.26.x/142.250.207.x and Copilot fell 8/9 -> 1/6. `GOST_DNS_BYPASS` defaults OFF; the 501s are a wasted round trip, not the cause. |
 
-That was 62 of Copilot's 78 errors that night. It also explains the two things a
-Microsoft-side gate never could: the decay from 44% to 33% as exits get reused, and wildly
-different per-phone rates on IDENTICAL Edge builds (device-110 32/32 while device-113 was
-0/23).
+`"open_copilot failed"` stays in `RETRY_TRIGGERS` as a cheap second attempt; it is not
+the fix.
 
-Fix: `"open_copilot failed"` is in `RETRY_TRIGGERS` (`device_dispatch.py`), so the existing
-rotate-the-session retry fires. `reset_edge failed` is deliberately NOT a trigger — that
-one was a phone with no Edge installed, which a new exit cannot fix.
+Diagnosis traps that manufactured false results that day:
 
-Do NOT diagnose Copilot from an unproxied phone. Every manual test on office wifi
-reproduces the sign-in sheet and proves nothing; that false lead cost most of a session.
-
-Also do not trust `uiautomator dump` during a live job — UiAutomator contends with the
-AccessibilityService the agent drives and makes healthy phones fail. A 15-phone probe that
-sampled the screen mid-job reported ALL phones broken including one that was 32/32
-minutes earlier. Read `/sdcard/Android/data/com.deviceagent/files/logs/agent.log` AFTER
-the job instead.
-
-Known weak spot (still true, lower priority): every job `pm clear`s Edge, forcing a
-4-screen first-run walk. That shows up as `reset_edge failed`, which was a minor error
-class once the missing-Edge phone was fixed.
+- **Test through the same provider as the run.** `PROXY_PROVIDER=evomi` only changes
+  the credential format; `PROXY_HOST` stays `gate.decodo.com` from `.env.dev`. Half a
+  day of "Evomi" tests ran on Decodo. Source `run_daily_auto.sh`'s evomi block.
+- **Never `uiautomator dump` mid-job** — it contends with the AccessibilityService. A
+  15-phone probe that sampled screens during jobs reported ALL phones broken, including
+  one that was 32/32 minutes earlier. Dump only after the job returns, or read
+  `/sdcard/Android/data/com.deviceagent/files/logs/agent.log`.
+- **Do not bring up many test sessions at once.** 8 tunnels in 24s drew 129 x `407` from
+  Evomi; the rolling nightly never sees a 407.
+- **Verify a gost bypass by the absence of an upstream `connect` record**, not by
+  grepping the word "bypass" (that is the load line) or by a 302 (Evomi allows :443).
+  A bypass belongs on the chain NODE; on the handler it loads and never matches.
+- The nightly runs `USE_SNI_RELAY=0`; changes to `sni_relay.py` do not touch it.
 
 ## Daily plan build: DeepSeek 402 is already handled by Ollama (2026-09-04)
 
@@ -345,6 +352,8 @@ line. `PROXY_HOST` has the same problem — it stays `gate.decodo.com` regardles
   `reset_edge failed` (0/15). Fixed by sideloading `~/apks/edge_151.0.4129.101.apk`;
   it went 4/5 within a minute. That phone is the one the earlier handover flagged as
   "adb bulk transfer hangs".
+- **device-113 / device-120** — Copilot 0/4 and 2/6 from an Edge that the in-app wipe
+  never actually cleared; `pm clear` fixed both on the spot and is now done per job.
 - The other 8 entries in `DEVICES` have been dark for at least two nights — stale roster
   entries, not a regression. The plan is sized to the phones that answer.
 
