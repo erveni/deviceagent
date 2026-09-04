@@ -20,7 +20,7 @@ Env vars:
 from __future__ import annotations
 
 import json
-import os
+import os, subprocess
 import queue
 import re
 import sys
@@ -57,6 +57,7 @@ MAX_PARALLEL = int(os.environ.get("MAX_PARALLEL", "3"))
 # 8 simultaneous 0/7. ChatGPT/Gemini are unaffected by the same load. Cap Copilot
 # in-flight fleet-wide; Chrome jobs keep the remaining phones busy.
 COPILOT_MAX_PARALLEL = int(os.environ.get("COPILOT_MAX_PARALLEL", "4"))
+COPILOT_PM_CLEAR = os.environ.get("COPILOT_PM_CLEAR", "1") == "1"
 _COPILOT_SLOTS = threading.BoundedSemaphore(COPILOT_MAX_PARALLEL)
 PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")
 DURATION = int(os.environ.get("PROXY_DURATION", "60"))
@@ -112,6 +113,16 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
         return row
 
     device_id, serial = DEVICES[device_idx]
+    if COPILOT_PM_CLEAR and (job.get("platform") or "").lower() == "copilot":
+        # The app resets Edge by driving Android's Settings UI. That reports success
+        # and sometimes does not take: device-113 sat on the PREVIOUS job's Copilot
+        # conversation with "clearData -> true" in its log, then timed out walking a
+        # first-run that never came (0/4 on 2026-09-04). `pm clear` from the Mac is
+        # one command, cannot get lost in a Settings screen, and fixed device-110 the
+        # same day. The app's own wipe still runs after this; it just finds nothing.
+        for cmd in ("pm clear com.microsoft.emmx", "am force-stop com.microsoft.emmx"):
+            subprocess.run(["adb", "-s", serial, "shell", *cmd.split()],
+                           capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
     sid = rsid()
     spec = _build_spec(device_idx, sid)
     gost_proc = None
