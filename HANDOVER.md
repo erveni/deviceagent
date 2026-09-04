@@ -1,57 +1,77 @@
-# Session Handover — 2026-09-04 19:20 PST
+# Session Handover — 2026-09-04 23:10 PST
 **Project:** /Users/seolocalph/projects/device-agent
-**Branch:** feat/top3-deepdive-ranking-geo-fix — pushed to **devicefarm1** (`8cd47f0`)
+**Branch:** feat/top3-deepdive-ranking-geo-fix — pushed to **devicefarm1** (`2d87ead`)
 
-## Result: Copilot 28% -> 90-98%, at parity with ChatGPT/Gemini
+## RUNNING RIGHT NOW — the 2026-09-02 stale ranking set, on Evomi
 
-Run finished 19:16 **ALL SUCCESS 100%** (461/461 Copilot, 572/572 ChatGPT, 545/545
-Gemini unique jobs), consolidated to `~/Desktop/Daily/sep04_daily_ALL_SUCCESS_consolidated.csv`.
-Post-fix window 14:08-19:16, every attempt incl. retries: **Copilot 441/489 = 90%**,
-ChatGPT 490/587 = 83%, Gemini 498/565 = 88%. Best 60-row stretch: Copilot 61/62 = 98%,
-thirteen of fourteen phones at 100%. Two Mac-side changes, no APK deployed:
+Launched 23:00:24 PST, `PLATFORMS=chatgpt,gemini,copilot PROXY_PROVIDER=evomi SKIP_BASE=1
+WORKERS_CAP=15 ./run_ranking_auto.sh 2026-09-02 stale`. 14 workers (probe: 16 online,
+device-102 DOWN by design, device-119 offline). Copilot capped at 4 in flight, Edge
+pm-cleared from the Mac per Copilot job (both ported into the ranking path today).
 
-| lever | env | effect |
-|---|---|---|
-| Copilot in-flight cap | `COPILOT_MAX_PARALLEL=4` (`run_rolling_plan.py`) | 28% -> 52% alone. Rate tracks concurrent Copilot sessions from the pool: ~70% at 1, 28-38% at ~5, 8% at ~15, 0/7 at 8. Chrome platforms unaffected. |
-| `pm clear` Edge from the Mac before each Copilot job | `COPILOT_PM_CLEAR=1` | 52% -> 98%. The app's Settings-UI wipe logs `clearData -> true` and sometimes leaves the previous conversation on screen (device-113 0/4, device-120 2/6 -> both 100%). |
+- Progress: **434 of ~3531** (1177 keywords x 3 platforms) distinct successful pairs.
+  ~3100 remain; at 14 phones expect ~8-10 h, i.e. into tomorrow morning.
+- Log: `/private/tmp/ranking_auto_2026-09-02.log`. Results: `rabbitmq_audit_results_2026-09-02_ranking_*.csv`
+  (timestamps are UTC with a SPACE: `2026-09-04 14:53:18` — a `T` in a compare matches nothing).
+- Resume if it dies: same command. It re-runs only not-yet-good pairs.
+- **Tomorrow 20:00** the daily LaunchAgent fires for 2026-09-05 and will contend for the
+  fleet with a still-running ranking (fleet-lock waits 2 h then forces). Finish or stop
+  the ranking before then.
+- Consolidate when done: `consolidate_ranking.py` (USE_14DAY rules in memory). It now
+  drops Perplexity by default — today's 20:47-23:00 run dispatched ~105 Perplexity jobs
+  before `run_ranking.py`'s stale default was fixed (`64c30fa`); those rows are junk.
 
-Kept OFF: `GOST_DNS_BYPASS` (default 0). Evomi refuses DoT `8.8.8.8:853` with 501 (241 in
-the nightly's logs) but dialing DNS direct from this GMT+8 Mac geo-shifts resolution to
-APAC edges and dropped Copilot 8/9 -> 1/6. The 501s are a wasted round trip, not a cause.
+## Completed this session
+- **Copilot 28% -> 90-98%** on the daily, at parity with ChatGPT/Gemini: `COPILOT_MAX_PARALLEL=4`
+  + Mac-side `pm clear com.microsoft.emmx` per Copilot job (`run_rolling_plan.py`,
+  `device_dispatch._run_session`, `run_ranking.py`). DNS bypass defaulted OFF (geo-shifts
+  resolution to this GMT+8 Mac). Full story + five dead ends in CLAUDE.md "Copilot: cap it at 4".
+- 2026-09-04 daily: 100% complete, consolidated (`sep04_daily_ALL_SUCCESS_consolidated.csv`, 1438/1438).
+- 2026-09-03 deliverable recovered (`sep03_…`, 977/977) — its wrapper had died before consolidating.
+- `copilot` whitelisted in AEOAdmin build-session (`95d16f9`, origin). Ollama build path hardened.
+- Perplexity fully retired: `mae_plan.json` 70 -> Copilot, `run_ranking.py` default,
+  `consolidate_ranking.py` default.
+- device-122 got Edge; device-113/120 recovered by `pm clear`.
+- v78 APK source committed (`6ca6853`) — NOT deployed; its reset path is moot now.
 
-## Also fixed today
-- `copilot` accepted by AEOAdmin `/api/llm/build-session` (`95d16f9`, pushed to origin).
-  Last night's build dropped all 461 Copilot sessions on a 400; tonight's carried them.
-- DeepSeek 402 was never a build blocker: the local Ollama fallback already carried
-  2026-09-03. Local build server now rebuilds `dist/` (it is gitignored and served stale
-  route code); `BUILD_TIMEOUT_S` 60 -> 180.
-- device-122 had no Edge (0/15): sideloaded `~/apks/edge_151.0.4129.101.apk`.
-- 2026-09-03's deliverable was never consolidated (wrapper died after `ALL SUCCESS`):
-  wrote `~/Desktop/Daily/sep03_daily_ALL_SUCCESS_consolidated.csv`, 977/977.
+## Open items
+1. **Watch the ranking run**, then consolidate. Check `pgrep -f '[r]un_ranking.py'` and
+   the log; do not `pkill -f run_ranking` from a shell whose own command line contains
+   that string (it killed the calling shell twice today — use `[r]un_ranking`).
+2. **Evomi balance unknown** — no `EVOMI_API_KEY` on this Mac. Ranking ~17 MB/job x
+   ~3100 ≈ 53 GB against ~40 GB estimated remaining. Balance-out shows as a wave of
+   `input failed`. Get the key or the dashboard number.
+3. `probe_phones.py` missed device-104 once (mDNS `(2)` name) — 1 phone, low priority.
+4. device-102: dead AccessibilityService, needs hands. 8 stale `DEVICES` entries.
+5. `.env.dev` `PROXY_PROVIDER`/`PROXY_HOST` are dead values; provider truth is
+   `run_daily_auto.sh` / `run_ranking_auto.sh` blocks + the LaunchAgent plist.
 
-## Things I got wrong (each stated confidently; see CLAUDE.md Copilot table)
-Sign-in wall -> exit rotation -> "the phone" -> Microsoft blocks the pool -> DNS bypass.
-Every one came from a small or contaminated sample: unproxied phones, `uiautomator dump`
-mid-job, tests silently on Decodo (`PROXY_HOST` from `.env.dev`), 8-tunnel bursts (407s
-the nightly never sees), verifying a gost bypass by grepping the word. My own first
-resume ran on dead DataImpulse because `PROXY_PROVIDER=evomi` lives only in the
-LaunchAgent plist — caught at 0 rows.
+## Key decisions
+- Copilot is fixed by pacing + a real Edge wipe, not by exits/sign-in/DNS — measured.
+- Ranking `WORKERS_CAP` raised 6 -> 15 (the 6 was a Rayobyte-era limit; Evomi carried 15 all day).
+- Mae's Perplexity jobs relabelled Copilot (not deleted) — Copilot replaced Perplexity.
 
-## Open
-1. **v78 APK** `0.9.61-edge-light-reset` — built, tested on the Samsung, UNCOMMITTED, not
-   deployed. Its reset path is moot now (pm clear); it still carries two useful guards
-   (InPrivate exit; refuses to type a prompt into Edge's URL bar). Low priority.
-2. `mae_plan.json` still ships 70 Perplexity jobs. `.env.dev` `PROXY_HOST`/`PROXY_PROVIDER`
-   are dead values; `run_daily_auto.sh`'s provider blocks are the truth.
-3. device-102: dead AccessibilityService, needs hands. 8 stale `DEVICES` entries.
-4. `sni_relay.py` :853 change (`09e5f85`) is inert for the nightly (`USE_SNI_RELAY=0`).
-5. Tonight's 20:00 LaunchAgent: this run writes `ALL DONE` on completion, so it will skip.
+## Next action
+> Check the ranking run is alive and how far it is; if finished, consolidate with
+> `consolidate_ranking.py`; if still running at ~18:00, decide whether to stop it before
+> the 20:00 daily.
 
-## Session opener
+---
+## Session Opener (paste at start of next session)
+
 ```
-device-agent. Read HANDOVER.md + CLAUDE.md "Copilot: cap it at 4". Copilot is at 98%
-via COPILOT_MAX_PARALLEL=4 + per-job pm clear (Mac-side, run_rolling_plan.py). Do NOT
-re-chase the sign-in sheet, exit rotation, or DNS bypass — all measured wrong. Test only
-on the run's real provider (source run_daily_auto.sh's evomi block), never uiautomator
-mid-job, never many test tunnels at once.
+device-agent. Read HANDOVER.md first, then CLAUDE.md "Copilot: cap it at 4".
+
+The 2026-09-02 stale RANKING set is running (or was, if the Mac slept): Evomi,
+PLATFORMS=chatgpt,gemini,copilot, 14 workers, Copilot capped at 4, launched 23:00 on
+09-04, ~434/3531 pairs done at handover. Check `pgrep -f '[r]un_ranking.py'` and
+/private/tmp/ranking_auto_2026-09-02.log. Resume with:
+  PLATFORMS=chatgpt,gemini,copilot PROXY_PROVIDER=evomi SKIP_BASE=1 WORKERS_CAP=15 \
+  ./run_ranking_auto.sh 2026-09-02 stale
+When done, consolidate with consolidate_ranking.py (Perplexity rows are dropped by default).
+Finish or stop it before the 20:00 daily on 09-05.
+
+Copilot is SOLVED (28% -> 90-98%): in-flight cap + Mac-side pm clear. Do NOT re-chase the
+sign-in sheet, proxy-exit rotation, or a DNS bypass — all measured wrong today. Perplexity
+is gone everywhere. Evomi balance is unknown (no API key on this Mac) — ask for it.
 ```
