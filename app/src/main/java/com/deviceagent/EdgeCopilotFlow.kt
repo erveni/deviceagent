@@ -2,7 +2,12 @@ package com.deviceagent
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Rect
+import java.io.File
+import java.io.FileOutputStream
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
@@ -26,6 +31,12 @@ class EdgeCopilotFlow(
         private const val PROMPT_BUBBLE_DESC = "Sent by you."
 
         /** Chrome of the Copilot surface itself — never part of an answer. */
+        // Copilot's header bar plus its fade ends near 0.115 of screen height; the first
+        // answer line must sit below that to be legible in the client shot.
+        private const val FIRST_LINE_CLEAR_Y = 0.14f
+        // Bottom edge of Copilot's header bar; rows above it stay in a client shot.
+        private const val HEADER_BOTTOM_Y = 0.105f
+
         private val ANSWER_NOISE = listOf(
             "Message Copilot", "Show all", "Smart", "Quick response", "Think Deeper"
         )
@@ -778,7 +789,7 @@ class EdgeCopilotFlow(
         val headerY = h * 0.12f
         seekConversationTop()
         for (i in 1..maxSteps) {
-            val b = promptBubbleBounds()
+            val b = settledPromptBubbleBounds()
             if (b == null || b.bottom <= headerY) break
             // Travel exactly the remaining distance: a fixed step overshoots on the last
             // pass and scrolls rank #1 off the top. Swipe slowly so momentum doesn't
@@ -787,6 +798,7 @@ class EdgeCopilotFlow(
             s.gestureSwipe(x, h * 0.75f, x, h * 0.75f - dy, 900)
             Thread.sleep(1400)
         }
+        uncoverFirstAnswerLine()
         if (rankLineBounds() != null) {
             s.log("[edge] frameAnswerForShot: prompt cleared, [RANK] in frame")
             return true
@@ -794,6 +806,105 @@ class EdgeCopilotFlow(
         // A long answer pushes [RANK] below the fold. It matters more than a clean top
         // edge, so fall back to parking it in the lower half and accept a prompt sliver.
         return parkRankLine(maxSteps)
+    }
+
+    /**
+     * The loop above measures only the bubble, and even a slow swipe releases with some
+     * velocity, so it routinely lands list item 1 a few px under Copilot's header fade —
+     * the one line a #1 client wants in the picture (measured on the 2026-09-05 set:
+     * "1. HeavenSent Exterior Solutions" half-cut at the top of a 1/21 shot). Drag the
+     * page back down until the first answer line clears the fade. The drag is short and
+     * ends at rest, so it cannot fling and the correction converges.
+     */
+    private fun uncoverFirstAnswerLine(attempts: Int = 3) {
+        val h = s.screenHeight()
+        val x = s.screenWidth() / 2f
+        val clearY = (h * FIRST_LINE_CLEAR_Y).toInt()
+        repeat(attempts) {
+            val top = firstAnswerLineTop() ?: return
+            if (top >= clearY) return
+            val dy = (clearY - top).toFloat().coerceAtLeast(h * 0.03f)
+            s.log("[edge] frameAnswerForShot: first answer line at y=$top under header, dragging down ${dy.toInt()}px")
+            s.gestureSwipe(x, h * 0.45f, x, h * 0.45f + dy, 700)
+            Thread.sleep(1200)
+        }
+    }
+
+    /**
+     * Rows to cut out of the client shot so no prompt text survives.
+     *
+     * A short answer leaves the page nothing to scroll: the conversation bottoms out with
+     * the bubble's last lines still under the header. Measured on the 2026-09-05 set,
+     * 13 of 25 v77 Copilot shots carried "Keep the entire response under 280 words."
+     * above list item 1. Scrolling cannot fix that, so the band from the header's bottom
+     * edge to just above the first answer line is spliced out of the PNG instead.
+     * Returns null when the bubble is already off screen or nothing is measurable.
+     */
+    fun promptBandForShot(): IntRange? {
+        val h = s.screenHeight()
+        val headerBottom = (h * HEADER_BOTTOM_Y).toInt()
+        val bubble = promptBubbleBounds() ?: return null
+        if (bubble.bottom <= headerBottom) return null
+        val firstLine = firstAnswerLineTop() ?: return null
+        val cutTo = firstLine - (h * 0.02f).toInt()
+        if (cutTo - headerBottom < (h * 0.02f).toInt()) return null
+        return headerBottom until cutTo
+    }
+
+    /** Splice [band] out of the PNG at [path] in place; false when nothing was written. */
+    fun stripPromptBand(path: String, band: IntRange): Boolean {
+        val src = BitmapFactory.decodeFile(path) ?: return false
+        val cutHeight = band.last + 1 - band.first
+        if (band.first <= 0 || band.last >= src.height - 1 || cutHeight <= 0) {
+            src.recycle(); return false
+        }
+        val out = Bitmap.createBitmap(src.width, src.height - cutHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val top = Rect(0, 0, src.width, band.first)
+        canvas.drawBitmap(src, top, top, null)
+        val bottomSrc = Rect(0, band.last + 1, src.width, src.height)
+        val bottomDst = Rect(0, band.first, src.width, out.height)
+        canvas.drawBitmap(src, bottomSrc, bottomDst, null)
+        src.recycle()
+        val ok = try {
+            FileOutputStream(File(path)).use { out.compress(Bitmap.CompressFormat.PNG, 90, it) }
+        } catch (e: Exception) {
+            s.log("[edge] stripPromptBand: write failed ${e.message}")
+            false
+        }
+        out.recycle()
+        if (ok) s.log("[edge] stripPromptBand: cut rows ${band.first}-${band.last} from shot")
+        return ok
+    }
+
+    /** Top edge of the highest on-screen answer line; null when no answer text is visible. */
+    private fun firstAnswerLineTop(): Int? {
+        val root = s.rootInActiveWindow ?: return null
+        val sent = StringBuilder()
+        val lines = mutableListOf<Pair<String, Rect>>()
+        fun walk(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > 25) return
+            val desc = node.contentDescription?.toString()
+            if (desc != null && desc.startsWith(PROMPT_BUBBLE_DESC)) {
+                sent.append(desc.removePrefix(PROMPT_BUBBLE_DESC))
+            } else {
+                val txt = node.text?.toString()?.trim()
+                if (!txt.isNullOrBlank() && node.className?.toString()?.contains("Edit") != true) {
+                    val r = Rect()
+                    node.getBoundsInScreen(r)
+                    if (r.height() > 0) lines.add(txt to r)
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { walk(it, depth + 1) }
+            }
+        }
+        walk(root, 0)
+        root.recycle()
+        val prompt = sent.toString()
+        return lines
+            .filter { (t, _) -> t.length > 1 && !prompt.contains(t) && ANSWER_NOISE.none { t.startsWith(it) } }
+            .minOfOrNull { (_, r) -> r.top }
     }
 
     private fun parkRankLine(maxSteps: Int): Boolean {
@@ -818,6 +929,20 @@ class EdgeCopilotFlow(
         }
         s.log("[edge] parkRankLine: [RANK] not positioned after $maxSteps steps")
         return false
+    }
+
+    /**
+     * The bubble node drops out of Copilot's virtualized tree for a moment during
+     * re-layout while the bubble is still on screen. Treating that first null as
+     * "scrolled off" ended the parking loop with three lines of prompt text in the
+     * client shot (device-103, 2026-09-05). Re-query before believing it.
+     */
+    private fun settledPromptBubbleBounds(): Rect? {
+        repeat(3) {
+            promptBubbleBounds()?.let { return it }
+            Thread.sleep(500)
+        }
+        return null
     }
 
     private fun promptBubbleBounds(): Rect? {

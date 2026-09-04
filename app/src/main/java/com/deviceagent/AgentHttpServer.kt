@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.61-edge-light-reset"
-        const val APP_VERSION_CODE = 78
+        const val APP_VERSION_NAME = "0.9.62-copilot-frame-top"
+        const val APP_VERSION_CODE = 79
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -326,7 +326,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     // Capture text + rank + screenshot. Factored so the Gemini path can
                     // run it the INSTANT generation completes (racing the wipe), while
                     // the others scroll to the rank line first for a cleaner screenshot.
-                    fun capture(responseText: String) {
+                    fun capture(responseText: String, retouch: ((String) -> Unit)? = null) {
                         // Screenshot FIRST — it's the time-critical visual. On logged-out
                         // Gemini the answer is wiped ~3s after it renders, so grab the
                         // picture before anything else (text-from-a11y is fast and runs
@@ -335,6 +335,12 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         val ssName = "audit_${platform}_${System.currentTimeMillis()}"
                         val ssPath = try { flowEngine.saveScreenshot(ssName) } catch (e: Exception) { null }
                         pr.screenshotPath = ssPath
+                        // Retouch runs on the saved file so the inlined base64 matches it.
+                        if (!ssPath.isNullOrBlank() && retouch != null) {
+                            try { retouch(ssPath) } catch (e: Exception) {
+                                Log.w("DeviceAgent", "screenshot retouch failed for $ssPath: ${e.message}")
+                            }
+                        }
                         if (!ssPath.isNullOrBlank()) {
                             pr.screenshotB64 = try {
                                 val bytes = File(ssPath).readBytes()
@@ -354,7 +360,12 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         // The answer was already read above; only the shot needs framing.
                         step("frame_shot") { flowEngine.copilot.frameAnswerForShot() }
                         Thread.sleep(1000)
-                        capture(copilotAnswer)
+                        // Measured before the shot, applied to the file: a short answer
+                        // leaves prompt lines under the header that no scroll can clear.
+                        val promptBand = flowEngine.copilot.promptBandForShot()
+                        capture(copilotAnswer) { path ->
+                            promptBand?.let { flowEngine.copilot.stripPromptBand(path, it) }
+                        }
                     } else if (platform == "gemini") {
                         // RACE THE WINDOW: capture immediately, before the wipe. A 6-swipe
                         // scroll (≈6-12s) would run past it and screenshot a blank welcome.

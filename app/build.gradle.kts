@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 78
-        versionName = "0.9.61-edge-light-reset"
+        versionCode = 79
+        versionName = "0.9.62-copilot-frame-top"
     }
 
     buildTypes {
