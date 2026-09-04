@@ -215,13 +215,14 @@ def _relay_start(listen_port, gost_port):
     return subprocess.Popen([RELAY_PY, "-u", RELAY_SCRIPT, str(listen_port), str(gost_port)],
                             stdout=open(log, "a"), stderr=subprocess.STDOUT)
 
-# Android's system resolver speaks DNS-over-TLS to the DNS server socksdroid hands it
-# (8.8.8.8:853). Evomi answers CONNECT on 853 with "501 Not Implemented" — 226 such
-# CONNECTs against 241 501s in the 2026-09-04 nightly's gost logs. Chrome never notices
-# because it resolves over DoH on :443; Edge/Copilot leans on the system resolver and
-# dies with "Network issues / Failed to send". Send the public resolvers direct from the
-# Mac; every page byte still exits via the chain. GOST_DNS_BYPASS=0 restores the old path.
-GOST_DNS_BYPASS = os.environ.get("GOST_DNS_BYPASS", "1") == "1"
+# OFF by default — measured harmful on 2026-09-04. Android's resolver speaks DoT to
+# 8.8.8.8:853, which Evomi refuses (501); dialing those resolvers direct from the Mac
+# silences the 501s but resolves names for the MAC's location (GMT+8): Google-owned
+# :443 targets moved from US ranges (150.171.110.x, 156.225.105.x) to APAC edges
+# (172.217.26.x, 142.250.207.x), and Copilot fell from 8/9 to 1/6 on the same phones.
+# The 501s are a wasted round trip, not the cause — Android falls back and resolves
+# from the exit's side. Keep DNS on the exit. GOST_DNS_BYPASS=1 re-enables for tests.
+GOST_DNS_BYPASS = os.environ.get("GOST_DNS_BYPASS", "0") == "1"
 DNS_BYPASS_HOSTS = ("8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1")
 
 def gost_start(specs):
