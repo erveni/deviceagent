@@ -20,7 +20,7 @@ Usage:
   python3 run_may27_ranking_standalone.py              # execute (10 phones)
 """
 from __future__ import annotations
-import json, os, sys, time
+import json, threading, os, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -458,16 +458,30 @@ counts = {"success": 0, "error": 0, "no_rank": 0, "other": 0}
 errors = []
 
 
+# Copilot's success rate falls with how many Copilot sessions the pool has open at
+# once (2026-09-04 daily, same phones: ~70% at 1, 28-38% at ~5, 8% at ~15). The daily
+# runner caps it in run_rolling_plan; the ranking path dispatches here, so cap it here.
+# Blocking acquire is fine: the phone is taken inside dispatch_audit_job, after this.
+COPILOT_MAX_PARALLEL = int(os.environ.get("COPILOT_MAX_PARALLEL", "4"))
+_COPILOT_SLOTS = threading.BoundedSemaphore(COPILOT_MAX_PARALLEL)
+
+
 def _one(idx_spec):
     idx, (kw, biz, plat, jtype) = idx_spec
     job_id = int(time.time() * 1000) + idx
     jr = make_job_record(kw, biz, plat, jtype, job_id)
     audit_job = build_audit_dispatch_job(jr)
+    is_copilot = (plat or "").lower() == "copilot"
+    if is_copilot:
+        _COPILOT_SLOTS.acquire()
     try:
         row = dispatch_audit_job(audit_job, platform=plat, csv_path=CSV_PATH)
         return ("ok", idx, kw, biz, plat, jtype, row)
     except Exception as e:
         return ("err", idx, kw, biz, plat, jtype, f"{type(e).__name__}: {e}")
+    finally:
+        if is_copilot:
+            _COPILOT_SLOTS.release()
 
 
 def _tally(payload, kind, kw, biz, plat):

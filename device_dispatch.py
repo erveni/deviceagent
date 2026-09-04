@@ -9,7 +9,7 @@ Helpers (gost, socksdroid, http_post, etc.) are shared with run_with_proxy.py.
 from __future__ import annotations
 
 import csv
-import os
+import os, subprocess
 import re
 import threading
 import time
@@ -81,6 +81,7 @@ TUNNEL_SETTLE_S = 3
 # on the nightly's exits, then answered first try on a fresh session; device-110 failed
 # unproxied and captured 277 chars proxied, same phone minutes apart. It was 62 of
 # Copilot's 78 errors that night, so rotating the session is worth the extra ~9 MB.
+COPILOT_PM_CLEAR = os.environ.get("COPILOT_PM_CLEAR", "1") == "1"
 RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation timeout",
                   "signup_wall", "open_copilot failed")
 
@@ -310,6 +311,16 @@ def _run_session(
     spec: dict[str, Any],
     wave_index: int,
 ) -> dict[str, Any]:
+    if COPILOT_PM_CLEAR and (job.get("platform") or "").lower() == "copilot":
+        # The app resets Edge by driving Android's Settings UI. That logs
+        # "clearData -> true" and sometimes does not take: device-113 sat on the
+        # previous job's Copilot conversation and timed out walking a first-run that
+        # never came (0/4 on 2026-09-04; 4/4 after this). One command, no UI to get
+        # lost in; the app's own reset still runs and finds Edge already clean.
+        # Lives here so BOTH the daily (run_rolling_plan) and ranking paths get it.
+        for cmd in ("pm clear com.microsoft.emmx", "am force-stop com.microsoft.emmx"):
+            subprocess.run(["adb", "-s", serial, "shell", *cmd.split()],
+                           capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
     bl = job.get("biz_lat", 0) or 0
     bln = job.get("biz_lng", 0) or 0
     if bl and bln:
