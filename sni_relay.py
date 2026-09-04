@@ -184,7 +184,11 @@ class Handler(socketserver.BaseRequestHandler):
             dst_ip, dst_port = socks5_handshake(client)
 
             head = b""
-            if dst_port == 53:
+            # 853 = DNS-over-TLS. Android's system resolver probes it before falling back
+            # to plain DNS, and Evomi answers CONNECT on 853 with 501 Not Implemented
+            # (241 of them in the 2026-09-04 nightly). Same treatment as :53 — dial it
+            # direct from the Mac; the public resolvers are reachable here.
+            if dst_port in (53, 853):
                 # DNS must bypass Decodo (it rejects IP-CONNECT to a resolver).
                 upstream = dial_direct(dst_ip, dst_port)
             else:
