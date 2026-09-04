@@ -1,133 +1,54 @@
-# Session Handover — 2026-09-04 ~00:20 PST
+# Session Handover — 2026-09-04 ~14:50 PST
 **Project:** /Users/seolocalph/projects/device-agent
-**Branch:** feat/top3-deepdive-ranking-geo-fix — pushed to **devicefarm1** (`bbba26c`)
+**Branch:** feat/top3-deepdive-ranking-geo-fix — pushed to **devicefarm1** (`8cd47f0`)
 
-## ⚠️ TWO BLOCKERS FOUND AT THE END OF THIS SESSION — START HERE
+## Result: Copilot 28% -> 98%, matching ChatGPT/Gemini
 
-### 1. `build-session` REJECTS `copilot` — this is why no Copilot ran tonight
+Post-fix window (from 14:08): **Copilot 61/62**, ChatGPT 84/90, Gemini 91/91.
+Thirteen of fourteen phones 100% on Copilot. Two Mac-side changes, no APK deployed:
 
+| lever | env | effect |
+|---|---|---|
+| Copilot in-flight cap | `COPILOT_MAX_PARALLEL=4` (`run_rolling_plan.py`) | 28% -> 52% alone. Rate tracks concurrent Copilot sessions from the pool: ~70% at 1, 28-38% at ~5, 8% at ~15, 0/7 at 8. Chrome platforms unaffected. |
+| `pm clear` Edge from the Mac before each Copilot job | `COPILOT_PM_CLEAR=1` | 52% -> 98%. The app's Settings-UI wipe logs `clearData -> true` and sometimes leaves the previous conversation on screen (device-113 0/4, device-120 2/6 -> both 100%). |
+
+Kept OFF: `GOST_DNS_BYPASS` (default 0). Evomi refuses DoT `8.8.8.8:853` with 501 (241 in
+the nightly's logs) but dialing DNS direct from this GMT+8 Mac geo-shifts resolution to
+APAC edges and dropped Copilot 8/9 -> 1/6. The 501s are a wasted round trip, not a cause.
+
+## Also fixed today
+- `copilot` accepted by AEOAdmin `/api/llm/build-session` (`95d16f9`, pushed to origin).
+  Last night's build dropped all 461 Copilot sessions on a 400; tonight's carried them.
+- DeepSeek 402 was never a build blocker: the local Ollama fallback already carried
+  2026-09-03. Local build server now rebuilds `dist/` (it is gitignored and served stale
+  route code); `BUILD_TIMEOUT_S` 60 -> 180.
+- device-122 had no Edge (0/15): sideloaded `~/apks/edge_151.0.4129.101.apk`.
+- 2026-09-03's deliverable was never consolidated (wrapper died after `ALL SUCCESS`):
+  wrote `~/Desktop/Daily/sep03_daily_ALL_SUCCESS_consolidated.csv`, 977/977.
+
+## Things I got wrong (each stated confidently; see CLAUDE.md Copilot table)
+Sign-in wall -> exit rotation -> "the phone" -> Microsoft blocks the pool -> DNS bypass.
+Every one came from a small or contaminated sample: unproxied phones, `uiautomator dump`
+mid-job, tests silently on Decodo (`PROXY_HOST` from `.env.dev`), 8-tunnel bursts (407s
+the nightly never sees), verifying a gost bypass by grepping the word. My own first
+resume ran on dead DataImpulse because `PROXY_PROVIDER=evomi` lives only in the
+LaunchAgent plist — caught at 0 rows.
+
+## Open
+1. **v78 APK** `0.9.61-edge-light-reset` — built, tested on the Samsung, UNCOMMITTED, not
+   deployed. Its reset path is moot now (pm clear); it still carries two useful guards
+   (InPrivate exit; refuses to type a prompt into Edge's URL bar). Low priority.
+2. `mae_plan.json` still ships 70 Perplexity jobs. `.env.dev` `PROXY_HOST`/`PROXY_PROVIDER`
+   are dead values; `run_daily_auto.sh`'s provider blocks are the truth.
+3. device-102: dead AccessibilityService, needs hands. 8 stale `DEVICES` entries.
+4. `sni_relay.py` :853 change (`09e5f85`) is inert for the nightly (`USE_SNI_RELAY=0`).
+5. Tonight's 20:00 LaunchAgent: this run writes `ALL DONE` on completion, so it will skip.
+
+## Session opener
 ```
-POST /api/llm/build-session {"keyword_id":47,"platform":"copilot"}
--> HTTP 400 {"error":"platform must be one of chatgpt, gemini, perplexity"}
-```
-
-`build_daily_plan.py` assigned Copilot correctly — the 2026-09-03 build log line 12 reads
-`platform split: {'ChatGPT': 502, 'Gemini': 475, 'Copilot': 461}` — and then line 32:
-`WARN: dropped 461 sessions on persistent build-session failure`, all Copilot. The plan
-shipped 977 jobs instead of ~1650 and **zero Copilot ran**.
-
-Everything on OUR side is ready (app v77 on 17/17, dispatcher, ranking path). The gate is
-the AEOAdmin endpoint's platform whitelist. Two ways forward:
-
-- **Proper:** AEOAdmin adds `copilot` to the accepted list.
-- **Stopgap:** request the prompt under an accepted platform and dispatch it to Copilot.
-  The daily prompt is conversational, platform-agnostic copy ("Anyone tried X for Y near
-  Z?"), so this is very likely safe — but VERIFY the returned prompt has no
-  platform-specific wording before relying on it.
-
-### 2. DeepSeek is OUT OF BALANCE right now
-
-```
-platform=chatgpt    -> HTTP 500 "DeepSeek API error 402: Insufficient Balance"
-platform=perplexity -> HTTP 500 (same)
-```
-
-Tomorrow's 20:00 build will fail completely unless topped up. This is the known
-"build hangs at `fetching N build-session prompts`" symptom — check this BEFORE
-debugging anything else in the chain.
-
-### 3. Perplexity is NOT fully retired — `mae_plan.json`
-
-`PLATFORMS` is `["ChatGPT","Gemini","Copilot"]` (37e665a) but `mae_plan.json` is a tracked,
-PRE-BUILT file merged in after the rotation: `{ChatGPT:70, Gemini:70, Perplexity:70}`.
-Those 70 Perplexity jobs ran tonight. Edit that file to finish the retirement.
-
-## Completed This Session
-
-- **Copilot shipped as a real in-app platform** (`EdgeCopilotFlow.kt`): audit/ranking
-  flow, daily flow, and backlink clicking. Copilot answers only inside Edge —
-  copilot.microsoft.com in Chrome is a hard sign-in wall.
-- **Perplexity retired** from `build_daily_plan.py` (`PLATFORMS` + both `FORCE_PLATFORM`
-  pins) — 37e665a.
-- **Fleet: app v77 + accessibility on 17/17, Edge on 16/17.** `deploy_agent_fleet.sh`
-  tracked (d3f6d41); it rebinds accessibility unattended — the "manual toggle per phone"
-  in CLAUDE.md was WRONG and is corrected.
-- **Ranking dispatcher understands Copilot** (69fd3d2) + rank-marker gate (a44b4fa).
-- **Name-matching fix** (51eb828): a business listed WITHOUT its trailing city segment
-  was judged absent from its own #1 listing and demoted as a fabrication. Fires on ALL
-  platforms — 183 of 395 `ocr_no_answer` rows across the last 6 ranking CSVs carry a
-  comma-segment `biz_name` (138 perplexity, 45 chatgpt).
-- **Async sessions v77** (68fe119): `/session {"async":true}` + `/result` polling.
-- **Measured bandwidth analysis** written into `PROXY_COST_SPEC.md` §9 (df226fc,
-  corrected in 2d303ad).
-
-## Key Measurements (all at the provider meter, not modelled)
-
-| | |
-|---|---|
-| Daily | 1.96 MB/job, 91% success (1,702 jobs) |
-| Ranking single-pass | 16.55 MB/job (21 jobs), 16.98 MB/job (230 jobs) |
-| Copilot | **8.99 MB/job — cheapest**; ChatGPT 16.28; Gemini 24.38 |
-| Daily backlinks 2026-09-02 | **Perplexity 51%**, Gemini 33%, ChatGPT **0%** |
-| Copilot under 15-worker load | 45% success (36/80) vs ChatGPT 83%, Gemini 69% |
-| Evomi remaining | ~45.8 GB — ~14 nights of daily; stale set needs ~53 GB+, does NOT fit |
-| Decodo | REFUSING AUTH (`rejected by the SOCKS5 server (1 3)`) since 2026-09-02 |
-
-## Things I Got Wrong (do not repeat)
-
-- **Never measured 34 MB/job.** I inherited it from a 2026-08-29 note and presented it as
-  measured "with retries", then derived a "51% retry amplification" from the gap. Both
-  corrected in 2d303ad. The retry multiplier has NEVER been metered — one
-  `run_ranking_auto.sh` run with balance reads either side would settle it.
-- **The async fix did NOT reduce the ranking failure rate** (65% vs 67%). The
-  `RemoteDisconnected` happens on the OPENING request, not from holding one open — only
-  1 of 230 jobs died while polling. Don't re-attempt it expecting a different result.
-- **Changed `PLATFORMS` without verifying the backend accepts the value.** That is
-  blocker #1 above.
-
-## Open Items
-
-1. Unblock Copilot in `build-session` (whitelist or stopgap) — nothing else matters until
-   this is done; Copilot cannot run in the daily at all.
-2. Top up DeepSeek or tomorrow's build fails.
-3. Remove Perplexity from `mae_plan.json`.
-4. **Copilot's Edge weak spot:** every job `pm clear`s Edge, forcing a 4-screen first-run.
-   Under concurrency that caused 23 of its 40 errors (`reset_edge` x12, `open_copilot`
-   x11). Fix = clear cookies/site data instead of a full wipe so the FRE never re-runs.
-5. Decodo: dashboard check — exhausted, suspended, or rotated again?
-6. One phone (`...S003287`) has no Edge; adb bulk transfer hangs. Needs a physical bounce.
-7. Ranking stale set: 3,287 jobs remaining, does not fit in the Evomi balance.
-
-## Next Action
-
-> Verify what the daily prompt looks like when requested under an accepted platform, then
-> either get `copilot` whitelisted in AEOAdmin's `/api/llm/build-session` or ship the
-> stopgap mapping. Check DeepSeek balance first — both platforms 402'd at 00:15.
-
----
-## Session Opener (paste at start of next session)
-
-```
-device-agent, continuing the Perplexity->Copilot switchover.
-Read HANDOVER.md first.
-
-Copilot is fully built and deployed (app v77 on 17/17 phones, Edge on 16/17, ranking
-dispatcher + backlink + rank gate all done, Perplexity retired from PLATFORMS in
-37e665a). It measured CHEAPEST per job of any platform: 8.99 MB vs ChatGPT 16.28 and
-Gemini 24.38.
-
-BUT zero Copilot jobs ran on 2026-09-03. AEOAdmin's /api/llm/build-session rejects it:
-HTTP 400 "platform must be one of chatgpt, gemini, perplexity". All 461 assigned Copilot
-sessions were dropped and the night shipped 977 jobs instead of ~1650. Fix that first —
-either whitelist copilot server-side, or request the prompt under an accepted platform
-and dispatch to Copilot (the daily prompt is platform-agnostic conversational copy, but
-verify before trusting it).
-
-Also urgent: DeepSeek returned 402 Insufficient Balance at 00:15, so tomorrow's 20:00
-build will fail unless topped up. And Perplexity is not fully retired — mae_plan.json is
-a tracked pre-built file with 70 Perplexity jobs that bypasses PLATFORMS.
-
-Known weak spot to fix after: Copilot pm-clears Edge every job, forcing a 4-screen
-first-run walk; under 15-worker concurrency that gave 45% success vs ChatGPT 83% /
-Gemini 69%. Fix = clear cookies instead of a full wipe.
+device-agent. Read HANDOVER.md + CLAUDE.md "Copilot: cap it at 4". Copilot is at 98%
+via COPILOT_MAX_PARALLEL=4 + per-job pm clear (Mac-side, run_rolling_plan.py). Do NOT
+re-chase the sign-in sheet, exit rotation, or DNS bypass — all measured wrong. Test only
+on the run's real provider (source run_daily_auto.sh's evomi block), never uiautomator
+mid-job, never many test tunnels at once.
 ```
