@@ -20,7 +20,11 @@ import json, os, sys, urllib.request
 import datetime as dt
 from collections import Counter
 
-ADMIN = "https://jjm59vpn3y.us-east-1.awsapprunner.com"
+# ADMIN_BASE lets the nightly's local build server (_build_server_lib.sh, :8788) serve
+# this: App Runner's gateway cuts /api/keywords?includeLocked=true at 120s (502/504 on
+# 2026-09-06, three attempts), the local server has no such cap.
+ADMIN = os.environ.get("ADMIN_BASE", "https://jjm59vpn3y.us-east-1.awsapprunner.com")
+REQUEST_TIMEOUT_S = int(os.environ.get("ADMIN_TIMEOUT_S", "120"))
 TOKEN = os.environ["EXECUTOR_TOKEN"]
 # /api/ranking-reports is gated by requireApiToken (Bearer), NOT X-Executor-Token.
 # Sending the executor token 401s; a bare `except` here used to turn that 401 into
@@ -48,7 +52,7 @@ def get(path, bearer=False, attempts=3):
     for attempt in range(1, attempts + 1):
         try:
             req = urllib.request.Request(f"{ADMIN}{path}", headers=headers)
-            with urllib.request.urlopen(req, timeout=120) as r:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as r:
                 return json.load(r)
         except Exception as e:
             # Retry transient truncation/timeouts; a 401 or 4xx will exhaust the

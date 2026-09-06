@@ -558,6 +558,11 @@ def _name_candidates(biz: str, aka: str = ""):
         trimmed = _norm_name(",".join(parts[:-1]))
         if trimmed and trimmed not in {c for c, _ in out}:
             out.append((trimmed, False))
+    # Same idea for a " - " marketing suffix: "Charles Huurman Tattoo - Best Tattoo
+    # Artist in Austin" is listed as "Charles Huurman Tattoo". Derived, so strict.
+    dash_seg = _norm_name(biz.split(" - ")[0]) if " - " in biz else ""
+    if dash_seg and dash_seg not in {c for c, _ in out}:
+        out.append((dash_seg, True))
     out += [(_norm_name(a), False) for a in (aka or "").split(",")]
     return [(c, strict) for c, strict in out if len(c) >= 3]
 
@@ -623,9 +628,18 @@ def _rank_inconsistent(response_text: str, biz: str, platform: str, aka: str = "
         # hyphen: business names embed " - " ("Ace Grease Service - St. Louis"), and
         # splitting on it truncated the name to "Ace Grease Service", which then
         # failed the strict token match and rejected genuine #1 rows as fabrications.
-        name = " ".join(re.sub(r"[^a-z0-9 ]", " ",
-                               re.split(r"\s[—–]\s|\n", mm.group(1).strip(), maxsplit=1)[0]).split())
-        if any(_name_matches(c, name, strict) for c, strict in cands):
+        # Copilot renders the hyphen INSIDE a business name as an EN dash ("Jaudon
+        # Sunde – Permanent Cosmetics & Microblading Expert — highly rated ...") and
+        # the description separator as an EM dash. Splitting on either dash cut the
+        # name to "Jaudon Sunde", the strict match failed, and 29 of 30 genuine #1
+        # Copilot rows on 2026-09-06 were rejected as fabrications. Try the em-dash
+        # split first, then the en-dash split, then the whole line.
+        item = mm.group(1).strip()
+        variants = [re.split(r"\s—\s|\n", item, maxsplit=1)[0],
+                    re.split(r"\s[—–]\s|\n", item, maxsplit=1)[0],
+                    item.split("\n", 1)[0]]
+        names = {" ".join(re.sub(r"[^a-z0-9 ]", " ", v).split()) for v in variants}
+        if any(_name_matches(c, name, strict) for c, strict in cands for name in names):
             return x > 3 or x != n
     # Only judge absence when the list actually parsed — a capture whose list we
     # could not read is a parse failure, not a fabrication, and must not be
