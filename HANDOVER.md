@@ -1,5 +1,36 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-09 04:54 Manila — Four prompt-leak reruns attempted, ZERO replacements accepted
+
+- User requested only four Gemini rows from Desktop/Rankings/
+  prompt_leak_top3_rerun_2026-09-09.csv. Exact keyword IDs 345,143,4711,4680;
+  original report dates Aug04/Aug13/Aug18 preserved as reference, not backdated
+  observations. The 45 retired Perplexity rows were not run.
+- Daily Sep08 finished03:41, remaining0; 1438/1438 non-Mae rows consolidated.
+  New four-job pass04:34–04:48 used only104/production79, one attempt each,
+  normal ZIP-first geo, same-answer reframe on, cache trial OFF. No APK deployment.
+- Settled Evomi before31329.605677MB after31231.144306MB:98.461371MB total,
+  24.615343MB/attempt, ZERO successes (MB/success undefined). Meter settled>=300s
+  after exit with>=120s stable. See prompt_leak_rerun_20260909/report.json and
+  meter.jsonl. `complete`/`valid` describe measurement, NOT accepted screenshots.
+- Charles345 and St.George4711: ocr_no_answer. Root viewed saved images: prompt
+  and large Maps cards, incomplete answer. Native wait_generation returned OK
+  after4s/3s; saved response contained no model answer. Prompt example4/4 must
+  not be treated as a real rank. Same-answer repair lacked a valid answer rank.
+- SiliconSlopes4680: input failed. Scott143: submit failed then150s generation
+  timeout. Root viewed voice-input UI/microphone permission prompt and tapped
+  Never allow during143; no permission granted. Manual intervention disclosed.
+- Desktop separate `_attempt_results.csv` contains all4 rejected outcomes.
+  Original reports and backend unchanged. All4 still need valid replacements.
+  No automatic retries. Fix/test answer-only completion and text/submit targeting
+  without paid traffic before repeating these failures.
+- Cleanup verified: no Gost/ranking runner/fleet lock,104health79/accessibility
+  true, no SocksDroid tun0 (vowifi_tun0 is unrelated), chain0906stilldisabled.
+- New COST_DRIVER=rerun_four in tools/run_ranking_cost_pair.sh: exact4 IDs,
+  device104 only,150MB guard,40min leg cap,10GB reserve, no cache activation.
+  WARNING existing launcher's FINISHED remaining=0 is not a success count when
+  RANK_RETRY_ROUNDS=0; it never calculated remaining. Read CSV/measurement report.
+
 ## 2026-09-08 — Ranking-cost code consolidated into device-agent
 
 - User requested one repository. Proxy routing/telemetry now lives in

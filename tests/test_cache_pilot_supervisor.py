@@ -16,7 +16,7 @@ class CachePilotSupervisorTests(unittest.TestCase):
         block = PYTHON[PYTHON.index('        env = os.environ.copy()'):PYTHON.index("        (legdir / 'settings.json')")]
         namespace = {'os': SimpleNamespace(environ={}), 'fixed': Path('/mock/ten.json'),
                      'legdir': Path('/mock/candidate'), 'job_count': 10, 'city_first': '1',
-                     'pilot': True, 'single': False, 'one_phone': True, 'driver': 'cache_pilot',
+                     'pilot': True, 'single': False, 'rerun_four': False, 'one_phone': True, 'driver': 'cache_pilot',
                      'name': 'candidate'}
         exec(compile(textwrap.dedent(block), '<settings-only>', 'exec'), namespace)
         env = namespace['env']

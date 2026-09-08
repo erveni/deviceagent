@@ -30,8 +30,9 @@ out = Path(sys.argv[2]).resolve()
 keywords = json.loads(manifest.read_text())
 single = os.environ.get('COST_DRIVER') == 'reframe_single'
 pilot = os.environ.get('COST_DRIVER') == 'cache_pilot'
-one_phone = single or pilot
-job_count = 1 if single else 10
+rerun_four = os.environ.get('COST_DRIVER') == 'rerun_four'
+one_phone = single or pilot or rerun_four
+job_count = 4 if rerun_four else (1 if single else 10)
 if not isinstance(keywords, list) or len(keywords) != job_count or len(set(map(str, keywords))) != job_count:
     raise SystemExit(f'Manifest must contain exactly {job_count} distinct keyword IDs')
 if any(type(k) is not int or k <= 0 for k in keywords):
@@ -47,11 +48,16 @@ if len(expected_pairs) != job_count:
 fixed = out / 'keywords.json'
 fixed.write_text(json.dumps(keywords) + '\n')
 date = '2026-09-02'
+if rerun_four:
+    # New captures are dated today, never presented as observations from August.
+    date = datetime.date.today().isoformat()
 shared_log = Path('/private/tmp/ranking_auto_' + date + '.log')
 poll_s, settle_s, settle_timeout = 20, 120, 900
 budget_mb, leg_timeout = (100, 10 * 60) if single else (1000, 45 * 60)
 if pilot:
     budget_mb, leg_timeout = 150, 30 * 60
+if rerun_four:
+    budget_mb, leg_timeout = 150, 40 * 60
 hard_deadline = None
 if pilot:
     try:
@@ -70,7 +76,7 @@ spend_baseline = float(spend_baseline) if spend_baseline is not None else None
 if spend_baseline is not None and (not math.isfinite(spend_baseline) or spend_baseline < 0):
     raise SystemExit('Invalid cumulative spend baseline')
 driver = os.environ.get('COST_DRIVER', 'city')
-if driver not in ('city', 'generation_timeout', 'gemini_app_screenshot', 'warmup', 'reframe_single', 'cache_pilot'):
+if driver not in ('city', 'generation_timeout', 'gemini_app_screenshot', 'warmup', 'reframe_single', 'cache_pilot', 'rerun_four'):
     raise SystemExit('Unsupported COST_DRIVER')
 initial = None
 active = None
@@ -325,6 +331,8 @@ try:
         initial = settled('initial')
     legs = [('candidate', '1')] if one_phone else [('control', '0'), ('candidate', '1')]
     for name, city_first in legs:
+        if rerun_four:
+            city_first = '0'  # preserve normal geo targeting for replacement captures
         if driver in ('generation_timeout', 'gemini_app_screenshot', 'warmup'):
             city_first = '1'
         check_idle()
@@ -382,6 +390,9 @@ try:
             if not one_phone:
                 raise RuntimeError('Cache trial is restricted to one job on device-104')
             env['RANK_GEMINI_CACHE_TRIAL'] = '1'
+        if rerun_four:
+            env['RANK_GEMINI_CACHE_TRIAL'] = '0'
+            env['RANK_CACHE_PILOT'] = '0'
         if driver == 'generation_timeout' and name == 'candidate':
             env['AEO_ROTATE_ON_GENERATION_TIMEOUT'] = '0'
         if driver == 'gemini_app_screenshot' and name == 'candidate':
