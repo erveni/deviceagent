@@ -97,12 +97,20 @@ class DevicePool:
         # Set DEVICE_EXCLUDE to a comma list of device labels or serial substrings,
         # e.g. DEVICE_EXCLUDE="device-105,device-107".
         self._excluded = set()
+        # device-125 is a com.farm test handset, never a production worker.  Keep
+        # this guard in the pool (rather than only in one launch script) so a new
+        # ranking/daily entry point cannot accidentally spend proxy traffic on it.
         _exc = os.environ.get("DEVICE_EXCLUDE", "")
+        _required_excludes = {"device-125"}
         if _exc.strip():
             toks = [t.strip() for t in _exc.split(",") if t.strip()]
-            for i, (label, ser) in enumerate(DEVICES):
-                if any(t == label or t in ser for t in toks):
-                    self._excluded.add(i)
+        else:
+            toks = []
+        toks.extend(sorted(_required_excludes))
+        for i, (label, ser) in enumerate(DEVICES):
+            if any(t == label or t in ser for t in toks):
+                self._excluded.add(i)
+        if self._excluded:
             print(f"[pool] DEVICE_EXCLUDE -> skipping idx {sorted(self._excluded)}: "
                   f"{[DEVICES[i][0] for i in sorted(self._excluded)]}", flush=True)
         # Round-robin starting offset for acquire() — spreads load across all

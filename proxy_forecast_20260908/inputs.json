@@ -1,0 +1,22 @@
+{
+  "as_of": "2026-09-08",
+  "currency": "USD",
+  "days": 30,
+  "daily_billed_mb": 8537,
+  "ranking_sample_billed_mb": 26836,
+  "ranking_sample_successes": 513,
+  "pairs_per_sweep": 3492,
+  "base_sweeps_per_month": 2,
+  "planning_buffer_fraction": 0.20,
+  "evomi_monthly_fee": 49.99,
+  "evomi_included_gb": 100,
+  "evomi_overage_usd_per_gb": 0.49,
+  "dataimpulse_standard_usd_per_gb": 1,
+  "dataimpulse_targeting_multiplier": 2,
+  "rayobyte_professional_usd_per_gb": 1.5,
+  "decodo_payg_usd_per_gb": 4,
+  "cross_provider_workload_multiplier": 1,
+  "pilot_billed_mb": 24.705904,
+  "pilot_accepted_successes": 6,
+  "previous_gemini_success_mb": 20.970692
+}

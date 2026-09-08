@@ -434,6 +434,14 @@ if os.environ.get("EXCLUDE_SUCCESS"):
                  if (str(b["id"] * 10000 + k["id"]), p) not in _done]
     print(f"[retry] EXCLUDE_SUCCESS (terminal={sorted(_terminal)}): {_b} -> {len(job_specs)} (skipped {_b - len(job_specs)})")
 
+# Applies after the terminal-result filter, making a meter-backed experiment
+# genuinely bounded. Normal ranking remains unlimited when MAX_JOBS is unset.
+MAX_JOBS = int(os.environ.get("MAX_JOBS", "0"))
+if MAX_JOBS > 0 and len(job_specs) > MAX_JOBS:
+    _uncapped = len(job_specs)
+    job_specs = job_specs[:MAX_JOBS]
+    print(f"[cap] MAX_JOBS={MAX_JOBS}: {_uncapped} -> {len(job_specs)}", flush=True)
+
 # Sample preview
 if job_specs:
     s_kw, s_biz, s_plat, s_type = job_specs[0]

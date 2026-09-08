@@ -1,0 +1,46 @@
+{
+  "status": "complete",
+  "keywords": [
+    64
+  ],
+  "legs": [
+    {
+      "name": "candidate",
+      "before_mb": 39607.792208,
+      "status": "valid",
+      "after_mb": 39604.881585,
+      "used_mb": 2.9106229999961215,
+      "completed_rows": 1,
+      "successful_pairs": 1,
+      "mb_per_scheduled_job": 2.9106229999961215,
+      "mb_per_success": 2.9106229999961215,
+      "expected_pairs": [
+        [
+          "110064",
+          "gemini"
+        ]
+      ],
+      "actual_pairs": [
+        [
+          "110064",
+          "gemini"
+        ]
+      ]
+    }
+  ],
+  "driver": "reframe_single",
+  "jobs_per_leg": 1,
+  "single_attempt": true,
+  "cumulative_spend_baseline_mb": 39607.931103,
+  "budget_mb": 100,
+  "leg_timeout_s": 600,
+  "limitations": [
+    "Evomi is account-wide; remote consumers are undetectable.",
+    "Meter lag means the spend guard can overshoot 100 MB.",
+    "Matched serial legs do not eliminate time/order effects.",
+    "Keywords were previously successful; this is not a random estimate of the full stale set.",
+    "GOST ledger is partial local traffic accounting, not directly comparable to billed MB."
+  ],
+  "settled_baseline_reused_from": "cost_one_cache_20260908/report.json",
+  "cache_trial": true
+}

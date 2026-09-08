@@ -1,5 +1,108 @@
 # Proxy Cost Specification — Fleet Operations
 
+## 2026-09-08 completed phone comparison
+
+`cost_trial_20260907_v3/report.json` finished 06:32 local; meter unchanged at
+06:47 (41,785.365754 MB). Same ten Gemini keywords per leg, three workers:
+
+| Routing | Billed MB | Successes | MB/scheduled job | MB/success |
+|---|---:|---:|---:|---:|
+| Existing ZIP-first ladder | 543.618749 | 6/10 | 54.36 | 90.60 |
+| City-first ladder | 369.781804 | 8/10 | 36.98 | 46.22 |
+
+Observed reductions: 31.98% billed MB, 48.98% MB/success. Not a causal estimate
+for all platforms: serial ordering, previously successful selected keywords, and
+different realized internal failures/rotations are limitations. Geo quality still
+requires review before rollout. This does NOT establish parity with daily cost.
+
+Internal amplification: control 6 OCR recaptures + 4 generation-timeout rotations,
+20 warmup/setup cycles. Candidate 4 OCR recaptures + 2 generation-timeout rotations
++ 1 input rotation, 17 cycles. Outer retries were zero in both. GOST terminal
+connection byte totals (lower bounds) were 398.21 MB and 339.61 MB respectively;
+these are not exact provider billing or per-request attribution.
+
+Next authorized test: `cost_timeout_20260908/report.json`, identical city-first
+legs except generation-timeout rotation off in candidate. Screenshot validation
+stays enabled; no full stale queue restart. Total 1 GB guard with meter-lag caveat.
+
+## 2026-09-07 investigation: current measurements supersede estimates below
+
+Full stale ranking remains paused at the user's request. The historical sections
+below are retained for context, not current budgeting.
+
+| Workload | Billed MB/attempt | Billed MB/success | Evidence |
+|---|---:|---:|---|
+| Daily, Edge pm-clear enabled | 3.96 | 5.2 | 8,537 MB / 2,155 attempts / 1,648 sessions |
+| Ranking with retries | 29.17 | 52.31 | 26,836 MB / 920 attempts / 513 successes, chain 09-07 |
+| Controlled ZIP download | n/a | n/a | 10/10 successful 1 MB downloads; 13.792797 MB billed |
+| Controlled city download, fresh short session IDs | n/a | n/a | 10/10 successful 1 MB downloads; approximately 9.77 MB observed, provisional |
+
+ZIP-download meter: 51,957.710445 -> 51,943.917648 MB. This measures proxy
+billing, **not ranking success or ranking MB/success**. It used no phones. Waited
+for the balance deduction and six unchanged ten-second reads afterward.
+
+City meter started at 51,930.534488 MB. The initial settled reading of
+51,921.666108 was premature: another charge posted by 20:59, with the balance
+at approximately 51,920.77 MB. The 21:02 full-precision reading was
+51,920.766357 MB (9.768131 MB deducted, approximately 29.18% below ZIP).
+However, the daily started proxy traffic at about 21:01, before a fully isolated
+five-minute settlement window could be verified. Treat this saving as provisional,
+not a proven ranking reduction. The earlier 35.70% claim is withdrawn.
+API `extra` stayed at 7.76 MB during the initial corrected city run; the observed
+additional usage was `default` traffic. City accuracy/result quality still needs
+the matched phone sample before the production policy changes.
+
+Discarded city controls: an early trial reused the ZIP session IDs and used an
+underscore city name, so its 13.37 MB deduction cannot establish city savings.
+Fresh long session IDs produced ten rejected requests (0 completions). Correct
+dot-separated `new.york` plus production-style ten-character random sessions
+gave ten completed downloads. Do not use rejected requests as cheap successes.
+
+The matched ranking trial is now managed by `com.deviceagent.bandwidthtrial0907`.
+It waits for the daily and uses ten fixed Gemini keywords per leg, first normal
+ZIP-first routing then `EVOMI_CITY_FIRST=1`, with all other controls identical.
+Outputs: `cost_trial_20260907_v3/report.json`, per-leg CSV/logs/meter/byte ledger.
+The original waiting supervisor was replaced before starting any jobs to load
+a minimum five-minute post-traffic wait plus two minutes of stable readings.
+The final supervisor also waits five minutes after the daily, rejects top-ups
+and between-leg meter drift, and validates exactly ten expected distinct pairs.
+The keywords were previously successful, not a random sample of the stale set.
+It has no authority or code to resume the full stale queue. A 1 GB guard stops
+the sample (delayed accounting can overshoot it), with a 10 GB balance reserve.
+
+The Evomi usage API shows 4,861.18 MB of `extra` billing versus 27,031.84 MB
+total across hourly buckets 2026-09-06 20:00 through 2026-09-07 01:00 UTC,
+approximately the expensive ranking leg (bucket boundaries differ from the leg).
+The extra component is 17.98%. Ranking emits `_zip-...`, the only expert
+parameter found in its generated credentials. Daily does not. Evomi documents
+ZIP as an extra-bandwidth feature:
+https://docs.evomi.com/proxy-instructions/residential-proxies/expert-settings/zipcode/
+https://docs.evomi.com/public-api/endpoints/bandwidth-usage/
+
+Measurement corrections:
+
+- On macOS, `seq 1 0` emits `1` and `0`. Thus the former zero-retry test actually
+  launched two retry rounds. Fixed using an arithmetic loop; 0/1/2 cases checked.
+- Immediate unchanged balances do not mean zero traffic; billing arrived later
+  during the controlled download. Earlier interrupted samples lack attribution.
+- A 2–3 minute absence of CSV output does not prove startup failure. Ranking
+  includes a 60-second warmup plus generation. Optional phase timestamps now
+  distinguish tunnel, warmup, reset, and session time.
+- The proposed Gemini OCR bypass also bypassed inconsistent-rank detection.
+  It now requires a parsed text rank with no inconsistency, and is opt-in again.
+- Shorter tunnel waits and skipped input rotations remain opt-in; neither has a
+  matched result-quality/cost sample proving an improvement.
+- Optional GOST_COST_LEDGER saves sanitized per-listener traffic counters before
+  log removal. These count completed connections and are lower bounds; Evomi is
+  still the billing authority.
+
+Browser cache is not automatically erased by a new proxy IP. Explicit browser
+data clearing causes cold downloads; the earlier cache explanation below is
+inaccurate. Screenshot transfer over ADB is local, but browser reloads/repeated
+generation caused by screenshot validation consume proxy traffic.
+
+---
+
 **Version:** 1.0 · **Date:** 2026-08-14 · **Owner:** Fleet Ops
 **Purpose:** Explain what our proxy (rented internet connection) usage costs, per check and per
 batch, **and why each number is what it is** — so the team can budget and make provider decisions.

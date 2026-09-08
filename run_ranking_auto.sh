@@ -9,10 +9,12 @@ cd /Users/seolocalph/projects/device-agent
 
 DATE="${1:?usage: run_ranking_auto.sh <DATE> [scope]}"
 SCOPE="${2:-never_ranked}"
-KW_IDS="/tmp/ranking_kw_ids_${DATE}.json"
-CSV="/Users/seolocalph/projects/device-agent/rabbitmq_audit_results_${DATE}_ranking.csv"
+KW_IDS="${KEYWORD_IDS_FILE:-/tmp/ranking_kw_ids_${DATE}.json}"
+# A meter test must not contaminate the stale-set retry CSV.  The normal path
+# keeps the historic file name; an explicit AUDIT_CSV gets its own result set.
+CSV="${AUDIT_CSV:-/Users/seolocalph/projects/device-agent/rabbitmq_audit_results_${DATE}_ranking.csv}"
 # append_row date-splits CSV into <base>_<rowdate>.csv — match all of them for retry diffing.
-CSV_GLOB="/Users/seolocalph/projects/device-agent/rabbitmq_audit_results_${DATE}_ranking*.csv"
+CSV_GLOB="${CSV%.csv}*.csv"
 LOG="/private/tmp/ranking_auto_${DATE}.log"
 
 export SSL_CERT_FILE=$(python3 -c "import certifi;print(certifi.where())")
@@ -66,10 +68,23 @@ else
   echo "[rank ${DATE}] proxy=Decodo host=${PROXY_HOST} port=${PROXY_PORT} user=${PROXY_BASE_USER} (zip geo)" | tee -a "$LOG"
 fi
 export DATE AUDIT_CSV="$CSV" KEYWORD_IDS_FILE="$KW_IDS"
+# Verified 2026-09-08 on v79: capture the SAME Gemini answer before regenerating.
+# Ranking-only opt-in default; daily and proxy targeting stay unchanged. Rollback: 0.
+# One metered success is not a fleet-wide cost estimate; retain the paused queue.
+export RANK_GEMINI_SAME_ANSWER_REFRAME="${RANK_GEMINI_SAME_ANSWER_REFRAME:-1}"
+# Experimental controls stay off until matched samples establish cost AND quality.
+# Text-only mode still rejects inconsistent ranks; a missing screenshot alone may
+# then avoid a full regeneration. The historical wipe theory is not established.
+export RANK_GEMINI_RANK_TEXT_ONLY="${RANK_GEMINI_RANK_TEXT_ONLY:-0}"
+export AEO_ROTATE_ON_INPUT_FAILED="${AEO_ROTATE_ON_INPUT_FAILED:-1}"
+export AEO_TUNNEL_ATTEMPTS="${AEO_TUNNEL_ATTEMPTS:-15}"
 
 # auto-detect live phones; ranking caps workers (router stability — the audit path
 # does many more proxy handshakes/job than the daily, so keep this modest, default 6).
-eval "$(python3 probe_phones.py 2>/tmp/probe_rank_${DATE}.log)"   # DOWN=... GOOD=N
+# probe_phones imports the runtime roster, whose informational output is not shell
+# syntax.  Evaluate only its two assignment records; otherwise those messages are
+# executed as commands and make a healthy run look broken.
+eval "$(python3 probe_phones.py 2>/tmp/probe_rank_${DATE}.log | grep -E '^(DOWN|GOOD)=')"
 export DEVICE_EXCLUDE="${DEVICE_EXCLUDE:-$DOWN}"
 CAP="${WORKERS_CAP:-6}"
 WORKERS=$(( GOOD < CAP ? GOOD : CAP )); export WORKERS
@@ -102,7 +117,13 @@ fi
 
 # 3) retry loop: only errors/ocr_no_answer re-run (success+no_rank terminal)
 prev=-1; stable=0; rem=0
-for round in $(seq 1 40); do
+# Test harnesses can set RANK_RETRY_ROUNDS=0 to meter one bounded base wave
+# without silently recycling its failures.  Production keeps forty rounds.
+RANK_RETRY_ROUNDS="${RANK_RETRY_ROUNDS:-40}"
+case "$RANK_RETRY_ROUNDS" in
+  ''|*[!0-9]*) echo "Invalid RANK_RETRY_ROUNDS: expected nonnegative integer" >&2; exit 2 ;;
+esac
+for ((round=1; round<=RANK_RETRY_ROUNDS; round++)); do
   rem=$(EXCLUDE_SUCCESS="$CSV_GLOB" RETRY_KEEP_NORANK=1 DRY_RUN=1 python3 run_ranking.py 2>/dev/null | sed -n 's/.*would run \([0-9]*\) ranking.*/\1/p')
   rem="${rem:-0}"
   echo "[rank ${DATE} retry $round] $(date) remaining=$rem" | tee -a "$LOG"

@@ -1,0 +1,62 @@
+{
+  "status": "partial",
+  "keywords": [
+    553,
+    573,
+    538,
+    589,
+    564,
+    340,
+    617,
+    357,
+    372,
+    399
+  ],
+  "legs": [
+    {
+      "name": "candidate",
+      "before_mb": 39604.881585,
+      "status": "partial",
+      "completed_rows": 6,
+      "successful_pairs": 6,
+      "after_mb": 39580.175681,
+      "used_mb": 24.705904000002192
+    }
+  ],
+  "driver": "cache_pilot",
+  "jobs_per_leg": 10,
+  "single_attempt": true,
+  "hard_deadline_utc": "2026-09-08T11:52:00Z",
+  "cumulative_spend_baseline_mb": null,
+  "budget_mb": 150,
+  "leg_timeout_s": 1800,
+  "limitations": [
+    "Evomi is account-wide; remote consumers are undetectable.",
+    "Meter lag means the spend guard can overshoot 150 MB.",
+    "Matched serial legs do not eliminate time/order effects.",
+    "Keywords were previously successful; this is not a random estimate of the full stale set.",
+    "GOST ledger is partial local traffic accounting, not directly comparable to billed MB."
+  ],
+  "cache_trial": true,
+  "owned_phone_cancelled": "device-104; wrapper must restore APK/accessibility",
+  "error": "candidate: launcher exit -15",
+  "completed_keyword_ids": [
+    573,
+    538,
+    564,
+    617,
+    357,
+    399
+  ],
+  "remaining_keyword_ids": [
+    553,
+    589,
+    340,
+    372
+  ],
+  "completed_jobs": 6,
+  "remaining_jobs": 4,
+  "success_rows": 6,
+  "error_rows": 0,
+  "partial_cost_settled": true
+}

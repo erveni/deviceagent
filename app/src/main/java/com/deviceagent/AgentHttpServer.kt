@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.62-copilot-frame-top"
-        const val APP_VERSION_CODE = 79
+        const val APP_VERSION_NAME = "0.9.65-gemini-cache-trial"
+        const val APP_VERSION_CODE = 82
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -227,7 +227,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             state: String,
             keyword: String,
             platformsFilter: String? = null,
-            searchAddress: String = ""
+            searchAddress: String = "",
+            geminiCachePrepared: Boolean = false
         ) {
             result.type = "audit"
 
@@ -266,6 +267,39 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     return ok
                 }
 
+                // Kept ahead of the flow branches so a rejected non-Copilot submit
+                // can preserve the on-screen failure state before returning. It does
+                // not wait for generation or alter ranking state when passed "".
+                fun capture(responseText: String, retouch: ((String) -> Unit)? = null) {
+                    // Screenshot FIRST — it's the time-critical visual. On logged-out
+                    // Gemini the answer is wiped ~3s after it renders, so grab the
+                    // picture before anything else (text-from-a11y is fast and runs
+                    // after). Saved to phone-side scoped dir AND base64-inlined so the
+                    // Mac dispatcher writes it locally without an `adb pull`.
+                    val ssName = "audit_${platform}_${System.currentTimeMillis()}"
+                    val ssPath = try { flowEngine.saveScreenshot(ssName) } catch (e: Exception) { null }
+                    pr.screenshotPath = ssPath
+                    // Retouch runs on the saved file so the inlined base64 matches it.
+                    if (!ssPath.isNullOrBlank() && retouch != null) {
+                        try { retouch(ssPath) } catch (e: Exception) {
+                            Log.w("DeviceAgent", "screenshot retouch failed for $ssPath: ${e.message}")
+                        }
+                    }
+                    if (!ssPath.isNullOrBlank()) {
+                        pr.screenshotB64 = try {
+                            val bytes = File(ssPath).readBytes()
+                            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                        } catch (e: Exception) {
+                            Log.w("DeviceAgent", "screenshot b64 encode failed for $ssPath: ${e.message}")
+                            null
+                        }
+                    }
+                    val (pos, total) = flowEngine.extractRankingFromText(responseText)
+                    pr.rankingPosition = pos
+                    pr.rankingTotal = total
+                    pr.responseText = responseText
+                }
+
                 try {
                     // Audit flow MATCHES daily exactly. Steps below are identical to
                     // executeSessionStatic — no audit-only guards, no platform-specific
@@ -300,8 +334,15 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                             copilotAnswer.isNotEmpty()
                         }
                     } else {
-                        if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
-                            pr.status = "error"; pr.error = "reset_chrome failed"; continue
+                        // Explicit host-prepared experiment only. The host closes old
+                        // tabs, clears cookies/origin state and verifies a fresh blank
+                        // page while retaining HTTP assets. Default and daily unchanged.
+                        if (geminiCachePrepared && platformsFilter == "gemini" && platform == "gemini") {
+                            step("reset_chrome_host_cache_prepared") { true }
+                        } else {
+                            if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
+                                pr.status = "error"; pr.error = "reset_chrome failed"; continue
+                            }
                         }
                         Thread.sleep(500)
                         if (!step("navigate") { flowEngine.navigateTo(platform) }) {
@@ -311,49 +352,26 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         step("dismiss_popups") { flowEngine.dismissPlatformPopups(platform); true }
                         Thread.sleep(500)
                         if (!step("input") { flowEngine.inputText(prompt) }) {
+                            // Keep the visible transient state that left the composer
+                            // undiscoverable. This remains audit-only and returns before
+                            // submit/generation, so it adds no further page traffic.
+                            capture("")
                             pr.status = "error"; pr.error = "input failed"; continue
                         }
                         Thread.sleep(300)
-                        step("submit") { flowEngine.submit(platform) }
+                        if (!step("submit") { flowEngine.submit(platform) }) {
+                            // A missing SEND button / rejected tap cannot recover by
+                            // waiting for generation. Save the visible failure state
+                            // for diagnosis, then release the proxy session promptly.
+                            capture("")
+                            pr.status = "error"; pr.error = "submit failed"; continue
+                        }
                         // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
                         // waste the window on a long pre-wait.
                         Thread.sleep(if (platform == "gemini") 400 else 2000)
                         if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
                             pr.status = "error"; pr.error = "generation timeout"; continue
                         }
-                    }
-
-                    // Capture text + rank + screenshot. Factored so the Gemini path can
-                    // run it the INSTANT generation completes (racing the wipe), while
-                    // the others scroll to the rank line first for a cleaner screenshot.
-                    fun capture(responseText: String, retouch: ((String) -> Unit)? = null) {
-                        // Screenshot FIRST — it's the time-critical visual. On logged-out
-                        // Gemini the answer is wiped ~3s after it renders, so grab the
-                        // picture before anything else (text-from-a11y is fast and runs
-                        // after). Saved to phone-side scoped dir AND base64-inlined so the
-                        // Mac dispatcher writes it locally without an `adb pull`.
-                        val ssName = "audit_${platform}_${System.currentTimeMillis()}"
-                        val ssPath = try { flowEngine.saveScreenshot(ssName) } catch (e: Exception) { null }
-                        pr.screenshotPath = ssPath
-                        // Retouch runs on the saved file so the inlined base64 matches it.
-                        if (!ssPath.isNullOrBlank() && retouch != null) {
-                            try { retouch(ssPath) } catch (e: Exception) {
-                                Log.w("DeviceAgent", "screenshot retouch failed for $ssPath: ${e.message}")
-                            }
-                        }
-                        if (!ssPath.isNullOrBlank()) {
-                            pr.screenshotB64 = try {
-                                val bytes = File(ssPath).readBytes()
-                                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                            } catch (e: Exception) {
-                                Log.w("DeviceAgent", "screenshot b64 encode failed for $ssPath: ${e.message}")
-                                null
-                            }
-                        }
-                        val (pos, total) = flowEngine.extractRankingFromText(responseText)
-                        pr.rankingPosition = pos
-                        pr.rankingTotal = total
-                        pr.responseText = responseText
                     }
 
                     if (platform == "copilot") {
@@ -729,6 +747,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     json.optString("keyword", ""),
                     json.optString("platform", "").let { if (it.isBlank()) null else it },
                     json.optString("searchAddress", "").let { if (it == "null") "" else it },
+                    json.optBoolean("geminiCachePrepared", false),
                 )
             }
             else -> {
@@ -867,7 +886,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
 
         val platformFilter = json.optString("platform", "").let { if (it.isBlank()) null else it }
         val searchAddress = json.optString("searchAddress", "").let { if (it == "null") "" else it }
-        executeAuditSession(result, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress)
+        executeAuditSession(result, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress,
+            json.optBoolean("geminiCachePrepared", false))
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -990,9 +1010,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         state: String,
         keyword: String,
         platformFilter: String? = null,
-        searchAddress: String = ""
+        searchAddress: String = "",
+        geminiCachePrepared: Boolean = false
     ) {
-        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress)
+        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress, geminiCachePrepared)
     }
 
     private fun handleMqttConfig(writer: OutputStreamWriter, body: String) {

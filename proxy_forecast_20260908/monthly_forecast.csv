@@ -1,0 +1,21 @@
+scenario,provider,days,planned_ranking_successes,daily_gb_before_buffer,ranking_gb_before_buffer,planning_buffer_multiplier,evomi_equivalent_total_gb,conditional_monthly_usd
+daily_only_ranking_paused,Evomi Core subscription,30,0,256.11,0.0,1,256.11,126.48
+daily_only_ranking_paused,DataImpulse standard targeted (conditional),30,0,256.11,0.0,1,256.11,512.22
+daily_only_ranking_paused,Rayobyte Professional (conditional),30,0,256.11,0.0,1,256.11,384.17
+daily_only_ranking_paused,Decodo PAYG (conditional),30,0,256.11,0.0,1,256.11,1024.44
+one_sweep,Evomi Core subscription,30,3492,256.11,182.673123,1,438.783123,215.99
+one_sweep,DataImpulse standard targeted (conditional),30,3492,256.11,182.673123,1,438.783123,877.57
+one_sweep,Rayobyte Professional (conditional),30,3492,256.11,182.673123,1,438.783123,658.17
+one_sweep,Decodo PAYG (conditional),30,3492,256.11,182.673123,1,438.783123,1755.13
+base_two_sweeps,Evomi Core subscription,30,6984,256.11,365.346246,1,621.456246,305.5
+base_two_sweeps,DataImpulse standard targeted (conditional),30,6984,256.11,365.346246,1,621.456246,1242.91
+base_two_sweeps,Rayobyte Professional (conditional),30,6984,256.11,365.346246,1,621.456246,932.18
+base_two_sweeps,Decodo PAYG (conditional),30,6984,256.11,365.346246,1,621.456246,2485.82
+base_plus_planning_buffer,Evomi Core subscription,30,6984,256.11,365.346246,1.2,745.747495,366.41
+base_plus_planning_buffer,DataImpulse standard targeted (conditional),30,6984,256.11,365.346246,1.2,745.747495,1491.49
+base_plus_planning_buffer,Rayobyte Professional (conditional),30,6984,256.11,365.346246,1.2,745.747495,1118.62
+base_plus_planning_buffer,Decodo PAYG (conditional),30,6984,256.11,365.346246,1.2,745.747495,2982.99
+fourteen_day_cadence_sensitivity,Evomi Core subscription,30,7482.857,256.11,391.442406,1,647.552406,318.29
+fourteen_day_cadence_sensitivity,DataImpulse standard targeted (conditional),30,7482.857,256.11,391.442406,1,647.552406,1295.1
+fourteen_day_cadence_sensitivity,Rayobyte Professional (conditional),30,7482.857,256.11,391.442406,1,647.552406,971.33
+fourteen_day_cadence_sensitivity,Decodo PAYG (conditional),30,7482.857,256.11,391.442406,1,647.552406,2590.21

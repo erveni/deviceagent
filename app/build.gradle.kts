@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 79
-        versionName = "0.9.62-copilot-frame-top"
+        versionCode = 82
+        versionName = "0.9.65-gemini-cache-trial"
     }
 
     buildTypes {

@@ -400,25 +400,29 @@ _ANSWER_RE = re.compile(r"rank:\s*\d+\s*/\s*\d+|\[rank|google maps|maps:\s*(yes|
 _WALL_RE = re.compile(r"verify you are human|not a robot|captcha|just a moment|press & hold", re.I)
 
 
-def _screenshot_has_answer(path: str) -> bool:
+def _screenshot_has_answer(path: str, *, strict: bool = False) -> bool:
     """OCR a ranking screenshot and decide whether it actually shows the answer.
 
     Returns True if the rendered image contains answer markers (RANK / Google Maps
     / numbered business list), False if it shows only the prompt, a blank page, or
     a login/captcha wall. Fail-open: if the OCR tool is missing or errors, returns
-    True so a tooling gap never blocks the audit pipeline."""
+    True so a tooling gap never blocks the audit pipeline. Experimental repair
+    callers use strict=True so a tooling failure cannot count as verified proof."""
     global _OCR_WARNED
     if os.environ.get("OCR_VALIDATE_SCREENSHOT", "1") != "1":
-        return True
+        return not strict
     if not path or not os.path.exists(path) or not os.path.exists(_OCR_BIN):
         if not os.path.exists(_OCR_BIN) and not _OCR_WARNED:
             print(f"  [ocr] tool not found at {_OCR_BIN} — screenshot validation disabled", flush=True)
             _OCR_WARNED = True
-        return True
+        return not strict
     try:
-        txt = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40).stdout
+        result = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40)
+        if strict and result.returncode != 0:
+            return False
+        txt = result.stdout
     except Exception:
-        return True
+        return not strict
     if _WALL_RE.search(txt):
         return False
     if _ANSWER_RE.search(txt):
@@ -469,7 +473,7 @@ def _parse_rank_markers(txt: str, tag: str) -> tuple[str, str, str, str] | None:
     return None
 
 
-def _recover_rank_via_ocr(path: str) -> tuple[str, str, str, str] | None:
+def _recover_rank_via_ocr(path: str, *, strict: bool = False) -> tuple[str, str, str, str] | None:
     """Read the rank off the screenshot when the a11y extraction came back empty.
 
     Returns (status, rank_position, rank_total, rank_context) or None when the OCR
@@ -479,10 +483,33 @@ def _recover_rank_via_ocr(path: str) -> tuple[str, str, str, str] | None:
     if not path or not os.path.exists(path) or not os.path.exists(_OCR_BIN):
         return None
     try:
-        txt = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40).stdout
+        result = subprocess.run([_OCR_BIN, path], capture_output=True, text=True, timeout=40)
+        if strict and result.returncode != 0:
+            return None
+        txt = result.stdout
     except Exception:
         return None
+    if strict:
+        markers = list(_OCR_RANK_RE.finditer(txt))
+        if len(markers) != 1:
+            return None
+        pos, total = int(markers[0].group(1)), int(markers[0].group(2).rstrip('+'))
+        if not 0 < pos <= total:
+            return None  # Do not normalize malformed/unranked evidence into a matching rank.
     return _parse_rank_markers(txt, "ocr")
+
+
+def _screenshot_has_expected_rank(path: str, expected_rank: tuple[int, int]) -> bool:
+    """Repair-only proof: actual OCR must show the exact expected numeric rank."""
+    if not _screenshot_has_answer(path, strict=True):
+        return False
+    recovered = _recover_rank_via_ocr(path, strict=True)
+    if not recovered or recovered[0] != "success":
+        return False
+    try:
+        return (int(recovered[1]), int(recovered[2])) == tuple(expected_rank)
+    except (TypeError, ValueError):
+        return False
 
 
 def _shows_list_and_rank(path: str) -> bool:
@@ -705,7 +732,7 @@ def _adb(serial: str, *args: str, timeout: float = 10) -> subprocess.CompletedPr
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
-def _wait_tunnel(serial: str, max_attempts: int = 15) -> bool:
+def _wait_tunnel(serial: str, max_attempts: int | None = None) -> bool:
     """Poll for tun0 UP AND real internet through it. tun0-up alone is NOT enough:
     a dead Decodo exit gives a tunnel with no DNS (DNS_PROBE_FINISHED_NO_INTERNET
     on the phone), so the audit page never loads -> no input field (input_failed).
@@ -713,6 +740,10 @@ def _wait_tunnel(serial: str, max_attempts: int = 15) -> bool:
     blocked domain doesn't false-fail. Caller rotates the Decodo session on False."""
     import time
 
+    # Allow a bounded experiment with fewer checks. Keep fifteen by default:
+    # a cold, slow tunnel is not evidence of failure until the budget expires.
+    if max_attempts is None:
+        max_attempts = int(os.environ.get("AEO_TUNNEL_ATTEMPTS", "15"))
     for _ in range(max_attempts):
         r = _adb(serial, "shell", "ifconfig", "tun0", timeout=5)
         if "UP" in r.stdout and "inet" in r.stdout:
@@ -779,6 +810,17 @@ def _http_timeout_for(platform: str) -> int:
 # Under fleet-wide ranking it adds a 2nd Decodo session + a 15s timeout per job,
 # which is the main source of concurrent-session contention (preflight rc=28).
 _SKIP_PREFLIGHT = os.environ.get("AEO_SKIP_PREFLIGHT") == "1"
+
+def _ranking_warmup_seconds() -> float:
+    """Bounded experimental control; preserve historical 60 seconds by default."""
+    value = float(os.environ.get("RANK_WARMUP_S", "60"))
+    if not 0 <= value <= 120:
+        raise ValueError("RANK_WARMUP_S must be finite and between 0 and 120")
+    return value
+
+
+_RANK_WARMUP_S = _ranking_warmup_seconds()
+_RANK_SINGLE_ATTEMPT = os.environ.get("RANK_SINGLE_ATTEMPT", "0") == "1"
 
 
 # Poll the phone instead of holding one HTTP request open for the whole job.
@@ -915,7 +957,7 @@ def _classify(response: dict, platform: str) -> tuple[str, str, str, str, str, s
     return ("error", "", "", "", ss_path, ss_b64)
 
 
-def _write_b64_screenshot(b64: str, platform: str, keyword_id: int) -> str:
+def _write_b64_screenshot(b64: str, platform: str, keyword_id: int, *, artifact: str = "") -> str:
     """Decode an inline base64 PNG into audit_results/<Platform>/kw{kid}_{platform}_{ts}.png.
 
     Returns the local path on success, empty string on any failure.
@@ -928,7 +970,10 @@ def _write_b64_screenshot(b64: str, platform: str, keyword_id: int) -> str:
     date_dir = datetime.now().strftime("%Y-%m-%d")
     local_dir = os.path.join(AUDIT_RESULTS_DIR, date_dir, plat_dir)
     os.makedirs(local_dir, exist_ok=True)
-    fname = f"kw{keyword_id}_{platform.lower()}_{int(datetime.now(timezone.utc).timestamp())}.png"
+    if artifact not in ("", "app_original", "reframe_source"):
+        raise ValueError("Unsupported screenshot artifact")
+    suffix = f"_{artifact}" if artifact else ""
+    fname = f"kw{keyword_id}_{platform.lower()}_{int(datetime.now(timezone.utc).timestamp())}{suffix}.png"
     local_path = os.path.join(local_dir, fname)
     try:
         with open(local_path, "wb") as f:
@@ -1248,6 +1293,22 @@ def dispatch_audit_job(
         return row
 
     device_label, serial = DEVICES[device_idx]
+    phase_started = time.monotonic()
+    gost = None
+    network_trace = None
+
+    def phase(name: str) -> None:
+        if os.environ.get("RANK_PHASE_TRACE") == "1":
+            print(f"[rank-phase] device={device_label} kw={job.get('keyword_id')} "
+                  f"platform={platform} elapsed={time.monotonic()-phase_started:.1f}s "
+                  f"phase={name} epoch={time.time():.6f}", flush=True)
+        if os.environ.get("GOST_PHASE_LEDGER") and gost is not None:
+            try:
+                gost.sample_phase_metrics(name.replace('.', '_'))
+            except Exception:
+                pass  # Optional diagnostics must never change job outcome.
+
+    phase("acquired")
     keyword_id = job.get("keyword_id")
     if keyword_id is None:
         POOL.release(device_idx)
@@ -1336,7 +1397,9 @@ def dispatch_audit_job(
         }],
         base_port=gost_port,
     )
+    phase("gost_start")
     gost.start(wait_seconds=2.0)
+    phase("gost_ready")
 
     # SNI relay: the phone connects to the relay (gost_port+1), which recovers
     # the TLS SNI and re-dials gost BY HOSTNAME — required for mobile Decodo,
@@ -1358,12 +1421,16 @@ def dispatch_audit_job(
     def _setup_and_post() -> dict:
         """Bring socksdroid + GPS + forwarding online then POST the audit.
         Returns the parsed HTTP response. Caller decides whether to retry."""
+        nonlocal network_trace
+        phase("socksdroid_connect")
         socksdroid_connect(serial, phone_port)
         time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
+        phase("tunnel_probe")
         if not _wait_tunnel(serial):
             # Dead tunnel (tun0 up but no DNS/internet). Return a proxy_unreachable
             # response instead of raising, so the existing rotate-Decodo-session +
             # retry path below kicks in (a fresh session usually has working DNS).
+            phase("tunnel_failed")
             return {"platforms": {platform.lower(): {"status": "error", "error": "proxy_unreachable"}},
                     "error": "proxy_unreachable"}
         # Capture resolved Decodo exit IP via Mac-side curl through the gost SOCKS5
@@ -1394,11 +1461,12 @@ def dispatch_audit_job(
                           f"stderr={cp.stderr.strip()[:120]!r} stdout={resolved_ip[:120]!r}", flush=True)
             except Exception as e:
                 print(f"  [preflight-ip] {serial} gost:{gost_port} curl raised {type(e).__name__}: {e}", flush=True)
-        # IP warmup — mimic wave's implicit settle time without curl probes.
-        # Cold Decodo IPs benefit from a pure-sleep pause before HTTPS fires;
-        # ports the rolling fix (run_rolling_test.py 2026-05-16) to audit. Zero
-        # traffic during these 60s, so no router/ISP load spike.
-        time.sleep(60)
+        # Historical warmup, now independently measurable. Sleep does not itself
+        # send traffic, but SocksDroid routes background apps too, so connected
+        # idle time is NOT known to be free. Keep 60s unless a trial opts in.
+        phase(f"warmup_{_RANK_WARMUP_S:g}s")
+        time.sleep(_RANK_WARMUP_S)
+        phase("location_setup")
         # Opt-in: a job may carry EXACT mock GPS (mock_lat/mock_lng) — used by the
         # CitedLogic capture path which puts the device at a precise lat/lng instead
         # of deriving it from the proxy zip. Falls back to zip-derived otherwise.
@@ -1474,7 +1542,38 @@ def dispatch_audit_job(
         # 253/534 vs chatgpt 455/537, and 3 phones at 0-4%). `pm clear` is the
         # device-owner clearApplicationUserData equivalent and always works over adb.
         # Best-effort: never fail a job over the clear itself.
-        if os.environ.get("CHROME_HARD_CLEAR", "1") == "1":
+        phase("browser_reset")
+        if os.environ.get("RANK_GEMINI_CACHE_TRIAL", "0") == "1":
+            if (device_label != "device-104" or platform.lower() != "gemini"
+                    or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None):
+                raise RuntimeError("cache trial restricted to one device-104 Gemini audit")
+            with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/health", timeout=5) as health_response:
+                cache_health = json.load(health_response)
+            if cache_health.get("versionCode") != 82 or not cache_health.get("accessibility"):
+                raise RuntimeError("cache trial requires verified test APK v82")
+            from tools.gemini_cache_reset import prepare_gemini_cache
+            phase("cache_prepare_start")
+            _adb(serial, "shell", "am", "start", "-n",
+                 "com.android.chrome/com.google.android.apps.chrome.Main", timeout=10)
+            time.sleep(1)
+            cache_prepared = prepare_gemini_cache(serial)
+            cache_evidence_suffix = f"_kw{int(keyword_id)}" if os.environ.get("RANK_CACHE_PILOT") == "1" else ""
+            if os.environ.get("GOST_PHASE_LEDGER"):
+                Path(os.environ["GOST_PHASE_LEDGER"]).with_name(f"cache_prepared{cache_evidence_suffix}.json").write_text(
+                    json.dumps(cache_prepared, indent=2))
+            if not cache_prepared.get("ok"):
+                raise RuntimeError("cache preparation failed; refusing audit: "
+                                   + str(cache_prepared.get("reason", "unknown")))
+            body["geminiCachePrepared"] = True
+            phase("cache_prepare_done")
+            if os.environ.get("GOST_PHASE_LEDGER"):
+                try:
+                    from tools.gemini_network_trace import start_gemini_network_trace
+                    network_trace = start_gemini_network_trace(
+                        serial, Path(os.environ["GOST_PHASE_LEDGER"]).with_name(f"network{cache_evidence_suffix}.jsonl"))
+                except Exception as trace_error:
+                    print(f"  [network-trace] unavailable: {type(trace_error).__name__}", flush=True)
+        elif os.environ.get("CHROME_HARD_CLEAR", "1") == "1":
             try:
                 _adb(serial, "shell", "pm", "clear", "com.android.chrome", timeout=30)
             except Exception as e:
@@ -1490,7 +1589,10 @@ def dispatch_audit_job(
                     _adb(serial, "shell", *cmd, timeout=60)
                 except Exception as e:
                     print(f"  [edge-clear] {serial}: {type(e).__name__} {e} — continuing")
-        return _post_audit(http_port, body)
+        phase("session_start_and_poll")
+        result = _post_audit(http_port, body)
+        phase("session_returned")
+        return result
 
     try:
         forward_set = True  # _setup_and_post installs the forward
@@ -1508,14 +1610,22 @@ def dispatch_audit_job(
         first_err = (plat_block_first.get("error") or "").lower()
         top_err_first = (response.get("error") or "").lower()
         combined = first_err + " " + top_err_first
+        # A slow model response is not evidence that the residential exit is bad.
+        # Keep the historic behavior by default, but make it independently
+        # measurable before paying for a second full generation on every timeout.
+        _rotate_generation_timeout = os.environ.get("AEO_ROTATE_ON_GENERATION_TIMEOUT", "1") == "1"
+        # Input discovery can fail for either UI state or network reasons. Allow
+        # testing whether another tunnel recovers enough results to justify its
+        # cost, without changing the historical retry behavior by default.
+        _rotate_input_failed = os.environ.get("AEO_ROTATE_ON_INPUT_FAILED", "1") == "1"
         if (
             "navigate" in first_err
             or "proxy_unreachable" in combined
-            or "input failed" in combined
-            or "generation timeout" in combined
+            or (_rotate_input_failed and "input failed" in combined)
+            or (_rotate_generation_timeout and "generation timeout" in combined)
             or "signup_wall" in combined
             or "cdp_no_capture" in combined
-        ):
+        ) and not _RANK_SINGLE_ATTEMPT:
             if "proxy_unreachable" in combined: reason = "proxy_unreachable"
             elif "input failed" in combined: reason = "input_failed"
             # Perplexity served the logged-out sign-up wall: this exit IP is burned
@@ -1584,12 +1694,45 @@ def dispatch_audit_job(
         # 4. Classify + build row
         duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
         status, rank_pos, rank_total, rank_ctx, ss_remote, ss_b64 = _classify(response, platform)
+        # Local evidence only: preserve the inline image BEFORE a CDP capture
+        # replaces it. Separate filename prevents same-second overwrites. This
+        # does not alter which image passes the existing result-validation gate.
+        if os.environ.get("RANK_PHASE_TRACE", "0") == "1" and ss_b64:
+            _original = _write_b64_screenshot(
+                ss_b64, platform, int(keyword_id), artifact="app_original")
+            print(f"  [capture-evidence] kw{keyword_id} {platform} app_original={_original}", flush=True)
         # CitedLogic capture mode: stitch the multi-frame full-answer screenshot.
         # Falls back to the single frame, then adb pull. Audit mode is unchanged.
         ss_local = ""
         if capture_prompt is not None:
             _frames = (response.get("platforms") or {}).get(platform.lower(), {}).get("screenshot_frames") or []
             ss_local = _write_stitched_screenshot(_frames, platform, int(keyword_id))
+        # Recover the original viewport BEFORE CDP cleanup can remove the prompt
+        # containing the expected keyword. No change to default/live selection.
+        _reframe_attempted = False
+        if (os.environ.get("RANK_GEMINI_SAME_ANSWER_REFRAME", "0") == "1"
+                and platform.lower() == "gemini" and capture_prompt is None
+                and status == "success" and ss_b64):
+            _early_text = (response.get("platforms") or {}).get("gemini", {}).get("response_text", "")
+            _early_rank = _parse_rank_markers(_early_text, "text")
+            if (_early_rank and not _rank_inconsistent(_early_text, entry["biz_name"], platform,
+                                                       entry.get("biz_aka", ""))):
+                _source = _write_b64_screenshot(ss_b64, platform, int(keyword_id), artifact="reframe_source")
+                if _source and not _screenshot_has_expected_rank(
+                        _source, (int(_early_rank[1]), int(_early_rank[2]))):
+                    from tools.gemini_same_answer_reframe import reframe_same_answer
+                    _reframe_attempted = True
+                    _early_path = Path(_source).with_name(Path(_source).stem + f"_reframe_{time.time_ns()}.png")
+                    _early_result = reframe_same_answer(
+                        serial, _keyword_text(entry, int(keyword_id)),
+                        (int(_early_rank[1]), int(_early_rank[2])), _early_path,
+                        ocr_validator=lambda path: _screenshot_has_expected_rank(
+                            path, (int(_early_rank[1]), int(_early_rank[2]))))
+                    print(f"  [same-answer-reframe] kw{keyword_id} {platform} before_cleanup "
+                          f"ok={_early_result.get('ok')} reason={_early_result.get('reason')}", flush=True)
+                    if _early_result.get("ok"):
+                        ss_local = _early_result["screenshot"]
+                        duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
         # ChatGPT: position ranks 1-3 below the header via the page's own geometry
         # (cdp_js_frame) — the app's gesture scroll can't fight ChatGPT's auto-scroll.
         # Perplexity: strip the auto-embedded map and re-capture the cleaned viewport
@@ -1597,6 +1740,8 @@ def dispatch_audit_job(
         # app screenshot if CDP fails.
         if (not ss_local and capture_prompt is None
                 and platform.lower() in ("chatgpt", "perplexity", "gemini")
+                and not (platform.lower() == "gemini"
+                         and os.environ.get("RANK_GEMINI_APP_SCREENSHOT", "0") == "1")
                 and status in ("success", "no_rank")):
             if platform.lower() == "chatgpt":
                 ss_local = _cdp_js_frame_screenshot(serial, device_idx, platform, int(keyword_id))
@@ -1638,13 +1783,52 @@ def dispatch_audit_job(
         # it still shows no answer, demote to a retryable status so a bad
         # screenshot is never recorded as a good result. (OCR_VALIDATE_SCREENSHOT=0
         # disables this; _screenshot_has_answer fails open if the OCR tool is gone.)
-        # Gemini's logged-out chat WIPES the answer ~3s after it renders, so its
-        # screenshot is expected to be blank/Deleted even when we captured the
-        # ranking from the a11y tree. Success for Gemini = ranking captured, NOT a
-        # valid screenshot — so skip OCR screenshot validation for it.
+        # Gemini can have valid response text while the selected late CDP image
+        # lacks the answer. That does NOT establish that the immediate app image
+        # was good, nor justify disabling screenshot validation. Trace mode saves
+        # both artifacts; app-screenshot selection is an independent opt-in test.
         _bad_rank = _rank_inconsistent(resp_text_blob, entry["biz_name"], platform,
                                        entry.get("biz_aka", ""))
-        if status in ("success", "no_rank") and ss_local and (not _answer_ok(ss_local) or _bad_rank):
+        # Experimental local repair BEFORE paying for another generation. Keep
+        # the original artifact, require the same visible answer/rank, and apply
+        # the existing screenshot validator to the newly positioned real screen.
+        # Default off until end-to-end proxy cost and deliverable QA are measured.
+        if (os.environ.get("RANK_GEMINI_SAME_ANSWER_REFRAME", "0") == "1"
+                and not _reframe_attempted
+                and platform.lower() == "gemini" and capture_prompt is None
+                and status == "success" and _txt_rank and not _bad_rank
+                and ss_local and not _screenshot_has_expected_rank(
+                    ss_local, (int(_txt_rank[1]), int(_txt_rank[2])))):
+            from tools.gemini_same_answer_reframe import reframe_same_answer
+            _reframe_path = Path(ss_local).with_name(
+                Path(ss_local).stem + f"_reframe_{time.time_ns()}.png")
+            _reframed = reframe_same_answer(
+                serial, _keyword_text(entry, int(keyword_id)),
+                (int(_txt_rank[1]), int(_txt_rank[2])), _reframe_path,
+                ocr_validator=lambda path: _screenshot_has_expected_rank(
+                    path, (int(_txt_rank[1]), int(_txt_rank[2]))))
+            print(f"  [same-answer-reframe] kw{keyword_id} {platform} "
+                  f"ok={_reframed.get('ok')} reason={_reframed.get('reason')}", flush=True)
+            if _reframed.get("ok"):
+                ss_local = _reframed["screenshot"]
+                duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
+        # Experimental cost guard: Gemini may remove a valid answer before the
+        # post-audit screenshot is OCRed.  When the a11y/text result already has a
+        # parsed rank, preserve that result and the original screenshot for offline
+        # QA instead of paying for a second full proxy-backed generation.  Opt-in
+        # only until its Evomi MB/success and screenshot review are measured.
+        _gemini_rank_text_only = (
+            os.environ.get("RANK_GEMINI_RANK_TEXT_ONLY", "0") == "1"
+            and platform.lower() == "gemini"
+            and status == "success"
+            and capture_prompt is None
+            and bool(_txt_rank)
+            and not _bad_rank
+        )
+        if (status in ("success", "no_rank") and ss_local
+                and not _RANK_SINGLE_ATTEMPT
+                and (not _gemini_rank_text_only)
+                and (not _answer_ok(ss_local) or _bad_rank)):
             _why = "fabricated rank (list vs [RANK])" if _bad_rank else "no answer in screenshot"
             print(f"  [ocr] {_why} kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
             try:
@@ -1693,6 +1877,21 @@ def dispatch_audit_job(
             if status in ("success", "no_rank") and (not ss_local or not _answer_ok(ss_local)
                     or _rank_inconsistent(resp_text_blob, entry["biz_name"], platform)):
                 status = "ocr_no_answer"  # non-terminal -> outer retry loop re-runs it
+
+        # A single-attempt measurement never regenerates an answer to repair a
+        # screenshot. Preserve validation failures instead of counting them cheap.
+        if (_RANK_SINGLE_ATTEMPT and status in ("success", "no_rank")
+                and (_bad_rank or not ss_local or not _answer_ok(ss_local))):
+            status = "ocr_no_answer"
+
+        # Opt-in recovered ranking must show its exact numeric rank, even when
+        # the historical generic gate would accept a numbered list on its own.
+        if (os.environ.get("RANK_GEMINI_SAME_ANSWER_REFRAME", "0") == "1"
+                and platform.lower() == "gemini" and capture_prompt is None
+                and status == "success" and _txt_rank
+                and not _screenshot_has_expected_rank(
+                    ss_local, (int(_txt_rank[1]), int(_txt_rank[2])))):
+            status = "ocr_no_answer"
 
         # Capture per-platform error + last few steps for diagnostics. Top-level
         # response.error is often empty when a specific platform fails — the real
@@ -1769,6 +1968,12 @@ def dispatch_audit_job(
         if forward_set:
             try:
                 _adb(serial, "forward", "--remove", f"tcp:{http_port}", timeout=5)
+            except Exception:
+                pass
+        phase("before_disconnect")
+        if network_trace is not None:
+            try:
+                network_trace.stop()
             except Exception:
                 pass
         try:

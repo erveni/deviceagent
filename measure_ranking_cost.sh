@@ -15,10 +15,13 @@ set -u
 cd /Users/seolocalph/projects/device-agent
 
 PER_PLATFORM="${PER_PLATFORM:-7}"
+PLATFORM_LIST="${PLATFORM_LIST:-chatgpt gemini copilot}"
 LOG="${LOG:-/private/tmp/ranking_cost_measure.log}"
 KW="/tmp/ranking_cost_kw_ids.json"
-CSV="/Users/seolocalph/projects/device-agent/rabbitmq_audit_results_costmeasure.csv"
+CSV="${CSV:-/Users/seolocalph/projects/device-agent/rabbitmq_audit_results_costmeasure.csv}"
+CSV_GLOB="${CSV%.csv}*.csv"
 MAX_WAIT_S="${MAX_WAIT_S:-43200}"   # 12h ceiling
+SETTLE_S="${SETTLE_S:-120}"
 
 say(){ echo "[cost $(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 balance(){ python3 ./evomi_balance.py 2>/dev/null | tr -dc '0-9.'; }
@@ -37,7 +40,7 @@ while [ "$waited" -lt "$MAX_WAIT_S" ]; do
 done
 [ "$waited" -ge "$MAX_WAIT_S" ] && { say "gave up waiting after ${MAX_WAIT_S}s"; exit 1; }
 say "fleet idle after ${waited}s — settling"
-sleep 120
+sleep "$SETTLE_S"
 
 _SECRET=$(aws secretsmanager get-secret-value --secret-id aeo-admin/prod --profile aeo-admin \
           --region us-east-1 --query SecretString --output text 2>/dev/null)
@@ -64,19 +67,18 @@ for f in glob.glob("rabbitmq_audit_results_2026-09-02_ranking*.csv"):
 ids = [k for k in json.load(open("/tmp/ranking_kw_ids_2026-09-02.json")) if str(k) not in done]
 json.dump(ids[: int(sys.argv[1])], sys.stdout)
 PY
-say "measuring $PER_PLATFORM keywords per platform (retries OFF)"
+say "measuring $PER_PLATFORM keywords for: $PLATFORM_LIST (outer retries OFF)"
 
 start=$(balance)
 say "Evomi start: ${start} MB"
 prev="$start"
-for plat in chatgpt gemini copilot; do
+for plat in $PLATFORM_LIST; do
   PLATFORMS="$plat" KEYWORD_IDS_FILE="$KW" python3 -u run_ranking.py >>"$LOG" 2>&1
   now=$(balance)
   used=$(python3 -c "print(round(float('$prev')-float('$now'),2))")
   n=$(python3 -c "
-import csv, os
-p = '$CSV'
-rows = list(csv.DictReader(open(p))) if os.path.exists(p) else []
+import csv, glob
+rows = [r for f in glob.glob('$CSV_GLOB') for r in csv.DictReader(open(f))]
 print(sum(1 for r in rows if r.get('platform') == '$plat'))" 2>/dev/null || echo 0)
   per=$(python3 -c "print(round($used / max($n, 1), 2))")
   say "$plat: ${used} MB over ${n} jobs = ${per} MB/job"

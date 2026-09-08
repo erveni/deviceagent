@@ -1,0 +1,218 @@
+{
+  "status": "complete",
+  "keywords": [
+    143,
+    42,
+    180,
+    95,
+    242,
+    50,
+    64,
+    59,
+    26,
+    192
+  ],
+  "legs": [
+    {
+      "name": "control",
+      "before_mb": 41211.668384,
+      "status": "valid",
+      "after_mb": 40783.471773,
+      "used_mb": 428.1966109999994,
+      "completed_rows": 10,
+      "successful_pairs": 5,
+      "mb_per_scheduled_job": 42.81966109999994,
+      "mb_per_success": 85.63932219999988,
+      "expected_pairs": [
+        [
+          "100059",
+          "gemini"
+        ],
+        [
+          "110064",
+          "gemini"
+        ],
+        [
+          "160095",
+          "gemini"
+        ],
+        [
+          "260143",
+          "gemini"
+        ],
+        [
+          "330180",
+          "gemini"
+        ],
+        [
+          "370192",
+          "gemini"
+        ],
+        [
+          "40026",
+          "gemini"
+        ],
+        [
+          "490242",
+          "gemini"
+        ],
+        [
+          "70042",
+          "gemini"
+        ],
+        [
+          "80050",
+          "gemini"
+        ]
+      ],
+      "actual_pairs": [
+        [
+          "100059",
+          "gemini"
+        ],
+        [
+          "110064",
+          "gemini"
+        ],
+        [
+          "160095",
+          "gemini"
+        ],
+        [
+          "260143",
+          "gemini"
+        ],
+        [
+          "330180",
+          "gemini"
+        ],
+        [
+          "370192",
+          "gemini"
+        ],
+        [
+          "40026",
+          "gemini"
+        ],
+        [
+          "490242",
+          "gemini"
+        ],
+        [
+          "70042",
+          "gemini"
+        ],
+        [
+          "80050",
+          "gemini"
+        ]
+      ]
+    },
+    {
+      "name": "candidate",
+      "before_mb": 40783.471773,
+      "status": "valid",
+      "after_mb": 40426.021483,
+      "used_mb": 357.4502900000007,
+      "completed_rows": 10,
+      "successful_pairs": 6,
+      "mb_per_scheduled_job": 35.745029000000066,
+      "mb_per_success": 59.57504833333345,
+      "expected_pairs": [
+        [
+          "100059",
+          "gemini"
+        ],
+        [
+          "110064",
+          "gemini"
+        ],
+        [
+          "160095",
+          "gemini"
+        ],
+        [
+          "260143",
+          "gemini"
+        ],
+        [
+          "330180",
+          "gemini"
+        ],
+        [
+          "370192",
+          "gemini"
+        ],
+        [
+          "40026",
+          "gemini"
+        ],
+        [
+          "490242",
+          "gemini"
+        ],
+        [
+          "70042",
+          "gemini"
+        ],
+        [
+          "80050",
+          "gemini"
+        ]
+      ],
+      "actual_pairs": [
+        [
+          "100059",
+          "gemini"
+        ],
+        [
+          "110064",
+          "gemini"
+        ],
+        [
+          "160095",
+          "gemini"
+        ],
+        [
+          "260143",
+          "gemini"
+        ],
+        [
+          "330180",
+          "gemini"
+        ],
+        [
+          "370192",
+          "gemini"
+        ],
+        [
+          "40026",
+          "gemini"
+        ],
+        [
+          "490242",
+          "gemini"
+        ],
+        [
+          "70042",
+          "gemini"
+        ],
+        [
+          "80050",
+          "gemini"
+        ]
+      ]
+    }
+  ],
+  "driver": "warmup",
+  "budget_mb": 1000,
+  "leg_timeout_s": 2700,
+  "limitations": [
+    "Evomi is account-wide; remote consumers are undetectable.",
+    "Meter lag means the spend guard can overshoot 1000 MB.",
+    "Matched serial legs do not eliminate time/order effects.",
+    "Keywords were previously successful; this is not a random estimate of the full stale set.",
+    "GOST ledger is a lower bound, not the billing meter."
+  ],
+  "prerequisite_report": "/Users/seolocalph/projects/device-agent/cost_idle_20260908/report.json"
+}

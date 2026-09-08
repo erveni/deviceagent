@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Device farm proxy budget: daily and ranking costs by provider, assumptions, and measured savings opportunities.">
+<title>Device farm | Monthly proxy budget</title>
+<style>
+:root{--ink:#172b38;--muted:#516474;--line:#dce3e7;--paper:#fff;--bg:#f3f5f4;--green:#12614b;--pale:#eaf5ef;--blue:#325f96;--amber:#fff4dc}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1120px;margin:auto;padding:44px 28px 64px}header{border-top:5px solid var(--green);padding-top:22px}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--green);font-weight:750}h1{font-size:clamp(30px,5vw,48px);line-height:1.12;letter-spacing:-.035em;margin:14px 0}h2{font-size:25px;line-height:1.25;margin:0 0 16px;letter-spacing:-.02em}h3{font-size:18px;margin:0 0 8px}p{margin:0 0 14px}.lead{max-width:790px;font-size:19px}.muted,.note{color:var(--muted)}.note{font-size:13px}.meta{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;margin:18px 0 26px}.meta span{padding:5px 10px;background:#e7ece9;border-radius:4px}a{color:#205891;text-underline-offset:3px}a:focus-visible,button:focus-visible{outline:3px solid #bd6600;outline-offset:4px}.actions{display:flex;gap:18px;align-items:center;margin:20px 0}.print{border:1px solid var(--green);background:var(--green);color:white;padding:10px 16px;border-radius:6px;font:inherit;cursor:pointer}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}.card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:22px}.card .label{font-size:14px;color:var(--muted)}.number{font-size:34px;line-height:1.25;font-weight:750;letter-spacing:-.03em;margin:8px 0}.card.primary{background:var(--green);color:white;border-color:var(--green)}.card.primary .label,.card.primary .note{color:#e2f2e9}section{margin-top:36px}.panel{background:var(--paper);padding:26px;border:1px solid var(--line);border-radius:10px}.notice{background:var(--amber);border-left:4px solid #a46a06;padding:16px 20px;margin:18px 0}.notice p:last-child,.card p:last-child{margin-bottom:0}.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:white}table{border-collapse:collapse;width:100%;font-size:15px}caption{text-align:left;padding:14px 18px;color:var(--muted);font-size:13px}th,td{padding:16px;text-align:right;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}th:first-child,td:first-child{text-align:left}thead th{background:#edf1f2;font-size:12px;letter-spacing:.03em}tbody tr:last-child>*{border-bottom:0}.provider{min-width:205px}.provider small{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:4px}.total{font-weight:750;background:#f5f8f6}.chosen td,.chosen th{background:var(--pale)}.money{white-space:nowrap}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:24px}.tag{display:inline-block;font-size:11px;letter-spacing:.03em;padding:3px 8px;border-radius:4px;background:var(--pale);color:var(--green);margin-bottom:9px;font-weight:700}.tag.caution{background:var(--amber);color:#80520b}.workload{display:flex;width:100%;height:16px;border-radius:4px;overflow:hidden;margin:16px 0}.daily-part{width:41.211269%;background:var(--blue)}.ranking-part{width:58.788731%;background:var(--green)}.legend{display:flex;justify-content:space-between;gap:15px;font-size:14px}.legend span:before{content:"";display:inline-block;width:10px;height:10px;background:var(--blue);margin-right:7px}.legend span:last-child:before{background:var(--green)}.steps{padding-left:22px}.steps li{padding:0 0 16px 6px}.steps p{margin:4px 0}.source-list{padding-left:20px;font-size:14px}.source-list li{margin-bottom:10px}footer{margin-top:35px;padding-top:20px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}code{background:#eef1f2;padding:2px 5px;border-radius:3px;font-size:13px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+@media(max-width:700px){main{padding:24px 16px 40px}.cards,.two-col{grid-template-columns:1fr}.cards{gap:10px}.card{padding:18px}.number{font-size:30px}.panel{padding:20px}.legend{flex-direction:column;gap:4px}th,td{padding:12px}.actions{flex-wrap:wrap}.table-wrap:focus{outline:2px solid var(--blue)}}
+@media print{@page{size:A4 landscape;margin:14mm}body{background:white;font-size:11px}main{max-width:none;padding:0}.actions{display:none}.cards{grid-template-columns:repeat(3,1fr)}.two-col{grid-template-columns:1fr 1fr}h1{font-size:30px}h2{font-size:20px}section{margin-top:24px}.panel,.card{padding:16px}.table-wrap{overflow:visible}table{font-size:11px}th,td{padding:10px}thead{display:table-header-group}tr,.card,.notice{break-inside:avoid}.number{font-size:27px}a{color:inherit}*{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<div class="eyebrow">Device farm · Team budget brief</div>
+<h1>What our proxies cost each month</h1>
+<p class="lead">Plan for about $306 a month on Evomi if we run the daily every night and complete two full ranking sweeps. Set aside $367 to leave room for extra traffic.</p>
+<div class="meta"><span>September 8, 2026</span><span>All prices in USD</span><span>30-day planning month</span><span>Taxes and payment fees excluded</span></div>
+<p class="muted">This report covers this device farm. It does not include other Macs that might share our proxy accounts. Ranking was paused when we prepared the forecast, so its monthly cost below is a plan for when it resumes.</p>
+<div class="actions"><button class="print" type="button" onclick="window.print()">Print / save as PDF</button><a href="#provider-costs">Compare providers</a><a href="#savings">Where we can save</a></div>
+</header>
+
+<div class="cards" aria-label="Evomi monthly budget summary">
+<article class="card"><div class="label">Daily only</div><div class="number">$126.48</div><p class="note">Monthly run rate if ranking stays paused.</p></article>
+<article class="card primary"><div class="label">Daily + ranking</div><div class="number">$305.50</div><p class="note">30 daily runs and two full ranking sweeps.</p></article>
+<article class="card"><div class="label">Budget with room for extra usage</div><div class="number">$366.41</div><p class="note">Allows 20% more bandwidth. Round up to $367 for planning.</p></article>
+</div>
+
+<section class="panel" aria-labelledby="workload-title">
+<h2 id="workload-title">What work is included?</h2>
+<div class="two-col">
+<div><h3>Daily: 30 runs a month</h3><p>Our normal nightly sessions use about 8.54 GB per night. Repeating that for 30 nights gives us <strong>256.11 GB a month</strong>.</p><p class="note">This comes from a measured night, not a 30-day average. Busy nights can cost more.</p></div>
+<div><h3>Ranking: two full sweeps a month</h3><p>A sweep means completing 3,492 keyword-and-platform checks. Two sweeps mean 6,984 successful checks, using an estimated <strong>365.35 GB a month</strong> at the old measured workflow rate.</p><p class="note">One keyword checked on Gemini is one pair. The same keyword checked on ChatGPT is another. Two sweeps is a planning assumption, not a confirmed delivery schedule.</p></div>
+</div>
+<div class="workload" role="img" aria-label="Of 621.46 GB total monthly usage, daily is about 41% and ranking is about 59%"><div class="daily-part"></div><div class="ranking-part"></div></div>
+<div class="legend"><span>Daily: 256.11 GB</span><span>Ranking: 365.35 GB</span></div>
+<p style="margin:16px 0 0">Together: <strong>621.46 GB per month</strong>. The ranking figure already includes the cost of failed work and retries. We do not add another retry multiplier.</p>
+</section>
+
+<section id="provider-costs" aria-labelledby="cost-title">
+<h2 id="cost-title">Daily, ranking and total cost for each provider</h2>
+<p>Each row is an alternative provider for the same workload. <strong>Do not add the provider rows together.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Monthly provider comparison; scroll horizontally on smaller screens">
+<table id="monthly-costs">
+<caption>Monthly USD estimates · Daily: 256.11 GB · Ranking: 365.35 GB</caption>
+<thead><tr><th scope="col">Provider and plan</th><th scope="col">Daily / month</th><th scope="col">Ranking added / month</th><th scope="col">Total / month</th><th scope="col">Total with 20% extra traffic</th></tr></thead>
+<tbody>
+<tr class="chosen"><th scope="row" class="provider">Evomi Core<small>$49.99 includes 100 GB; then $0.49/GB<br>Provider we currently use</small></th><td class="money">$126.48</td><td class="money">$179.02</td><td class="money total">$305.50</td><td class="money">$366.41</td></tr>
+<tr><th scope="row" class="provider">Rayobyte Professional<small>$1.50/GB at the published 250–999 GB tier</small></th><td class="money">$384.17</td><td class="money">$548.02</td><td class="money total">$932.18</td><td class="money">$1,118.62</td></tr>
+<tr><th scope="row" class="provider">DataImpulse standard<small>$1/GB × 2 for state/city/ZIP targeting</small></th><td class="money">$512.22</td><td class="money">$730.69</td><td class="money total">$1,242.91</td><td class="money">$1,491.49</td></tr>
+<tr><th scope="row" class="provider">Decodo pay as you go<small>$4/GB; a volume quote could be cheaper</small></th><td class="money">$1,024.44</td><td class="money">$1,461.38</td><td class="money total">$2,485.82</td><td class="money">$2,982.99</td></tr>
+</tbody>
+</table>
+</div>
+<p class="note" style="margin-top:12px">For Evomi, we assign the subscription and its included 100 GB to daily work first. The ranking column is the extra cost of adding ranking to that plan, not a separate ranking-only subscription. Figures round independently, so a row can differ by one cent.</p>
+<div class="notice"><p><strong>Only Evomi has a current measured farm baseline.</strong> The other estimates assume the same amount of work, traffic and successful results. We have not verified that those providers will perform the same way. Public prices are not our confirmed invoice rates.</p><p class="note">Evomi's billed traffic already includes its targeting charges. Using that traffic as a starting point for other providers is an approximation; their billing rules and failure rates may change the result. DataImpulse's row assumes all traffic uses its paid geographic targeting.</p></div>
+</section>
+
+<section class="panel" aria-labelledby="bulk-title">
+<h2 id="bulk-title">Could a bigger package be cheaper?</h2>
+<p>Yes. A lower price per GB can require a bigger payment upfront. The unused credit is still money we have committed.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Bulk package daily and ranking cost breakdown">
+<table id="bulk-costs"><caption>Same monthly workload, at qualifying bulk rates. Starting with no existing credit.</caption>
+<thead><tr><th scope="col">Package alternative</th><th scope="col">Daily usage cost</th><th scope="col">Ranking usage cost</th><th scope="col">Total usage cost / month</th><th scope="col">Upfront purchase</th></tr></thead>
+<tbody>
+<tr><th scope="row" class="provider">Rayobyte: 1,000 GB at $0.70/GB</th><td class="money">$179.28</td><td class="money">$255.74</td><td class="money total">$435.02</td><td class="money">$700</td></tr>
+<tr><th scope="row" class="provider">DataImpulse: 1 TB for $800<small>2× targeted traffic still applies</small></th><td class="money">$409.78</td><td class="money">$584.55</td><td class="money total">$994.33</td><td class="money">$1,600 for two blocks</td></tr>
+</tbody></table>
+</div>
+<p class="note" style="margin-top:12px">These are alternatives to the standard rows above, not extra charges. Both providers publish non-expiring residential credit. Rayobyte would leave about 378.54 GB after the modeled month. DataImpulse would use about 1,242.91 GB of purchased credit because of its targeting multiplier. Confirm package availability in the account before paying.</p>
+<p>Decodo also has subscription plans. We need a quote for roughly 600–750 GB before calling its pay-as-you-go price the final budget. Under the prices and workload assumptions here, Evomi still costs less than the listed bulk options.</p>
+</section>
+
+<section id="savings" aria-labelledby="savings-title">
+<h2 id="savings-title">Where we can reduce the bill</h2>
+<div class="two-col">
+<article class="panel"><span class="tag">Measured in a small test</span><h3>Stop downloading the same Gemini files every time</h3><p>Keeping reusable browser files while clearing the old conversation reduced the observed cost from 20.97 MB to 4.12 MB per successful ranking in our recent comparison.</p><p>The pilot spent 24.71 MB in total. Six jobs succeeded, one was interrupted, and three did not start. The bill includes the interrupted attempt.</p><p>That is promising. But the test used one phone with an already warmed cache, and ordinary browser clears can remove those savings. We have not rolled this out across the farm.</p></article>
+<article class="panel"><span class="tag caution">Not deducted from this budget</span><h3>Why the forecast still uses the old ranking cost</h3><p>The old production sample cost 52.31 MB per successful pair across platforms, including failed work and retries. The 20.97 MB comparison was a different, single successful Gemini job.</p><p>We cannot replace the whole farm's 52.31 MB rate with a six-success Gemini pilot. The forecast keeps the production baseline until the broader test is complete.</p><p class="note">If 1,000 comparable Gemini successes reproduce the 20.97 → 4.12 MB result, the saving would be about 16.85 GB, or $8.26 at Evomi's extra-GB rate. This is an illustration, not a committed monthly saving.</p></article>
+</div>
+<ol class="steps" style="margin-top:24px">
+<li><h3>Fix screenshot problems without asking for a new answer</h3><p>We have recovered complete screenshots from the answer already on screen. That avoids paying for another generation. We still need to measure the remaining screenshot work, and we must keep the checks that reject missing or incorrect ranks.</p></li>
+<li><h3>Use ZIP targeting only when the job needs it</h3><p>A small city-first test cost less per successful result than ZIP-first routing. We need to verify location accuracy before changing client work. Evomi charges extra bandwidth for ZIP targeting; DataImpulse doubles the rate for state, city or ZIP targeting.</p></li>
+<li><h3>Stop repeating failures that are unlikely to recover</h3><p>Repeated timeouts and broken input steps spend data without producing a result. Track them by phone and failure type. Simply turning all retries off is not the answer: one test used less total bandwidth but cost more per successful result.</p></li>
+<li><h3>Keep the daily's reliability fixes</h3><p>Keep Copilot capped at four jobs at once and keep its Edge reset. Test any lighter reset separately. A 10% daily bandwidth reduction would save about $12.55 a month on Evomi, but we have not achieved that saving.</p></li>
+<li><h3>Do free diagnostics first; measure setup before optimizing it</h3><p>Local screenshot inspection, OCR and APK transfers do not need the paid proxy. We should also measure repeated proxy preflight checks and background downloads. So far, measured idle and warmup traffic is small; leaving the proxy connected longer is not the main proven cause of the high ranking bill.</p></li>
+</ol>
+<p class="note">These opportunities overlap. The Gemini pilot used both caching and screenshot recovery, so we cannot add their savings together as if they were separate.</p>
+</section>
+
+<section class="panel" aria-labelledby="assumptions-title">
+<h2 id="assumptions-title">What could change these numbers?</h2>
+<div class="two-col"><div><h3>How much ranking we run</h3><p>On Evomi, daily plus one full sweep is about $215.99/month. Two sweeps brings it to $305.50. A steady 14-day cycle averages about $318.29 over a 30-day month.</p><p>Clearing the last recorded backlog of 2,108 pairs would add roughly 110.27 GB, or $54.03 in Evomi overage. Check the actual remaining queue first, and do not add this again if a planned sweep already includes it.</p></div><div><h3>Our actual plan and success rate</h3><p>Confirm account discounts, taxes and targeting charges before buying. Then compare providers on successful, correctly located results, not just advertised price per GB.</p><p>The estimate uses decimal GB (1,000 MB). It assumes the measured night repeats and the farm can deliver the planned ranking volume. We should replace those assumptions with a full month of usage as we collect it.</p></div></div>
+</section>
+
+<section aria-labelledby="sources-title">
+<h2 id="sources-title">Where the numbers came from</h2>
+<p>We checked the provider prices on September 8, 2026. No proxy jobs or purchases were needed to prepare this report.</p>
+<ul class="source-list">
+<li>Farm measurements: daily, 8,537 MB for a night with 2,155 attempts and 1,648 successful sessions; ranking, 26,836 MB for 513 successful pairs from 920 logged attempts. Failed work is already included.</li>
+<li><a href="https://evomi.com/pricing">Evomi Core prices</a> and <a href="https://docs.evomi.com/proxy-instructions/residential-proxies/expert-settings/zipcode/">ZIP bandwidth charges</a>.</li>
+<li><a href="https://dataimpulse.com/residential-proxies/">DataImpulse packages</a> and its double-rate rules for <a href="https://docs.dataimpulse.com/proxies/parameters/state">state</a>, <a href="https://docs.dataimpulse.com/proxies/parameters/city">city</a> and <a href="https://docs.dataimpulse.com/proxies/parameters/zip">ZIP</a> targeting.</li>
+<li><a href="https://rayobyte.com/buy-ethical-residential-proxies/">Rayobyte residential tiers</a> and <a href="https://portal.rayobyte.com/en/support/solutions/articles/64000272133-residential-proxy-billing-faq">credit and billing terms</a>.</li>
+<li><a href="https://decodo.com/proxies/residential-proxies">Decodo residential prices and targeting terms</a>.</li>
+</ul>
+</section>
+<footer>This is a planning report for internal team use, not a supplier quote. It contains no credentials and does not connect to any proxy or phone. You can share this single HTML file; its layout works offline. External source links need an internet connection. To save a PDF, use your browser's Print command.</footer>
+</main>
+</body>
+</html>
