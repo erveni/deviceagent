@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.65-gemini-cache-trial"
-        const val APP_VERSION_CODE = 82
+        const val APP_VERSION_NAME = "0.9.66-gemini-audit-evidence"
+        const val APP_VERSION_CODE = 83
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -301,9 +301,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 }
 
                 try {
-                    // Audit flow MATCHES daily exactly. Steps below are identical to
-                    // executeSessionStatic — no audit-only guards, no platform-specific
-                    // branches. RANKING uses the FULL clear (per directive 2026-06-21):
+                    // Shared browser setup, but Gemini ranking has stricter input,
+                    // submit and answer-only evidence guards than daily sessions.
+                    // RANKING uses the FULL clear (per directive 2026-06-21):
                     // the light in-app "Delete browsing data" clears cookies/history but
                     // never closes tabs, so tabs accumulated job-after-job on each phone.
                     // The full pm-clear resets Chrome entirely (tabs included) so every job
@@ -351,7 +351,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         Thread.sleep(if (platform == "chatgpt") 6000L else 3000L)
                         step("dismiss_popups") { flowEngine.dismissPlatformPopups(platform); true }
                         Thread.sleep(500)
-                        if (!step("input") { flowEngine.inputText(prompt) }) {
+                        if (!step("input") { if (platform == "gemini") flowEngine.inputGeminiAudit(prompt) else flowEngine.inputText(prompt) }) {
                             // Keep the visible transient state that left the composer
                             // undiscoverable. This remains audit-only and returns before
                             // submit/generation, so it adds no further page traffic.
@@ -359,7 +359,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                             pr.status = "error"; pr.error = "input failed"; continue
                         }
                         Thread.sleep(300)
-                        if (!step("submit") { flowEngine.submit(platform) }) {
+                        if (!step("submit") { if (platform == "gemini") flowEngine.submitGeminiAudit() else flowEngine.submit(platform) }) {
                             // A missing SEND button / rejected tap cannot recover by
                             // waiting for generation. Save the visible failure state
                             // for diagnosis, then release the proxy session promptly.
@@ -369,7 +369,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         // Gemini's logged-out chat wipes ~3s after the answer renders, so don't
                         // waste the window on a long pre-wait.
                         Thread.sleep(if (platform == "gemini") 400 else 2000)
-                        if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
+                        if (!step("wait_generation") { if (platform == "gemini") flowEngine.waitForGeminiAudit(genTimeoutSec) else flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
+                            capture("")
                             pr.status = "error"; pr.error = "generation timeout"; continue
                         }
                     }
@@ -387,7 +388,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     } else if (platform == "gemini") {
                         // RACE THE WINDOW: capture immediately, before the wipe. A 6-swipe
                         // scroll (≈6-12s) would run past it and screenshot a blank welcome.
-                        capture(flowEngine.getResponseText())
+                        capture(flowEngine.getGeminiAuditAnswer())
                     } else {
                         // ChatGPT / Perplexity persist — position the [RANK] line for the
                         // screenshot. ChatGPT appends a Google Maps embed for local-business

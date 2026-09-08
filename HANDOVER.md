@@ -1,5 +1,59 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-09 05:37 — Four replacements DELIVERED; three automatic + one same-answer recovery
+
+- Finished the supervised repair pass below. Exact4 keyword IDs; no automatic
+  retries. Paid runner accepted345,4680,4711; root viewed all3 prompt-free images.
+  Scott143 had a correct answer but no scroll range to hide the prompt. No new
+  generation: after proxy disconnect, root verified the retained answer and a
+  browser-rendered answer-only clip. Added opt-in clip fallback, replayed it
+  successfully on the SAME paid answer with OCR, unchanged text,0 reload/prompts.
+- Do NOT call this4/4 fully automatic: raw report correctly remains3 successes.
+  delivery_report.json separately records4 usable captures after recovery. All
+  four current model outputs are4/4; August positions2/3/3/1 are references only.
+- Settled Evomi31231.144306 ->31122.855906MB,108.288400MB this pass;36.096133MB
+  per automatic success,27.072100MB per delivered capture after free recovery.
+  Earlier failed pass98.461371MB; cumulative206.749771MB for these4 delivered
+  replacements. No claim of daily-level cost or fleet-wide savings. Cache OFF.
+- Deliverables: Desktop/Rankings/prompt_leak_top3_fixed_2026-09-09/results.csv
+  plus4 PNGs, mirrored in prompt_leak_rerun_fixed_20260909/deliverables/.
+  Original49-row request and historic reports/backend untouched.45 Perplexity
+  rows skipped. These are new observed rankings, not backdated August evidence.
+- Wrapper direct_ui_20260909_rerun_fixed_wrapper/report.json confirms original
+  v79 restored, accessibilitytrue, no tun0. Fullchain0906 remains disabled.
+  Native source83 is test-only. Clip fallback is host-side/default-off via
+  RANK_GEMINI_PROMPT_FREE; validated direct on retained paid answer, not in a
+  subsequent new paid generation. Daily/Copilot unchanged.
+
+## 2026-09-09 — Gemini repair validation details (completed above)
+
+- User said proceed after four rejected captures. Source test83 adds audit-only
+  full-prompt verification, identified Send button (no blind mic-position taps),
+  and answer-only completion. Daily/Copilot flow unchanged; cache gate remains82
+  and is OFF for this repair. Native83 is not a fleet deployment.
+- Direct inspection proved the missing-answer bug: old reader cuts at depth20
+  and rect.top<=150, while actual Gemini answer nodes are depth25–31 and the rank
+  is off-screen at bounds0,0. Audit reader now traverses Chrome WebView to64 with
+  node/time bounds and reads off-screen text; parser requires one Gemini said
+  boundary, one valid terminal rank and the complete numbered top3 answer.
+- First83 direct test safely timed out before reader-depth correction. Corrected
+  direct Charles and Scott tests completed in~51s, input/submit~1s each, answer
+  text free of prompt. Both restored79. Evidence: direct_ui_20260909_* folders.
+- Root found full-answer framing still showed prompt text. New prompt_free mode
+  aligns answer at safe top, verifies user-query is above safe band, preserves
+  exact answer and restores CSS. Scott card answer verified visually/OCR at0.65,
+  no prompt text. Default framing unchanged unless explicitly enabled.
+- Completed wrapper: tools/direct_audit_smoke.py --output
+  direct_ui_20260909_rerun_fixed_wrapper --request-json
+  tools/gemini_audit_charles_0909.json --rerun-manifest
+  tools/prompt_leak_top3_rerun_20260909.json --metered-output
+  prompt_leak_rerun_fixed_20260909. Direct precheck passed; settled baseline
+  31231.144306MB. Exact4 IDs345,143,4711,4680,104 only,83,cacheOFF,
+  prompt-freeON,150MBguard,no retries. Paid run, settlement, visual review and
+  wrapper rollback all finished; nothing remains running from this wrapper.
+- Offline75 tests (1 opt-in skipped),24 helper tests and Android build passed.
+  Final measurement and limitations are recorded in the completion entry above.
+
 ## 2026-09-09 04:54 Manila — Four prompt-leak reruns attempted, ZERO replacements accepted
 
 - User requested only four Gemini rows from Desktop/Rankings/

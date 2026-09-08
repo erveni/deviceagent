@@ -1,0 +1,12 @@
+{
+  "type": "audit",
+  "platform": "gemini",
+  "bizName": "Charles Huurman Tattoo - Best Tattoo Artist Austin TX | Tattoo Shop In Austin | Tattoo Places in Austin",
+  "bizUrl": "https://share.google/pxfhb44fMnm4ceFra",
+  "city": "Austin",
+  "state": "TX",
+  "searchAddress": "1305 E 6th St 7 Sutie 7, Austin, TX",
+  "keyword": "Tattoo",
+  "genTimeoutSec": 120,
+  "async": true
+}

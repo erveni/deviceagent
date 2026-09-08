@@ -19,6 +19,8 @@ def main():
     p.add_argument('--frame', action='store_true')
     p.add_argument('--validated-frame', action='store_true')
     p.add_argument('--expected-rank', nargs=2, type=int, default=[4,4])
+    p.add_argument('--expected-keyword', default='mobile app development')
+    p.add_argument('--prompt-free', action='store_true')
     p.add_argument('--page-scale', type=float, help='Direct-only browser zoom probe; reset on exit')
     p.add_argument('--answer-zoom', type=float, help='Direct-only answer layout zoom; restored on exit')
     p.add_argument('--dispatch-replay', help='Replay early capture block against a saved response, never dispatch')
@@ -137,8 +139,9 @@ def main():
                     evidence=ns.get('_early_result',{'ok':False,'reason':'early_reframe_not_invoked'})
                     evidence['production_early_block_replayed']=True
                 else:
-                    evidence=reframe_same_answer(serial,'mobile app development',tuple(args.expected_rank),out/'validated_rank.png',
-                                                 ocr_validator=lambda path: ns['_screenshot_has_answer'](path, strict=True))
+                    evidence=reframe_same_answer(serial,args.expected_keyword,tuple(args.expected_rank),out/'validated_rank.png',
+                                                 ocr_validator=lambda path: ns['_screenshot_has_answer'](path, strict=True),
+                                                 prompt_free=args.prompt_free)
                 (out/'validated_frame.json').write_text(json.dumps(evidence,indent=2))
                 print('Validated frame:',evidence,flush=True)
             if args.frame:

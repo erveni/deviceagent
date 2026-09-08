@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 82
-        versionName = "0.9.65-gemini-cache-trial"
+        versionCode = 83
+        versionName = "0.9.66-gemini-audit-evidence"
     }
 
     buildTypes {

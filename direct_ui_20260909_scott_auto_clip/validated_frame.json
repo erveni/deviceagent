@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "response_unchanged": true,
+  "ocr_verified": true,
+  "new_prompts": 0,
+  "reloads": 0,
+  "navigations": 0,
+  "screenshot": "/Users/seolocalph/projects/device-agent/direct_ui_20260909_scott_auto_clip/validated_rank.png",
+  "layout_zoom": 1.0,
+  "full_answer_in_view": true,
+  "capture_method": "browser_answer_clip",
+  "expected_rank": [
+    4,
+    4
+  ],
+  "safe_band": {
+    "top": 160,
+    "bottom": 686
+  },
+  "reason": "same_answer_reframed"
+}

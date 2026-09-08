@@ -1,0 +1,69 @@
+{
+  "status": "complete",
+  "device": "device-104",
+  "proxy_started": true,
+  "jobs": 5,
+  "before_health": {
+    "ok": true,
+    "version": "0.9.62-copilot-frame-top",
+    "versionCode": 79,
+    "wifiIp": "192.168.0.123",
+    "accessibility": true,
+    "lastJobStatus": "idle",
+    "uptimeMs": 191783,
+    "lastContactAgoMs": 11,
+    "selfHealCount": 0,
+    "tun0": {
+      "up": false,
+      "addr": ""
+    }
+  },
+  "candidate_health": {
+    "ok": true,
+    "version": "0.9.66-gemini-audit-evidence",
+    "versionCode": 83,
+    "wifiIp": "192.168.0.123",
+    "accessibility": true,
+    "lastJobStatus": "idle",
+    "uptimeMs": 1956,
+    "lastContactAgoMs": 13,
+    "selfHealCount": 0,
+    "tun0": {
+      "up": false,
+      "addr": ""
+    }
+  },
+  "elapsed_s": 51.31,
+  "result_status": "completed",
+  "error": "",
+  "steps": [
+    "[gemini] reset_chrome OK 25s (total 25s)",
+    "[gemini] navigate OK 3s (total 29s)",
+    "[gemini] dismiss_popups OK 4s (total 37s)",
+    "[gemini] input OK 1s (total 39s)",
+    "[gemini] submit OK 1s (total 41s)",
+    "[gemini] wait_generation OK 5s (total 46s)",
+    "[gemini] ranking: 4 / 4  ss=/storage/emulated/0/Android/data/com.deviceagent/files/screenshots/audit_gemini_1788901979917.png"
+  ],
+  "metered_exit_code": 0,
+  "metered_output": "prompt_leak_rerun_fixed_20260909",
+  "planned_metered_jobs": 4,
+  "metered_status": "complete",
+  "metered_successful_pairs": 3,
+  "restored_health": {
+    "ok": true,
+    "version": "0.9.62-copilot-frame-top",
+    "versionCode": 79,
+    "wifiIp": "192.168.0.123",
+    "accessibility": true,
+    "lastJobStatus": "idle",
+    "uptimeMs": 1822,
+    "lastContactAgoMs": 14,
+    "selfHealCount": 0,
+    "tun0": {
+      "up": false,
+      "addr": ""
+    }
+  },
+  "restored_no_tun0": true
+}

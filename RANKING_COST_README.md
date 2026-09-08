@@ -21,10 +21,16 @@ not a migration of the entire farm's data or the aeo-appium application.
 
 ## Deployment state
 
-- Source builds test version 82; production phones remain on version 79.
+- Source now builds test version 83 (Gemini audit evidence/input guards); production
+  phones remain on version 79 outside explicitly supervised device104 tests.
 - The tracked root APK is intentionally not replaced by the experimental APK.
 - Gemini cache preservation defaults off and the host restricts it to device104,
   Gemini, a single attempt, and verified version82 health.
+- The cache gate deliberately still requires82. Do not enable it on83 without a
+  separate cache-regression validation. The Sep09 repair pass uses83 with cache OFF.
+- `RANK_GEMINI_PROMPT_FREE=1` additionally requires same-answer framing to verify
+  the prompt is above the safe answer band. It is opt-in for the four-row repair,
+  not a change to the daily. A visible full answer alone does not prove no prompt leak.
 - Same-answer screenshot recovery is enabled by the ranking launcher; set
   `RANK_GEMINI_SAME_ANSWER_REFRAME=0` to disable it. This differs from the cache flag.
 - Keep Copilot cap4 and Edge clearing unchanged. Never put device125 in the pool.

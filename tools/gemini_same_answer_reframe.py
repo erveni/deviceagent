@@ -7,6 +7,8 @@ No function runs on import. Run --self-test for offline synthetic selector check
 from __future__ import annotations
 
 import json
+import base64
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -19,7 +21,7 @@ import urllib.request
 
 # Snapshot guards and selection are deliberately shared with the synthetic tests.
 # innerText is read ONLY from model-response message-content for rank extraction.
-_SELECTOR_JS = r"""(function(expectedKeyword, expectedRank, scroll, expectedText, action) {
+_SELECTOR_JS = r"""(function(expectedKeyword, expectedRank, scroll, expectedText, action, promptFree) {
   const fail = reason => ({ok:false, reason});
   const norm = s => String(s || '').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
   if (location.hostname !== 'gemini.google.com' || location.protocol !== 'https:') return fail('wrong_origin');
@@ -65,7 +67,7 @@ _SELECTOR_JS = r"""(function(expectedKeyword, expectedRank, scroll, expectedText
     let box = answer.getBoundingClientRect();
     const bandHeight = safeBottom - safeTop;
     if (box.bottom - box.top <= bandHeight && bandHeight > 0
-        && (box.top < safeTop || box.bottom > safeBottom)) {
+        && (promptFree || box.top < safeTop || box.bottom > safeBottom)) {
       let ancestor = answer.parentElement, scroller = null;
       for (let depth=0; ancestor && depth<32; depth++, ancestor=ancestor.parentElement) {
         const overflow = getComputedStyle(ancestor).overflowY;
@@ -78,8 +80,8 @@ _SELECTOR_JS = r"""(function(expectedKeyword, expectedRank, scroll, expectedText
         scroller = document.scrollingElement;
       for (let attempt=0; scroller && attempt<2; attempt++) {
         box = answer.getBoundingClientRect();
-        if (box.top >= safeTop && box.bottom <= safeBottom) break;
-        const targetTop = safeTop + (bandHeight - (box.bottom-box.top)) / 2;
+        if (promptFree ? Math.abs(box.top-safeTop) < 1 : (box.top >= safeTop && box.bottom <= safeBottom)) break;
+        const targetTop = promptFree ? safeTop : safeTop + (bandHeight - (box.bottom-box.top)) / 2;
         const delta = Math.max(-innerHeight, Math.min(innerHeight, box.top-targetTop));
         const previous = scroller.scrollTop;
         scroller.scrollTop = previous + delta;
@@ -90,17 +92,22 @@ _SELECTOR_JS = r"""(function(expectedKeyword, expectedRank, scroll, expectedText
   }
   const rect = containers[0].getBoundingClientRect();
   const full = answer.getBoundingClientRect();
+  const prompts = [...document.querySelectorAll('user-query')].filter(displayed);
+  const promptClear = !promptFree || (prompts.length === 1 && prompts[0].getBoundingClientRect().bottom <= safeTop);
   return {ok:true, text, rank:expectedRank, rank_in_view:rect.top >= 0 && rect.bottom <= innerHeight,
-    full_answer_in_view:full.top >= safeTop && full.bottom <= safeBottom,
+    full_answer_in_view:full.top >= safeTop && full.bottom <= safeBottom && promptClear,
+    answer_fits:full.top >= safeTop && full.bottom <= safeBottom,
+    answer_clip:{x:full.left+(globalThis.scrollX||0),y:full.top+(globalThis.scrollY||0),width:full.width,height:full.height,scale:1},
+    prompt_clear:promptClear,
     safe_band:{top:safeTop,bottom:safeBottom},
     answer_rect:{top:full.top,bottom:full.bottom}, alignment_adjustments,
     rank_container_tag:containers[0].tagName || containers[0].tag || null};
 })"""
 
 
-def _expression(keyword: str, rank: tuple[int, int], *, scroll=False, text=None, action=None) -> str:
+def _expression(keyword: str, rank: tuple[int, int], *, scroll=False, text=None, action=None, prompt_free=False) -> str:
     return _SELECTOR_JS + '(' + ','.join(json.dumps(v) for v in
-                                       (keyword, rank, scroll, text, action)) + ')'
+                                       (keyword, rank, scroll, text, action, prompt_free)) + ')'
 
 
 def _on_answer(client, object_id, function, arguments=()):
@@ -148,7 +155,8 @@ def _evaluate(client, expression):
 
 def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple[int, int],
                        outputpath: str | Path, *,
-                       ocr_validator: Callable[[str], bool] | None = None) -> dict:
+                       ocr_validator: Callable[[str], bool] | None = None,
+                       prompt_free: bool = False) -> dict:
     """Return evidence. Success requires the full answer in a safe band and OCR.
 
     Only attaches to an already-visible, unambiguous Gemini answer. All discovered
@@ -170,6 +178,8 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
     if not callable(ocr_validator):
         return result | {'reason': 'caller_ocr_validator_required'}
     output = Path(outputpath).resolve()
+    from functools import partial
+    expression = partial(_expression, prompt_free=prompt_free)
     if output.exists() or not output.parent.is_dir():
         return result | {'reason': 'output_must_be_new_file_in_existing_directory'}
     # Import only the websocket client class, never the old module's fixed forward.
@@ -219,7 +229,7 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
                     return result | {'reason': 'invalid_debugger_endpoint'}
                 client = CDP(urllib.parse.urlunparse(ws._replace(netloc=f'127.0.0.1:{port}')))
                 clients.append(client)
-                snapshot = _evaluate(client, _expression(expected_keyword, expected_rank))
+                snapshot = _evaluate(client, expression(expected_keyword, expected_rank))
                 if snapshot.get('ok'):
                     candidates.append((client, snapshot))
                 else:
@@ -228,19 +238,19 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
             return result | {'reason': 'no_unique_visible_matching_answer',
                              'matching_targets': len(candidates), 'rejections': rejected}
         client, before = candidates[0]
-        moved = _evaluate(client, _expression(expected_keyword, expected_rank, scroll=True,
+        moved = _evaluate(client, expression(expected_keyword, expected_rank, scroll=True,
                                               text=before['text']))
         if not moved.get('ok'):
             return result | {'reason': moved.get('reason', 'reframe_failed')}
         time.sleep(0.5)
-        framed = _evaluate(client, _expression(expected_keyword, expected_rank, text=before['text']))
+        framed = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
         if not framed.get('ok'):
             return result | {'reason': 'rank_not_visible_or_answer_changed'}
-        if not framed.get('full_answer_in_view'):
+        if not framed.get('full_answer_in_view') and not (prompt_free and framed.get('answer_fits')):
             # Retain the exact guarded node as a remote object: restoration must
             # still reach that node if the UI changes or detaches it afterwards.
             retained = client.call('Runtime.evaluate', {
-                'expression': _expression(expected_keyword, expected_rank,
+                'expression': expression(expected_keyword, expected_rank,
                                           text=before['text'], action='retain'),
                 'returnByValue': False})
             node = retained.get('result', {}).get('result', {})
@@ -249,7 +259,7 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
             object_id = node['objectId']
             original = _on_answer(client, object_id, _ZOOM_SAVE)
             restore = (client, object_id, original['value'], original['priority'])
-            guard = _expression(expected_keyword, expected_rank, text=before['text'], action='retain')
+            guard = expression(expected_keyword, expected_rank, text=before['text'], action='retain')
             # Try only readable, whole-answer zoom levels.  Each level repeats the
             # exact identity/rank guard after positioning; a partial card list or a
             # changed response therefore cannot become an accepted screenshot.
@@ -259,24 +269,36 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
                 if not changed.get('ok'):
                     return result | {'reason': 'answer_changed_before_zoom'}
                 result['layout_zoom'] = zoom
-                _evaluate(client, _expression(expected_keyword, expected_rank, scroll=True, text=before['text']))
+                _evaluate(client, expression(expected_keyword, expected_rank, scroll=True, text=before['text']))
                 time.sleep(0.5)
-                framed = _evaluate(client, _expression(expected_keyword, expected_rank, text=before['text']))
+                framed = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
                 if (framed.get('ok') and framed.get('rank_in_view')
                         and framed.get('full_answer_in_view')):
                     break
-        if not framed.get('ok') or not framed.get('rank_in_view') or not framed.get('full_answer_in_view'):
+        # A short answer can fit while the page has no scroll range to hide the
+        # prompt. Capture only that rendered answer rectangle, never synthesize or
+        # edit its pixels. Oversized/clipped answers are still rejected.
+        answer_clip = _safe_answer_clip(framed) if prompt_free else None
+        cropped = bool(answer_clip and not framed.get('full_answer_in_view'))
+        if not framed.get('ok') or not framed.get('rank_in_view') or not (framed.get('full_answer_in_view') or cropped):
             return result | {'reason': 'full_answer_clipped_or_changed',
                 'frame_diagnostics': _frame_diagnostics(framed)}
-        screenshot = adb('exec-out', 'screencap', '-p')
-        after = _evaluate(client, _expression(expected_keyword, expected_rank, text=before['text']))
-        if not after.get('ok') or not after.get('rank_in_view') or not after.get('full_answer_in_view'):
+        if cropped:
+            capture = client.call('Page.captureScreenshot', {'format':'png',
+                'captureBeyondViewport':True, 'clip':answer_clip})
+            screenshot = base64.b64decode(capture.get('result', {}).get('data', ''), validate=True)
+        else:
+            screenshot = adb('exec-out', 'screencap', '-p')
+        after = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
+        geometry_valid = (_safe_answer_clip(after) == answer_clip) if cropped else after.get('full_answer_in_view')
+        if not after.get('ok') or not after.get('rank_in_view') or not geometry_valid:
             return result | {'reason': 'answer_changed_during_screenshot'}
         if not screenshot.startswith(b'\x89PNG\r\n\x1a\n'):
             return result | {'reason': 'invalid_actual_screenshot'}
         with output.open('xb') as stream:
             stream.write(screenshot)
         result.update(screenshot=str(output), response_unchanged=True,
+                      capture_method='browser_answer_clip' if cropped else 'device_viewport',
                       expected_rank=list(expected_rank), full_answer_in_view=True,
                       safe_band=after.get('safe_band'))
         # A screenshot is evidence only when the existing production guard accepts it.
@@ -305,6 +327,20 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
                 adb('forward', '--remove', f'tcp:{port}')
             except Exception:
                 pass
+
+
+def _safe_answer_clip(snapshot):
+    """Only an already complete, fully visible answer may use browser clipping."""
+    if not snapshot.get('ok') or not snapshot.get('rank_in_view') or not snapshot.get('answer_fits'):
+        return None
+    clip = snapshot.get('answer_clip') or {}
+    if set(clip) != {'x','y','width','height','scale'}:
+        return None
+    if any(type(v) not in (float,int) or not math.isfinite(v) for v in clip.values()):
+        return None
+    if clip['x'] < 0 or clip['y'] < 0 or not 0 < clip['width'] <= 4096 or not 0 < clip['height'] <= 4096 or clip['scale'] != 1:
+        return None
+    return clip
 
 
 def _self_test():

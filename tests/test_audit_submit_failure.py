@@ -21,7 +21,7 @@ class AuditSubmitFailureRegressionTest(unittest.TestCase):
         cls.audit = cls.source[start:end]
 
     def test_failed_non_copilot_submit_captures_and_continues_before_any_wait(self) -> None:
-        failure = '''if (!step("submit") { flowEngine.submit(platform) }) {
+        failure = '''if (!step("submit") { if (platform == "gemini") flowEngine.submitGeminiAudit() else flowEngine.submit(platform) }) {
                             // A missing SEND button / rejected tap cannot recover by
                             // waiting for generation. Save the visible failure state
                             // for diagnosis, then release the proxy session promptly.
@@ -32,21 +32,21 @@ class AuditSubmitFailureRegressionTest(unittest.TestCase):
         after_failure = self.audit[self.audit.index(failure) + len(failure):]
         self.assertLess(
             after_failure.index('Thread.sleep(if (platform == "gemini") 400 else 2000)'),
-            after_failure.index('if (!step("wait_generation") { flowEngine.waitForGeneration'),
+            after_failure.index('if (!step("wait_generation") { if (platform == "gemini") flowEngine.waitForGeminiAudit(genTimeoutSec) else flowEngine.waitForGeneration'),
         )
 
     def test_successful_non_copilot_submit_still_waits_for_generation(self) -> None:
-        guard = 'if (!step("submit") { flowEngine.submit(platform) }) {'
+        guard = 'if (!step("submit") { if (platform == "gemini") flowEngine.submitGeminiAudit() else flowEngine.submit(platform) }) {'
         after_guard = self.audit[self.audit.index(guard):]
         self.assertIn('Thread.sleep(if (platform == "gemini") 400 else 2000)', after_guard)
         self.assertIn(
-            'if (!step("wait_generation") { flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {',
+            'if (!step("wait_generation") { if (platform == "gemini") flowEngine.waitForGeminiAudit(genTimeoutSec) else flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {',
             after_guard,
         )
         self.assertIn('pr.status = "error"; pr.error = "generation timeout"; continue', after_guard)
 
     def test_failed_non_copilot_input_captures_and_continues_before_submit(self) -> None:
-        failure = '''if (!step("input") { flowEngine.inputText(prompt) }) {
+        failure = '''if (!step("input") { if (platform == "gemini") flowEngine.inputGeminiAudit(prompt) else flowEngine.inputText(prompt) }) {
                             // Keep the visible transient state that left the composer
                             // undiscoverable. This remains audit-only and returns before
                             // submit/generation, so it adds no further page traffic.
@@ -56,8 +56,8 @@ class AuditSubmitFailureRegressionTest(unittest.TestCase):
         self.assertIn(failure, self.audit)
         after_failure = self.audit[self.audit.index(failure) + len(failure):]
         self.assertLess(
-            after_failure.index('if (!step("submit") { flowEngine.submit(platform) }) {'),
-            after_failure.index('if (!step("wait_generation") { flowEngine.waitForGeneration'),
+            after_failure.index('if (!step("submit") { if (platform == "gemini") flowEngine.submitGeminiAudit() else flowEngine.submit(platform) }) {'),
+            after_failure.index('if (!step("wait_generation") { if (platform == "gemini") flowEngine.waitForGeminiAudit(genTimeoutSec) else flowEngine.waitForGeneration'),
         )
 
     def test_copilot_submit_path_is_unchanged(self) -> None:

@@ -1709,6 +1709,8 @@ def dispatch_audit_job(
         # Recover the original viewport BEFORE CDP cleanup can remove the prompt
         # containing the expected keyword. No change to default/live selection.
         _reframe_attempted = False
+        _prompt_free = os.environ.get("RANK_GEMINI_PROMPT_FREE", "0") == "1" and platform.lower() == "gemini"
+        _prompt_free_verified = False
         if (os.environ.get("RANK_GEMINI_SAME_ANSWER_REFRAME", "0") == "1"
                 and platform.lower() == "gemini" and capture_prompt is None
                 and status == "success" and ss_b64):
@@ -1717,19 +1719,21 @@ def dispatch_audit_job(
             if (_early_rank and not _rank_inconsistent(_early_text, entry["biz_name"], platform,
                                                        entry.get("biz_aka", ""))):
                 _source = _write_b64_screenshot(ss_b64, platform, int(keyword_id), artifact="reframe_source")
-                if _source and not _screenshot_has_expected_rank(
-                        _source, (int(_early_rank[1]), int(_early_rank[2]))):
+                if _source and (_prompt_free or not _screenshot_has_expected_rank(
+                        _source, (int(_early_rank[1]), int(_early_rank[2])))):
                     from tools.gemini_same_answer_reframe import reframe_same_answer
                     _reframe_attempted = True
                     _early_path = Path(_source).with_name(Path(_source).stem + f"_reframe_{time.time_ns()}.png")
                     _early_result = reframe_same_answer(
                         serial, _keyword_text(entry, int(keyword_id)),
                         (int(_early_rank[1]), int(_early_rank[2])), _early_path,
+                        prompt_free=_prompt_free,
                         ocr_validator=lambda path: _screenshot_has_expected_rank(
                             path, (int(_early_rank[1]), int(_early_rank[2]))))
                     print(f"  [same-answer-reframe] kw{keyword_id} {platform} before_cleanup "
                           f"ok={_early_result.get('ok')} reason={_early_result.get('reason')}", flush=True)
                     if _early_result.get("ok"):
+                        _prompt_free_verified = _prompt_free
                         ss_local = _early_result["screenshot"]
                         duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
         # ChatGPT: position ranks 1-3 below the header via the page's own geometry
@@ -1796,19 +1800,21 @@ def dispatch_audit_job(
                 and not _reframe_attempted
                 and platform.lower() == "gemini" and capture_prompt is None
                 and status == "success" and _txt_rank and not _bad_rank
-                and ss_local and not _screenshot_has_expected_rank(
-                    ss_local, (int(_txt_rank[1]), int(_txt_rank[2])))):
+                and ss_local and (_prompt_free or not _screenshot_has_expected_rank(
+                    ss_local, (int(_txt_rank[1]), int(_txt_rank[2]))))):
             from tools.gemini_same_answer_reframe import reframe_same_answer
             _reframe_path = Path(ss_local).with_name(
                 Path(ss_local).stem + f"_reframe_{time.time_ns()}.png")
             _reframed = reframe_same_answer(
                 serial, _keyword_text(entry, int(keyword_id)),
                 (int(_txt_rank[1]), int(_txt_rank[2])), _reframe_path,
+                prompt_free=_prompt_free,
                 ocr_validator=lambda path: _screenshot_has_expected_rank(
                     path, (int(_txt_rank[1]), int(_txt_rank[2]))))
             print(f"  [same-answer-reframe] kw{keyword_id} {platform} "
                   f"ok={_reframed.get('ok')} reason={_reframed.get('reason')}", flush=True)
             if _reframed.get("ok"):
+                _prompt_free_verified = _prompt_free
                 ss_local = _reframed["screenshot"]
                 duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
         # Experimental cost guard: Gemini may remove a valid answer before the
@@ -1890,6 +1896,9 @@ def dispatch_audit_job(
                 and status == "success" and _txt_rank
                 and not _screenshot_has_expected_rank(
                     ss_local, (int(_txt_rank[1]), int(_txt_rank[2])))):
+            status = "ocr_no_answer"
+
+        if _prompt_free and status in ("success", "no_rank") and not _prompt_free_verified:
             status = "ocr_no_answer"
 
         # Capture per-platform error + last few steps for diagnostics. Top-level

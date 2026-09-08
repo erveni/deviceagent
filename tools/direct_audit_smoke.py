@@ -16,12 +16,22 @@ sys.path.insert(0, str(ROOT))
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('--output',required=True)
+    p.add_argument('--request-json', help='Explicit direct Gemini audit request; never a paid ranking result')
+    p.add_argument('--rerun-manifest', help='Exactly four Gemini IDs; requires --metered-output, no cache trial')
     p.add_argument('--metered-output', help='After direct success only, run one isolated paid job and restore APK')
     p.add_argument('--cache-trial', action='store_true', help='Verify host-prepared v82 cache reset on device104')
     p.add_argument('--pilot-manifest', help='Ten distinct Gemini keyword IDs; requires cache trial and UTC deadline')
     args=p.parse_args()
     manifest=ROOT/'tools/ranking_one_reframe_0908.json'
     planned_jobs=1
+    if args.rerun_manifest:
+        if not args.metered_output or args.cache_trial or args.pilot_manifest:
+            p.error('Four-job rerun requires metered output and no cache/pilot mode')
+        manifest=Path(args.rerun_manifest).resolve()
+        ids=json.loads(manifest.read_text())
+        if not isinstance(ids,list) or len(ids)!=4 or any(type(k) is not int or k<=0 for k in ids) or len(set(ids))!=4:
+            p.error('Rerun requires exactly four distinct positive keyword IDs')
+        planned_jobs=4
     if args.pilot_manifest:
         import datetime
         if not args.cache_trial or not args.metered_output:
@@ -83,12 +93,20 @@ def main():
         changed=True
         adb('install','-r',str(candidate))
         report['candidate_health']=rebind()
+        if args.rerun_manifest and report['candidate_health'].get('versionCode') != 83:
+            raise RuntimeError('Four-row evidence repair requires verified candidate v83')
         print('Candidate installed on device104 only; direct network verified',flush=True)
         for cmd in [('keyevent','KEYCODE_WAKEUP'),('keyevent','KEYCODE_MENU'),('swipe','500','1600','500','400','300')]:adb('shell','input',*cmd)
         body={'type':'audit','platform':'gemini','bizName':'Carrot Software',
               'bizUrl':'https://maps.app.goo.gl/uvmmKU3ezTV1k9hP6','city':'Eugene','state':'OR',
               'searchAddress':'1310 Coburg Rd suite 10, Eugene, OR','keyword':'mobile app development',
               'genTimeoutSec':90,'async':True}
+        if args.request_json:
+            body=json.loads(Path(args.request_json).read_text())
+            if body.get('type') != 'audit' or body.get('platform') != 'gemini' or body.get('geminiCachePrepared'):
+                raise RuntimeError('Request must be a normal Gemini audit without cache overrides')
+            body['async']=True
+            body['genTimeoutSec']=min(int(body.get('genTimeoutSec',90)),150)
         if args.cache_trial:
             if report['candidate_health'].get('versionCode') != 82:
                 raise RuntimeError('Cache experiment requires v82')
@@ -137,6 +155,8 @@ def main():
                 raise RuntimeError('Lost direct-test fleet lock')
             lock.unlink()
             env=os.environ.copy();env['COST_DRIVER']='cache_pilot' if args.pilot_manifest else 'reframe_single'
+            if args.rerun_manifest:
+                env.update(COST_DRIVER='rerun_four', COST_PROMPT_FREE='1', COST_PHASE_TELEMETRY='1')
             if args.cache_trial:
                 env.update(COST_CACHE_TRIAL='1', COST_PHASE_TELEMETRY='1')
             print(f'Direct passed; starting {planned_jobs} metered jobs, no retries',flush=True)

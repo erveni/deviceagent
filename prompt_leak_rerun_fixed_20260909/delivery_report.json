@@ -1,0 +1,27 @@
+{
+  "status": "complete",
+  "accepted_captures": 4,
+  "automatic_successes": 3,
+  "same_answer_recoveries": 1,
+  "new_paid_attempts": 4,
+  "retries": 0,
+  "used_mb": 108.2884,
+  "mb_per_delivered_capture": 27.0721,
+  "prior_failed_pass_mb": 98.461371,
+  "cumulative_repair_mb": 206.749771,
+  "cumulative_mb_per_delivered_capture": 51.68744275,
+  "raw_measurement": "report.json",
+  "recovery_evidence": "../direct_ui_20260909_scott_auto_clip/validated_frame.json",
+  "limitations": [
+    "One recovery occurred after the paid runner exited, with no new prompts, reloads or proxy session.",
+    "These are new observations, not reconstructed August rankings.",
+    "Cache preservation was OFF; no daily-level or fleet-wide bandwidth saving is established.",
+    "Raw runner report remains unchanged: three automatic successes."
+  ],
+  "keyword_ids": [
+    345,
+    143,
+    4711,
+    4680
+  ]
+}

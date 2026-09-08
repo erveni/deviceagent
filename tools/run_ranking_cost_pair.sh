@@ -393,6 +393,7 @@ try:
         if rerun_four:
             env['RANK_GEMINI_CACHE_TRIAL'] = '0'
             env['RANK_CACHE_PILOT'] = '0'
+            env['RANK_GEMINI_PROMPT_FREE'] = os.environ.get('COST_PROMPT_FREE', '0')
         if driver == 'generation_timeout' and name == 'candidate':
             env['AEO_ROTATE_ON_GENERATION_TIMEOUT'] = '0'
         if driver == 'gemini_app_screenshot' and name == 'candidate':

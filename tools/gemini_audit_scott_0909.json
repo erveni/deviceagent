@@ -1,0 +1,7 @@
+{
+  "type": "audit", "platform": "gemini",
+  "bizName": "KDR Dumpster Rental, Garden City",
+  "bizUrl": "", "city": "Garden City", "state": "MI",
+  "searchAddress": "30247 Ford Road, Garden City, MI", "keyword": "roll off dumpster rental",
+  "genTimeoutSec": 120, "async": true
+}

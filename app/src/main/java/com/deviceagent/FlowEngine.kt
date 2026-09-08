@@ -501,6 +501,120 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return ok
     }
 
+    private var geminiAuditPrompt = ""
+    private var geminiAuditAnswer = ""
+
+    /** Ranking-only: verify the WHOLE prompt, not an ACTION_PASTE return value. */
+    fun inputGeminiAudit(text: String): Boolean {
+        geminiAuditPrompt = ""
+        geminiAuditAnswer = ""
+        inputText(text)
+        repeat(3) { attempt ->
+            val node = s.findInputField(timeoutMs = 1200)
+            if (node != null) {
+                val verified = GeminiAuditEvidence.promptMatches(node.text?.toString() ?: "", text)
+                if (verified) {
+                    node.recycle()
+                    geminiAuditPrompt = text
+                    return true
+                }
+                // Always replace; never append a second copy after a partial paste.
+                s.clickNode(node)
+                s.setTextOnNode(node, "")
+                if (attempt == 0) s.setTextOnNode(node, text)
+                else { s.setClipboard(text); tryPasteOnNode(node) }
+                node.recycle()
+            }
+            Thread.sleep(500)
+        }
+        val node = s.findInputField(timeoutMs = 800)
+        val verified = GeminiAuditEvidence.promptMatches(node?.text?.toString() ?: "", text)
+        node?.recycle()
+        if (verified) geminiAuditPrompt = text
+        s.log("Gemini audit full-prompt verified=$verified")
+        return verified
+    }
+
+    /** No fixed-position fallback: an unidentified button may be the microphone. */
+    fun submitGeminiAudit(): Boolean {
+        if (geminiAuditPrompt.isBlank()) return false
+        repeat(2) { attempt ->
+            val field = s.findInputField(timeoutMs = 800)
+            val verified = GeminiAuditEvidence.promptMatches(field?.text?.toString() ?: "", geminiAuditPrompt)
+            field?.recycle()
+            if (!verified) return false
+            val node = findSendNode() ?: return false
+            val labels = listOf(node.text?.toString(), node.contentDescription?.toString()).filterNotNull()
+            val bounds = android.graphics.Rect(); node.getBoundsInScreen(bounds)
+            val identified = labels.any { it.trim().lowercase() in setOf("send", "send message", "send prompt", "submit") }
+            if (!identified || !node.isEnabled || bounds.width() <= 0 || bounds.height() <= 0 ||
+                bounds.centerY() < s.screenHeight() / 2 || bounds.bottom > s.screenHeight()) {
+                node.recycle(); return false
+            }
+            if (attempt == 0) s.clickNode(node)
+            else s.gestureTap(bounds.centerX().toFloat(), bounds.centerY().toFloat())
+            node.recycle()
+            repeat(4) {
+                Thread.sleep(400)
+                if (isGenerating()) return true
+                val current = s.findInputField(timeoutMs = 300)
+                val empty = current != null && current.text.isNullOrBlank()
+                current?.recycle()
+                val page = getGeminiAuditPage()
+                if (empty && page.contains("You said") &&
+                    GeminiAuditEvidence.normalized(page).contains(GeminiAuditEvidence.normalized(geminiAuditPrompt))) return true
+            }
+        }
+        return false
+    }
+
+    fun waitForGeminiAudit(timeoutSec: Int): Boolean {
+        geminiAuditAnswer = ""
+        val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+        var previous: String? = null
+        while (System.currentTimeMillis() < deadline) {
+            val answer = GeminiAuditEvidence.answer(getGeminiAuditPage())
+            if (answer != null && answer == previous && !isGenerating()) {
+                geminiAuditAnswer = answer
+                return true
+            }
+            previous = answer
+            Thread.sleep(500)
+        }
+        return false
+    }
+
+    fun getGeminiAuditAnswer(): String = geminiAuditAnswer
+
+    /** Gemini's Maps answer is depth25–31 and its rank may be off-screen.
+     * Read the Chrome WebView only, with bounded traversal, excluding editors.
+     * The evidence parser then separates the answer from prompt and page chrome.
+     */
+    private fun getGeminiAuditPage(): String {
+        val root = s.rootInActiveWindow ?: return ""
+        val text = StringBuilder()
+        var remaining = 4000
+        val deadline = System.currentTimeMillis() + 2000
+        fun visit(node: android.view.accessibility.AccessibilityNodeInfo, depth: Int, inWeb: Boolean) {
+            if (depth > 64 || --remaining < 0 || System.currentTimeMillis() > deadline) return
+            val cls = node.className?.toString() ?: ""
+            val web = inWeb || cls == "android.webkit.WebView"
+            if (web && !cls.contains("EditText")) {
+                val value = node.text?.toString()?.trim().orEmpty()
+                if (value.isNotEmpty()) text.append(value).append('\n')
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                try { visit(child, depth + 1, web) } finally { child.recycle() }
+            }
+        }
+        try {
+            if (root.packageName?.toString() != "com.android.chrome") return ""
+            visit(root, 0, false)
+        } finally { root.recycle() }
+        return if (remaining < 0 || System.currentTimeMillis() > deadline) "" else text.toString()
+    }
+
     fun inputText(text: String): Boolean {
         s.log("── INPUT TEXT: \"${text.take(50)}...\" ──")
         ensureChromeForeground()
