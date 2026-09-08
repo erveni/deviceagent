@@ -277,8 +277,7 @@ def _zip_to_latlng(zip_code: str) -> tuple[float, float] | None:
         _ZIP_LATLNG_CACHE[zip_code] = None
         return None
 
-sys.path.insert(0, "/Users/seolocalph/projects/aeo-appium")
-from gost_manager import GostManager  # noqa: E402
+from device_agent_proxy.gost_manager import GostManager  # noqa: E402
 
 AUDIT_LOG = "/Users/seolocalph/projects/aeo-appium/audit_results/audit_log.csv"
 AUDIT_RESULTS_DIR = "/Users/seolocalph/projects/aeo-appium/audit_results"

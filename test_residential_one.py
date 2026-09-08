@@ -25,8 +25,7 @@ os.environ.setdefault("PROXY_BASE_USER", "user-spmqebjuzf")
 if not os.environ.get("PROXY_PASSWORD"):
     sys.exit("ERROR: set PROXY_PASSWORD (Decodo residential password) in the environment first.")
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "aeo-appium"))
-from gost_manager import GostManager  # noqa: E402
+from device_agent_proxy.gost_manager import GostManager  # noqa: E402
 
 SER    = os.environ.get("TEST_SERIAL")
 if not SER:

@@ -1,5 +1,23 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-08 — Ranking-cost code consolidated into device-agent
+
+- User requested one repository. Proxy routing/telemetry now lives in
+  `device_agent_proxy/gost_manager.py`, with local tests and Rayobyte seed data.
+  All tracked GostManager callers use this explicit local package. Sibling
+  aeo-appium commit `126e890` is historical provenance, no longer a dependency.
+- Source branch remains `feat/top3-deepdive-ranking-geo-fix`. See
+  `RANKING_COST_README.md` for ownership, configuration and offline checks.
+  Proxy settings must come from exported launcher settings or device-agent's
+  optional `.env`; no sibling environment file is loaded or copied.
+- Existing shared catalogs/audit-output paths and legacy Appium workflows were
+  not relocated. Sibling history and unrelated edits were left untouched.
+- This is a source-only consolidation: no paid sample, APK installation, queue
+  restart, daily change or new savings measurement. The partial pilot below
+  remains the latest evidence, not a fleet-wide savings guarantee. Cache trial
+  remains default-off, source82/production79 as last verified; Copilot cap4 and
+  Edge clearing unchanged. Localhost GOST integration now requires explicit opt-in.
+
 ## 2026-09-08 19:58 — PARTIAL mixed-city Gemini pilot: settled 4.12 MB/success
 
 - User authorized ten-job pilot, NOT full-queue restart. Deadline19:52 protected

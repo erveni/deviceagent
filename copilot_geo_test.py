@@ -52,8 +52,7 @@ elif os.environ["PROXY_PROVIDER"] == "decodo":
     if not os.environ.get("PROXY_PASSWORD"):
         sys.exit("set DECODO_PASS (it lives in .env.dev): set -a; source .env.dev; set +a")
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "aeo-appium"))
-from gost_manager import GostManager  # noqa: E402
+from device_agent_proxy.gost_manager import GostManager  # noqa: E402
 
 SER = os.environ.get("TEST_SERIAL") or sys.exit("set TEST_SERIAL (see `adb devices`)")
 ZIP = os.environ.get("TEST_ZIP", "80202")

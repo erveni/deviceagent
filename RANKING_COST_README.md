@@ -3,12 +3,21 @@
 This commit saves experimental code and measured reports. It does not deploy an
 APK, resume ranking, or change the daily LaunchAgent.
 
-## Companion dependency
+## Repository ownership
 
-The sibling `aeo-appium` repository must include commit `126e890` for the optional
-GOST phase metrics and Evomi routing controls. Its unrelated working-tree edits
-are not part of this checkpoint. Both repositories still use the existing local
-environment/catalog setup; this is not a self-contained farm installation.
+All ranking-cost implementation, telemetry tests, measured reports and the HTML
+forecast now live in `device-agent`. The proxy manager is
+`device_agent_proxy/gost_manager.py`; callers import that explicit package.
+It includes the routing/telemetry work originally saved in sibling commit
+`126e890`, but that sibling commit is no longer required. Edit this local module
+for future device-agent work; do not maintain a second fix in aeo-appium.
+
+Export proxy settings from the existing launcher environment (`.env.dev` where
+applicable). The module only loads this repository's optional `.env` as a fallback;
+it never loads sibling credentials. No credentials were copied. The Rayobyte
+no-pool seed is included locally. Existing shared client catalogs, audit output
+paths and legacy Appium workflows are unchanged: this is code consolidation,
+not a migration of the entire farm's data or the aeo-appium application.
 
 ## Deployment state
 
@@ -29,6 +38,10 @@ python3 -m unittest discover -s tests
 python3 -m unittest discover -s tools -p 'test_*.py'
 bash -n run_ranking_auto.sh tools/run_ranking_cost_pair.sh measure_ranking_cost.sh
 ```
+
+The localhost GOST integration test is skipped unless
+`RUN_LOCAL_GOST_INTEGRATION=1` is explicitly set. Do not enable it during fleet
+work. Ordinary test discovery makes no paid requests or phone changes.
 
 The Apple Vision OCR executable is a local build, not committed. Its source is
 included. On macOS, build it with `swiftc tools/ocr_vision.swift -o tools/ocr_vision`.

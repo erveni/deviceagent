@@ -30,8 +30,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, "/Users/seolocalph/projects/aeo-appium")
-from gost_manager import (  # type: ignore
+from device_agent_proxy.gost_manager import (  # type: ignore
     _probe_decodo_upstream,
     _random_session_id,
     build_upstream_username,

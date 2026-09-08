@@ -29,8 +29,7 @@ def main():
                       PROXY_PASSWORD=os.environ['EVOMI_PASS'], ONLY_ONLINE='1',
                       EVOMI_CITY_FIRST='1', EVOMI_TIER_CACHE_TTL_S='0', EVOMI_DIRECT_ZIP='0',
                       USE_SNI_RELAY='0', GOST_COST_LEDGER=str(out / 'gost.jsonl'))
-    sys.path.insert(0, '/Users/seolocalph/projects/aeo-appium')
-    from gost_manager import GostManager, _summarize_gost_cost
+    from device_agent_proxy.gost_manager import GostManager, _summarize_gost_cost
     from run_with_proxy import DEVICES, socksdroid_connect, socksdroid_disconnect
     lock = Path('/tmp/fleet.lock')
     manager = None

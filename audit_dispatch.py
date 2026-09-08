@@ -32,9 +32,8 @@ from typing import Any
 from run_with_proxy import DEVICES
 from device_dispatch import POOL  # share the device pool with daily
 
-# aeo-appium has GostManager — required for per-job 1-IP-per-job dispatch
-sys.path.insert(0, "/Users/seolocalph/projects/aeo-appium")
-from gost_manager import GostManager  # noqa: E402
+# Repository-owned proxy manager for per-job 1-IP-per-job dispatch.
+from device_agent_proxy.gost_manager import GostManager  # noqa: E402
 
 # Port allocator for per-job gost listeners. Each job grabs a unique port from
 # this pool; releases on completion. Range chosen to not overlap with run_with_proxy.

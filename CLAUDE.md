@@ -4,6 +4,12 @@ Android `com.deviceagent` app (Kotlin) that automates ChatGPT / Gemini / Copilot
 
 ## Commands
 
+Ranking-cost work is owned entirely here: read `RANKING_COST_README.md` and the
+latest `HANDOVER.md` checkpoint first. Import proxy code from
+`device_agent_proxy.gost_manager`, not the sibling `aeo-appium/gost_manager.py`.
+Consolidation is not deployment: cache trials remain default-off; keep Copilot
+cap4/Edge clearing and the paused ranking queue unchanged until authorized tests.
+
 ```bash
 # Android build (Gradle)
 ./gradlew :app:assembleDebug      # build debug APK
