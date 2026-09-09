@@ -2,6 +2,17 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- UPDATE Sep10 00:11:15 ChatGPTfour meterCOMPLETE3.422797MB; first+four total
+  4.916596MB/5delivered =0.9833192MB/delivery. Only2automatic successes;3other
+  accepted through explicitreview/recovery, no paidretries. Wrappercomplete
+  restored79/accessibilitytrue/noVPN. Detailed ANALYSIS.md in fourmeterdirectory.
+- ACTIVE NOW com.deviceagent.yoklcopilotone0909, original79/104, exact5222.
+  See yokl_copilot_one_20260909.log and *_metered/report.json. Reuses freshGPTfour
+  settledbaseline29877.186870MB if unchanged. EdgepmclearON,1worker,singleattempt,
+  100MBguard. No Copilot cache change or savings claim. ChatGPTfour label disabled.
+  After1Copilot success<30MB + settledmeter/rootPNGreview, launchprepared
+  com.deviceagent.yoklcopilotthree0909 for5223–5225. Daily/fullchainstillheld.
+
 - UPDATE Sep10 00:06: ChatGPTfour ALL4attempts finished.2automatic successes
   (5222=2/2,5225=1/8),2explicitreviewacceptances(5223=1/6,5224=1/3). Root viewed
   everyPNG. With first5221recovered1/8, ALL5ChatGPT nowusable; no paidretries.

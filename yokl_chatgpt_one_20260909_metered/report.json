@@ -1,0 +1,46 @@
+{
+  "status": "complete",
+  "keywords": [
+    5221
+  ],
+  "legs": [
+    {
+      "name": "candidate",
+      "before_mb": 29882.103466,
+      "status": "valid",
+      "after_mb": 29880.609667,
+      "used_mb": 1.4937989999998535,
+      "completed_rows": 1,
+      "successful_pairs": 0,
+      "mb_per_scheduled_job": 1.4937989999998535,
+      "mb_per_success": null,
+      "expected_pairs": [
+        [
+          "3635221",
+          "chatgpt"
+        ]
+      ],
+      "actual_pairs": [
+        [
+          "3635221",
+          "chatgpt"
+        ]
+      ]
+    }
+  ],
+  "driver": "reframe_single",
+  "jobs_per_leg": 1,
+  "single_attempt": true,
+  "hard_deadline_utc": null,
+  "cumulative_spend_baseline_mb": null,
+  "budget_mb": 100,
+  "leg_timeout_s": 600,
+  "limitations": [
+    "Evomi is account-wide; remote consumers are undetectable.",
+    "Meter lag means the spend guard can overshoot 100 MB.",
+    "Matched serial legs do not eliminate time/order effects.",
+    "Keywords were previously successful; this is not a random estimate of the full stale set.",
+    "GOST ledger is partial local traffic accounting, not directly comparable to billed MB."
+  ],
+  "chatgpt_cache_trial": true
+}
