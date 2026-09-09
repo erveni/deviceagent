@@ -7,6 +7,11 @@
 set -u
 cd /Users/seolocalph/projects/device-agent
 
+# User requested that the NEXT ranking run use the verified low-cost path.
+# Until rollout is released, fail before secrets/proxies/device mutations rather
+# than silently running the expensive legacy path. Metered harnesses are bounded.
+python3 tools/ranking_cost_release.py || exit $?
+
 DATE="${1:?usage: run_ranking_auto.sh <DATE> [scope]}"
 SCOPE="${2:-never_ranked}"
 KW_IDS="${KEYWORD_IDS_FILE:-/tmp/ranking_kw_ids_${DATE}.json}"
@@ -26,6 +31,7 @@ unset _SECRET
 _ov_provider="${PROXY_PROVIDER:-}"   # a caller-exported provider wins over .env.dev
 set -a; source .env.dev; set +a
 [ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
+python3 tools/ranking_cost_release.py || exit $?
 # RANKING is RESIDENTIAL. Default Decodo (zip geo). DataImpulse = state/country only.
 # Rayobyte = zip geo via HTTP :8000 (gost http connector, targeting in password).
 # ONLY_ONLINE=1: run_with_proxy prunes DEVICES to currently-online phones and
@@ -124,8 +130,11 @@ case "$RANK_RETRY_ROUNDS" in
   ''|*[!0-9]*) echo "Invalid RANK_RETRY_ROUNDS: expected nonnegative integer" >&2; exit 2 ;;
 esac
 for ((round=1; round<=RANK_RETRY_ROUNDS; round++)); do
-  rem=$(EXCLUDE_SUCCESS="$CSV_GLOB" RETRY_KEEP_NORANK=1 DRY_RUN=1 python3 run_ranking.py 2>/dev/null | sed -n 's/.*would run \([0-9]*\) ranking.*/\1/p')
-  rem="${rem:-0}"
+  rem_output=$(EXCLUDE_SUCCESS="$CSV_GLOB" RETRY_KEEP_NORANK=1 DRY_RUN=1 python3 run_ranking.py 2>>"$LOG") || {
+    echo "[rank ${DATE}] FATAL: retry reconciliation failed; not declaring completion" | tee -a "$LOG"; exit 2;
+  }
+  rem=$(printf '%s\n' "$rem_output" | sed -n 's/.*would run \([0-9]*\) ranking.*/\1/p')
+  case "$rem" in ''|*[!0-9]*) echo "Invalid remaining count; ranking stopped" >&2; exit 2 ;; esac
   echo "[rank ${DATE} retry $round] $(date) remaining=$rem" | tee -a "$LOG"
   [ "$rem" -eq 0 ] && { echo "[rank ${DATE}] ALL DONE — 0 errors remaining" | tee -a "$LOG"; break; }
   if [ "$rem" -eq "$prev" ]; then stable=$((stable+1)); else stable=0; fi

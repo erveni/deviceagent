@@ -3,6 +3,26 @@
 User order: measured ranking fix first, then eight-type daily + AEO Admin,
 then tests, then September9 execution. Stale ranking must not be restarted.
 
+## Latest checkpoint (supersedes older counts and gates below)
+
+- September9 legacy-credit policy is accepted and implemented. Fresh read-only
+  catalog:265 campaigns,267 existing successes credited,1853 new jobs
+  (687 ChatGPT,690 Gemini,476 Copilot). No plan written or phone jobs launched.
+  Historical types stay NULL; credit manifests plus new slots must total8.
+- Nine Python daily tests and eight backend tests pass. Backend tests exercise
+  actual HTTP build and ingestion for all8 types against isolated PostgreSQL,
+  duplicate200/conflict409 behavior and unchanged NULL historical metadata.
+- API/admin bundles build. API typecheck comparison:64 preexisting/64 current
+  errors, zero newly introduced;16 preexisting Zod barrel collisions remain.
+- Lightweight daily-catalog endpoint avoids historical activity query timeouts.
+  Typed imports use exact IDs; retries cannot replay the base wave and stop
+  incomplete after3 rounds. Canonical build no longer starts old local LLM server.
+- Nine parser fixes leave16 unresolved campaigns:457,277,389–402. Approval to
+  verify/update their location data is unanswered. No production data changed.
+- Remaining release gates: verify locations and GPS, migrate/deploy backend/admin,
+  measured daily phone tests and full-run budget guard. No production deployment.
+- Older sections below are initial-checkpoint history, not current launch counts.
+
 ## Implemented locally
 
 - Canonical planner: exactly8 slots per real campaign/business pair, even with

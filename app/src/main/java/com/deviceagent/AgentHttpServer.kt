@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.69-copilot-bootstrap-trial"
-        const val APP_VERSION_CODE = 86
+        const val APP_VERSION_NAME = "0.9.70-copilot-network-guard-trial"
+        const val APP_VERSION_CODE = 87
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -339,8 +339,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         if (!step("submit") { flowEngine.copilot.submit() }) {
                             pr.status = "error"; pr.error = "submit failed"; continue
                         }
-                        if (!step("wait_generation") { flowEngine.copilot.waitForAnswer(genTimeoutSec) }) {
-                            pr.status = "error"; pr.error = "generation timeout"; continue
+                        if (!step("wait_generation") { flowEngine.copilot.waitForAnswer(genTimeoutSec, confirmNetworkError = prepared) }) {
+                            pr.status = "error"; pr.error = flowEngine.copilot.lastWaitFailure ?: "generation timeout"; continue
                         }
                         step("read_answer") {
                             copilotAnswer = flowEngine.copilot.readAnswer()

@@ -191,9 +191,8 @@ def main() -> None:
     csv_path = os.path.splitext(plan_path)[0] + "_results.csv"
     plan = json.load(open(plan_path))
     if plan.get('daily_protocol') == 'eight-v1':
-        from daily_prompt_plan import validate_typed_jobs
-        validate_typed_jobs([j for w in plan['waves'] for j in w], plan['target_date'],
-                            require_complete=not plan.get('is_remaining', False))
+        from daily_prompt_plan import validate_typed_plan
+        validate_typed_plan(plan)
     jobs = [normalize_plan_job(j) for w in plan["waves"] for j in w]
 
     print("=" * 70, flush=True)

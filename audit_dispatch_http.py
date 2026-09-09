@@ -1343,8 +1343,9 @@ def dispatch_audit_job(
 
     offline_edge_proof = None
     offline_edge_consumed = False
+    from tools.copilot_bootstrap_scope import device_allowed as bootstrap_device_allowed
     if os.environ.get('RANK_COPILOT_OFFLINE_BOOTSTRAP','0')=='1':
-        if device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+        if not bootstrap_device_allowed(device_label) or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
             POOL.release(device_idx)
             raise RuntimeError('Inline offline bootstrap restricted to one104 Copilot audit')
         from tools.copilot_offline_bootstrap import prepare
@@ -1436,7 +1437,7 @@ def dispatch_audit_job(
     relay_proc = None
     phone_port = gost_port
     if os.environ.get('RANK_COPILOT_TRAFFIC_OBSERVER') == '1':
-        if device_label != 'device-104' or platform.lower() != 'copilot' or not _RANK_SINGLE_ATTEMPT or USE_SNI_RELAY:
+        if not bootstrap_device_allowed(device_label) or platform.lower() != 'copilot' or not _RANK_SINGLE_ATTEMPT or USE_SNI_RELAY:
             gost.stop()
             _release_gost_port(gost_port)
             POOL.release(device_idx)
@@ -1695,7 +1696,7 @@ def dispatch_audit_job(
                 except Exception as e:
                     print(f"  [edge-clear] {serial}: {type(e).__name__} {e} — continuing")
         if os.environ.get('RANK_COPILOT_TEST_NOTIFICATION_DENY','0') == '1':
-            if device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT:
+            if not bootstrap_device_allowed(device_label) or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT:
                 raise RuntimeError('Notification-denial experiment restricted to one-device104 Copilot test')
             for command in (
                 ('pm','revoke','com.microsoft.emmx','android.permission.POST_NOTIFICATIONS'),

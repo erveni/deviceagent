@@ -576,16 +576,42 @@ class EdgeCopilotFlow(
      * gating on visible text here just burns the whole timeout. Poll at 1s so a fast
      * answer's streaming phase is not missed between samples.
      */
-    fun waitForAnswer(timeoutSec: Int): Boolean {
+    var lastWaitFailure: String? = null
+        private set
+
+    fun waitForAnswer(timeoutSec: Int, confirmNetworkError: Boolean = false): Boolean {
         s.log("── COPILOT WAIT (${timeoutSec}s) ──")
         val deadline = System.currentTimeMillis() + timeoutSec * 1000L
         var sawStreaming = false
+        var networkErrorSince = 0L
+        lastWaitFailure = null
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(1000)
-            if (s.findNode(text = "Network issues", timeoutMs = 300) != null) {
-                s.log("[edge] Copilot reported network issues")
-                return false
+            val networkNode = s.findNode(text = "Network issues", timeoutMs = 300)
+            val networkBounds = Rect()
+            networkNode?.getBoundsInScreen(networkBounds)
+            val visibleExactError = networkNode != null && networkNode.isVisibleToUser &&
+                networkNode.text?.toString()?.trim()?.equals("Network issues", ignoreCase = true) == true &&
+                networkBounds.width() > 0 && networkBounds.height() > 0 &&
+                networkBounds.intersects(0, 0, s.screenWidth(), s.screenHeight())
+            val networkError = networkNode != null && (!confirmNetworkError || visibleExactError)
+            networkNode?.recycle()
+            if (networkError) {
+                if (!confirmNetworkError) {
+                    lastWaitFailure = "copilot_network_issues"
+                    s.log("[edge] Copilot reported network issues")
+                    return false
+                }
+                if (networkErrorSince == 0L) networkErrorSince = System.currentTimeMillis()
+                if (System.currentTimeMillis() - networkErrorSince >= 3000L) {
+                    lastWaitFailure = "copilot_network_issues"
+                    s.log("[edge] confirmed visible Network issues for >=3s")
+                    return false
+                }
+                s.log("[edge] transient visible Network issues; confirming before abort")
+                continue
             }
+            networkErrorSince = 0L
             if (isGenerating()) { sawStreaming = true; continue }
             if (sawStreaming) {
                 s.log("[edge] generation complete (streaming cleared)")
@@ -600,6 +626,7 @@ class EdgeCopilotFlow(
             }
         }
         s.log("[edge] timeout waiting for answer")
+        lastWaitFailure = "generation timeout"
         return false
     }
 

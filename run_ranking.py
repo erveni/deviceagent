@@ -471,7 +471,7 @@ errors = []
 # once (2026-09-04 daily, same phones: ~70% at 1, 28-38% at ~5, 8% at ~15). The daily
 # runner caps it in run_rolling_plan; the ranking path dispatches here, so cap it here.
 # Blocking acquire is fine: the phone is taken inside dispatch_audit_job, after this.
-COPILOT_MAX_PARALLEL = int(os.environ.get("COPILOT_MAX_PARALLEL", "4"))
+COPILOT_MAX_PARALLEL = max(1,min(4,int(os.environ.get("COPILOT_MAX_PARALLEL", "4"))))
 _COPILOT_SLOTS = threading.BoundedSemaphore(COPILOT_MAX_PARALLEL)
 
 

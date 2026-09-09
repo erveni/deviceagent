@@ -1,6 +1,6 @@
 from collections import Counter
 import unittest
-from daily_prompt_plan import campaign_slots,cycle_day,result_key,remaining_jobs,PROMPT_TYPES,validate_typed_jobs
+from daily_prompt_plan import campaign_slots,cycle_day,result_key,remaining_jobs,PROMPT_TYPES,validate_typed_jobs,validate_typed_plan,reconcile_legacy_credits
 
 
 class DailyPlanTests(unittest.TestCase):
@@ -43,6 +43,45 @@ class DailyPlanTests(unittest.TestCase):
         self.assertEqual(validate_typed_jobs(jobs[:1],'2026-09-09',require_complete=False),1)
         with self.assertRaises(ValueError):
             validate_typed_jobs([dict(jobs[0],platform='perplexity')],'2026-09-09',require_complete=False)
+
+    def test_legacy_credits_preserve_history_and_platform_quota(self):
+        slots=campaign_slots(self.items(),'2026-09-09')
+        old=dict(platform='gemini',client_id=9,campaign_id=1,business_id=2,
+                 biz_name='Business',keyword_text='service')
+        row=dict(old,status='success',date='2026-09-09')
+        original=dict(row)
+        remaining,manifest=reconcile_legacy_credits(slots,[row,row],{'waves':[[old]]},'2026-09-09')
+        self.assertEqual(len(remaining),7)
+        self.assertEqual(len(manifest['credits']),1)
+        self.assertEqual(Counter(s['platform'] for s in remaining),Counter(chatgpt=3,gemini=2,copilot=2))
+        self.assertEqual(row,original)
+        self.assertIsNone(manifest['credits'][0]['historical_prompt_type'])
+        with self.assertRaises(ValueError):
+            reconcile_legacy_credits(slots,[dict(row,date='2026-09-10')],{'waves':[[old]]},'2026-09-09')
+        with self.assertRaises(ValueError):
+            reconcile_legacy_credits(slots,[dict(row,keyword_text='unknown')],{'waves':[[old]]},'2026-09-09')
+
+    def test_legacy_outside_scope_is_reported_not_replayed(self):
+        old=dict(platform='gemini',client_id=9,campaign_id=99,business_id=2,
+                 biz_name='Business',keyword_text='service')
+        remaining,manifest=reconcile_legacy_credits(campaign_slots(self.items(),'2026-09-09'),
+            [dict(old,status='success',date='2026-09-09')],{'waves':[[old]]},'2026-09-09')
+        self.assertEqual(len(remaining),8)
+        self.assertEqual(len(manifest['outside_current_scope']),1)
+
+    def test_transition_manifest_must_account_for_all_eight(self):
+        old=dict(platform='gemini',client_id=9,campaign_id=1,business_id=2,
+                 biz_name='Business',keyword_text='service')
+        slots,manifest=reconcile_legacy_credits(campaign_slots(self.items(),'2026-09-09'),
+            [dict(old,status='success',date='2026-09-09')],{'waves':[[old]]},'2026-09-09')
+        jobs=[dict(s,campaign_id=1,business_id=2,prompt='Who provides this service?') for s in slots]
+        plan=dict(daily_protocol='eight-v1',target_date='2026-09-09',total_jobs=7,
+                  total_campaigns=1,legacy_transition=manifest,waves=[jobs])
+        validate_typed_plan(plan)
+        with self.assertRaises(ValueError):
+            validate_typed_plan(dict(plan,total_jobs=6,waves=[jobs[:-1]]))
+        with self.assertRaises(ValueError):
+            validate_typed_plan(dict(plan,legacy_transition=dict(manifest,credits=manifest['credits']*2)))
 
 
 if __name__=='__main__':unittest.main()

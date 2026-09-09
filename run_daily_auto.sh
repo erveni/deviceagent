@@ -13,11 +13,25 @@ REMAIN="${DAILY_REMAIN_PATH:-daily_plan_${DATE}_REMAIN.json}"
 export DAILY_PLAN_PATH="$PLAN" DAILY_REMAIN_PATH="$REMAIN"
 LOG="/private/tmp/daily_auto_${DATE}.log"
 
+# New typed plans always resume from successful slot IDs, including on the first
+# invocation. Never replay a completed base wave when an operator restarts this.
+EIGHT_DAILY=$(python3 -c "import json,sys; print(int(json.load(open(sys.argv[1])).get('daily_protocol')=='eight-v1'))" "$PLAN") || exit 2
+if [ "$EIGHT_DAILY" = "1" ]; then
+  export SKIP_BASE=1 ROLLING_RETRY=0
+  DAILY_MAX_ROUNDS="${DAILY_MAX_ROUNDS:-3}"
+else
+  DAILY_MAX_ROUNDS="${DAILY_MAX_ROUNDS:-60}"
+fi
+case "$DAILY_MAX_ROUNDS" in
+  ''|*[!0-9]*|0) echo "DAILY_MAX_ROUNDS must be a positive integer" >&2; exit 2 ;;
+esac
+
 export SSL_CERT_FILE=$(python3 -c "import certifi;print(certifi.where())")
 export EXECUTOR_TOKEN=$(aws secretsmanager get-secret-value --secret-id aeo-admin/prod --profile aeo-admin --region us-east-1 --query SecretString --output text | python3 -c "import sys,json;print(json.load(sys.stdin).get('EXECUTOR_TOKEN',''))")
 _ov_provider="${PROXY_PROVIDER:-}"   # a caller-exported provider wins over .env.dev
 set -a; source .env.dev; set +a
 [ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
+if [ "$EIGHT_DAILY" = "1" ]; then export SKIP_BASE=1 ROLLING_RETRY=0; fi
 # RESIDENTIAL daily proxy. Default Decodo; set PROXY_PROVIDER=dataimpulse in .env.dev
 # to switch to the DataImpulse gateway (TEMPORARY, while Decodo funding). Runs AFTER
 # the .env.dev source so it wins over stale proxy host/port. Note: DataImpulse only
@@ -89,8 +103,8 @@ else
 fi
 
 prev=-1; stable=0; cnt=0
-for round in $(seq 1 60); do
-  cnt=$(python3 _build_remaining.py "$DATE" 2>>"$LOG")
+for round in $(seq 1 "$DAILY_MAX_ROUNDS"); do
+  cnt=$(python3 _build_remaining.py "$DATE" 2>>"$LOG") || { echo "Daily reconciliation failed; no retry launched" >&2; exit 2; }
   echo "[daily ${DATE} retry $round] $(date) remaining=$cnt" | tee -a "$LOG"
   if [ "$cnt" -eq 0 ]; then echo "[daily ${DATE}] ALL SUCCESS — 100%" | tee -a "$LOG"; break; fi
   if [ "$cnt" -eq "$prev" ]; then stable=$((stable+1)); else stable=0; fi
@@ -101,4 +115,10 @@ for round in $(seq 1 60); do
   echo "[daily ${DATE} retry $round] running $cnt jobs..." | tee -a "$LOG"
   python3 -u run_rolling_plan.py "$REMAIN" >>"$LOG" 2>&1
 done
+# Reconcile after the final attempt too; the pre-attempt count is not final.
+cnt=$(python3 _build_remaining.py "$DATE" 2>>"$LOG") || exit 2
 echo "[daily ${DATE}] $(date) FINISHED remaining=$cnt" | tee -a "$LOG"
+if [ "$EIGHT_DAILY" = "1" ] && [ "$cnt" -ne 0 ]; then
+  echo "[daily ${DATE}] INCOMPLETE: bounded retries exhausted; preserve results and review" | tee -a "$LOG"
+  exit 3
+fi

@@ -68,6 +68,49 @@ def remaining_jobs(plan,rows):
     return [j for wave in plan['waves'] for j in wave if result_key(j) not in done]
 
 
+def reconcile_legacy_credits(slots,rows,old_plan,run_date):
+    """Credit old successes toward eight without assigning historical types.
+
+    Return runnable slots and an audit manifest. Match old rows to their actual
+    old-plan identity, not a guessed business name. A credited slot is omitted
+    from this transition day's new work, NOT claimed as a completed prompt type.
+    """
+    old={}
+    for wave in old_plan['waves']:
+        for job in wave:
+            key=result_key(job)
+            identity=(int(job['campaign_id']),int(job['business_id']))
+            if key in old and old[key]!=identity:raise ValueError('Ambiguous historical job identity')
+            old[key]=identity
+    groups={}
+    for slot in slots:
+        identity=(slot['item']['kw']['aeoPlanId'],slot['item']['biz']['id'])
+        groups.setdefault(identity,[]).append(slot)
+    credits=[];seen=set();outside=[]
+    for row in rows:
+        if row.get('status')!='success' or norm(row.get('daily_slot_id')):continue
+        if row.get('date')!=run_date:raise ValueError('Historical result date mismatch')
+        key=result_key(row)
+        if key in seen:continue
+        seen.add(key)
+        if key not in old:raise ValueError('Historical success absent from original plan')
+        identity=old[key]
+        if identity not in groups:
+            outside.append(dict(campaign_id=identity[0],business_id=identity[1],legacy_key=key))
+            continue
+        available=groups[identity]
+        if not available:raise ValueError('More than eight historical successes for campaign/location')
+        # Preserve the daily platform quota when possible; all remaining new
+        # prompts keep their authentic type and rotation assignment.
+        selected=next((s for s in available if s['platform']==norm(row.get('platform')).lower()),available[0])
+        available.remove(selected)
+        credits.append(dict(campaign_id=identity[0],business_id=identity[1],legacy_key=key,
+                            omitted_slot_id=selected['daily_slot_id'],historical_prompt_type=None))
+    return [s for group in groups.values() for s in group],dict(
+        policy='credit-existing-toward-eight',credits=credits,outside_current_scope=outside,
+        unique_historical_successes=len(seen))
+
+
 def validate_typed_jobs(jobs,run_date,require_complete=True):
     seen=set();groups={}
     for job in jobs:
@@ -84,3 +127,29 @@ def validate_typed_jobs(jobs,run_date,require_complete=True):
         if len(rows)!=8 or {r['prompt_type'] for r in rows}!=set(PROMPT_TYPES):raise ValueError('Campaign must have all eight types')
         if Counter(norm(r['platform']).lower() for r in rows)!=Counter(chatgpt=3,gemini=3,copilot=2):raise ValueError('Wrong platform split')
     return len(groups)
+
+
+def validate_typed_plan(plan):
+    if plan.get('daily_protocol')!='eight-v1':return
+    jobs=[j for wave in plan['waves'] for j in wave]
+    if plan.get('total_jobs')!=len(jobs):raise ValueError('Daily job count mismatch')
+    run_date=plan['target_date'];transition=plan.get('legacy_transition')
+    validate_typed_jobs(jobs,run_date,require_complete=not (plan.get('is_remaining') or transition))
+    if plan.get('is_remaining'):return
+    groups={}
+    for job in jobs:groups.setdefault((job['campaign_id'],job['business_id']),set()).add(job['daily_slot_id'])
+    if transition:
+        if transition.get('policy')!='credit-existing-toward-eight':raise ValueError('Unknown transition policy')
+        seen_credits=set()
+        for credit in transition['credits']:
+            key=(credit['campaign_id'],credit['business_id']);slot=credit['omitted_slot_id']
+            legacy_key=tuple(credit['legacy_key'])
+            expected={slot_id(run_date,*key,kind) for kind in PROMPT_TYPES}
+            if slot not in expected or slot in groups.get(key,set()) or legacy_key in seen_credits:
+                raise ValueError('Duplicate/invalid historical quota credit')
+            if credit.get('historical_prompt_type') is not None:raise ValueError('Historical type must stay null')
+            groups.setdefault(key,set()).add(slot);seen_credits.add(legacy_key)
+    for key,slots in groups.items():
+        if slots!={slot_id(run_date,*key,kind) for kind in PROMPT_TYPES}:
+            raise ValueError('New jobs plus historical credits must total eight per campaign/location')
+    if len(groups)!=plan.get('total_campaigns'):raise ValueError('Daily campaign count mismatch')

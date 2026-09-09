@@ -35,33 +35,24 @@ else
   _ov_provider="${PROXY_PROVIDER:-}"   # a caller-exported provider wins over .env.dev
   set -a; source .env.dev 2>/dev/null; set +a
   [ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
-  # Route the build through a local build-only api-server so DeepSeek-402 auto-falls
-  # to Ollama instead of starving the plan. Best-effort: if it can't start, ADMIN_BASE
-  # stays unset and the build hits the deployed endpoint (DeepSeek-only) as before.
-  source /Users/seolocalph/projects/device-agent/_build_server_lib.sh
-  if start_build_server >>"$LOG" 2>&1; then
-    export ADMIN_BASE="http://localhost:${BUILD_SERVER_PORT}"
-    say "build routed via local server (DeepSeek-first, Ollama fallback)"
-  else
-    say "local build-server unavailable — building against deployed endpoint"
-  fi
-  # Local Ollama serves every session serially behind 8 build workers, so a single
-  # call queues far longer than the DeepSeek-era default of 60s.
+  # Eight-type daily uses deterministic backend templates, not DeepSeek/Ollama.
+  # Require the deployed capability; never silently use a stale local backend.
+  say "building eight-type daily against configured/deployed backend"
   DATE="$DATE" EXECUTOR_TOKEN="$TOK" BUILD_TIMEOUT_S="${BUILD_TIMEOUT_S:-180}" \
-    python3 -u build_daily_plan.py >>"$LOG" 2>&1
-  stop_build_server >>"$LOG" 2>&1 || true
-  unset ADMIN_BASE
+    python3 -u build_daily_plan.py >>"$LOG" 2>&1 || { say "FATAL: daily build failed"; exit 1; }
   [ -s "$PLAN" ] || { say "FATAL: build produced no $PLAN"; exit 1; }
 fi
 
 # 1b) sanity: reject a DeepSeek-starved partial plan (normal ~1300-1400 pre-Mae jobs).
 JOBS=$(python3 -c "import json;print(json.load(open('$PLAN'))['total_jobs'])" 2>/dev/null || echo 0)
-if [ "${JOBS:-0}" -lt 800 ]; then
+EIGHT_DAILY=$(python3 -c "import json;print(int(json.load(open('$PLAN')).get('daily_protocol')=='eight-v1'))")
+if [ "$EIGHT_DAILY" = "1" ]; then
+  python3 -c "import json,sys;from daily_prompt_plan import validate_typed_plan;validate_typed_plan(json.load(open(sys.argv[1])))" "$PLAN" || exit 2
+elif [ "${JOBS:-0}" -lt 800 ]; then
   say "FATAL: plan has only ${JOBS} jobs (<800) — likely DeepSeek drop; NOT running. Delete $PLAN + rebuild once funded."
   exit 1
 fi
 say "plan job count ok: ${JOBS}"
-EIGHT_DAILY=$(python3 -c "import json;print(int(json.load(open('$PLAN')).get('daily_protocol')=='eight-v1'))")
 
 # 2) merge Mae from tracked mae_plan.json — no-op if already merged (guarded inside)
 python3 - "$DATE" >>"$LOG" 2>&1 <<'PY'

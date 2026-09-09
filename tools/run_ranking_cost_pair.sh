@@ -25,6 +25,8 @@ import time
 root = Path.cwd()
 sys.path.insert(0, str(root))
 from tools.measure_evomi_targeting import balance
+from tools.copilot_bootstrap_scope import selected_device
+pilot_label,pilot_hardware=selected_device()
 manifest = Path(sys.argv[1]).resolve()
 out = Path(sys.argv[2]).resolve()
 keywords = json.loads(manifest.read_text())
@@ -41,6 +43,8 @@ copilot_cache = os.environ.get('COST_COPILOT_CACHE') == '1'
 copilot_bootstrap = os.environ.get('COST_COPILOT_BOOTSTRAP') == '1'
 if copilot_bootstrap and (not copilot_yokl or copilot_cache or keywords != [5225]):
     raise SystemExit('Copilot bootstrap restricted to one fixed5225 comparison, no cache mode')
+if pilot_label!='device-104' and not (copilot_bootstrap and os.environ.get('RANK_COPILOT_WIFI_SETTLE')=='1'):
+    raise SystemExit('Second-phone measurement requires settled Copilot bootstrap')
 if copilot_cache and (not copilot_yokl or keywords != [5225]):
     raise SystemExit('Copilot cache measurement restricted to one fixed5225 comparison')
 copilot_retry = os.environ.get('COST_COPILOT_RETRY') == '1'
@@ -309,7 +313,7 @@ def deadline_stop():
 def stop_pilot_phone():
     """Cancel our asynchronous device-104 job before meter settlement."""
     global pilot_phone_stopped
-    if not pilot or not pilot_serial or active is None:
+    if not one_phone or not pilot_serial or active is None:
         return
     with pilot_cancel_lock:
         if pilot_phone_stopped:
@@ -326,13 +330,13 @@ def stop_pilot_phone():
             except (ValueError, OSError, IndexError):
                 report['phone_cancel_error'] = 'unverifiable fleet owner; no phone commands sent'
                 return
-        if '149145555W002883' not in pilot_serial:
+        if pilot_hardware not in pilot_serial:
             raise RuntimeError('Refusing cancellation of an unexpected phone')
         for package in ('com.deviceagent', 'com.android.chrome', 'net.typeblog.socks'):
             subprocess.run(['adb', '-s', pilot_serial, 'shell', 'am', 'force-stop', package],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         pilot_phone_stopped = True
-        report['owned_phone_cancelled'] = 'device-104; wrapper must restore APK/accessibility'
+        report['owned_phone_cancelled'] = pilot_label+'; wrapper must restore APK/accessibility'
 
 
 def settled(phase, before=None, max_seconds=None):
@@ -431,16 +435,16 @@ try:
         # CLAUDE.md: locked phones mimic browser reset faults. Wake reachable
         # production phones before a test; preserve serials containing spaces.
         adb_list = subprocess.check_output(['adb', 'devices'], text=True, timeout=10)
-        if pilot:
+        if one_phone:
             pilot_serials = [line.split('\t')[0] for line in adb_list.splitlines()[1:]
-                             if '149145555W002883' in line and line.endswith('\tdevice')]
+                             if pilot_hardware in line and line.endswith('\tdevice')]
             if len(pilot_serials) != 1:
                 raise RuntimeError('Pilot requires exactly one reachable device-104 serial')
             pilot_serial = pilot_serials[0]
         for line in adb_list.splitlines()[1:]:
             check_idle()
             serial, sep, state = line.partition('\t')
-            if one_phone and '149145555W002883' not in serial:
+            if one_phone and pilot_hardware not in serial:
                 continue
             if sep and state.strip() == 'device' and '1490455572008742' not in serial:
                 for command in [('keyevent', 'KEYCODE_WAKEUP'), ('keyevent', 'KEYCODE_MENU'),
@@ -450,7 +454,7 @@ try:
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
         offset = shared_log.stat().st_size if shared_log.exists() else 0
         env = os.environ.copy()
-        env.update(PROXY_PROVIDER='evomi', KEYWORD_IDS_FILE=str(fixed),
+        env.update(PROXY_PROVIDER='evomi', RANK_COST_MEASUREMENT='1', KEYWORD_IDS_FILE=str(fixed),
                    AUDIT_CSV=str(legdir / 'results.csv'), PLATFORMS='gemini',
                    DEVICE_EXCLUDE='device-102,device-108,device-125', WORKERS_CAP='3',
                    MAX_JOBS=str(job_count), RANK_RETRY_ROUNDS='0', FORCE_RERANK='1', SKIP_BASE='0',
@@ -472,7 +476,7 @@ try:
                    GOST_COST_LEDGER=str(legdir / 'gost.jsonl'), COPILOT_MAX_PARALLEL='4')
         if one_phone:
             env.update(WORKERS_CAP='1', RANK_SINGLE_ATTEMPT='1', RANK_GEMINI_SAME_ANSWER_REFRAME='1',
-                       DEVICE_EXCLUDE=','.join(f'device-{n}' for n in range(101,126) if n != 104))
+                       DEVICE_EXCLUDE=','.join(f'device-{n}' for n in range(101,126) if f'device-{n}' != pilot_label))
         if chatgpt_cache:
             env.update(PLATFORMS='chatgpt', RANK_CHATGPT_CACHE_TRIAL='1')
             report['chatgpt_cache_trial'] = True
@@ -543,8 +547,13 @@ try:
         started = time.monotonic()
         log(f'Starting {name} bounded {job_count}-job sample: {env["PLATFORMS"]}')
         check_idle()
+        # Bash reads scripts incrementally: edits during a long phone job can
+        # corrupt its remaining parse. Run an immutable, recorded snapshot.
+        launcher = legdir / 'launcher.sh'
+        launcher.write_bytes((root / 'run_ranking_auto.sh').read_bytes())
+        subprocess.run(['bash', '-n', str(launcher)], check=True)
         with (legdir / 'launcher.log').open('w') as stream:
-            active = subprocess.Popen(['bash', 'run_ranking_auto.sh', date, 'stale'],
+            active = subprocess.Popen(['bash', str(launcher), date, 'stale'],
                                       env=env, stdout=stream, stderr=subprocess.STDOUT,
                                       start_new_session=True)
             check_deadline()
@@ -555,8 +564,7 @@ try:
                     if time.monotonic() - started >= leg_timeout:
                         raise RuntimeError(name + f': {leg_timeout // 60}-minute leg limit reached')
                     time.sleep(poll_s)
-                if active.returncode:
-                    raise RuntimeError(name + ': launcher exit ' + str(active.returncode))
+                leg['launcher_exit_code'] = active.returncode
             finally:
                 if shared_log.exists():
                     with shared_log.open('rb') as source:
@@ -593,6 +601,9 @@ try:
                    expected_pairs=sorted(expected_pairs), actual_pairs=sorted(actual_pairs),
                    status='valid' if complete else 'invalid-incomplete')
         save()
+        if leg['launcher_exit_code']:
+            raise RuntimeError(name + ': launcher exit ' + str(leg['launcher_exit_code'])
+                               + '; spent bandwidth retained in settled leg')
         if not complete:
             raise RuntimeError(name + ': expected exactly one row per manifest campaign/Gemini pair')
         log(name + ': used ' + str(round(used, 2)) + ' MB; successes=' + str(len(successes)))

@@ -2,6 +2,51 @@
 
 ## Current user-approved order — September10
 
+- UPDATE latest user: proceed with daily; next ranking must use efficient usage.
+  Sep9 legacy-credit recommendation accepted. Fresh READ ONLY DB snapshot in
+  `/tmp/aeo-daily-catalog-20260910-0442`:265 campaigns,267 credits,1853 new jobs
+  (690Gemini/687ChatGPT/476Copilot). No production plan written or jobs launched.
+  Transition manifest preserves historical NULL types; new+credited quota is8.
+- Ranking normal launcher now FAILS CLOSED in `tools/ranking_cost_release.py`
+  until rollout is released; metered zero-retry harnesses only. This does NOT
+  mean efficient mode is deployed. Keep stale queue paused. Copilot cap4 clamped.
+- Copilot106/v86 measured comparison completed at3.133920MB/0success. Offline
+  preparation13.440309MB,154.7s,71.7squiet. Native log says Network issues after1s,
+  but generic result said generation timeout. Root viewed post-job PNG (prompt
+  and spinner, no answer); later idle XML had no Network issues text. This does
+  not prove the earlier message was false. No retry occurred in that sample.
+  Wrapper rollback hit ADB timeout; direct HTTP /adb/rearm recovered wireless
+  debugging (previous0), then `tools/restore_copilot_trial.py` restored original79,
+  accessibility/noVPN verified in attempt4_wrapper/recovery.json.
+- COMPLETED phone work for follow-up:106/v87, prefix
+  `copilot_bootstrap_wifi_20260910_device-106_attempt5_{wrapper,metered}`.
+  Native87 confirms exact visible Network issues for3s only on prepared audit;
+  error namedcopilot_network_issues instead oftimeout. Daily native path unchanged.
+  One5225 job/no retries/30MBguard, fresh full reset/WiFi settlement, reused verified
+  unchanged settled meter baseline29746.471228. Valid native PNG reviewed:1/8,
+  no prompt leak. Original79/accessibility/noVPN automatically restored.
+  Launcher exited2 AFTER success (shell parse error; current bash -n passes).
+  Likely script edited while Bash was reading it. Harness now saves/checks an
+  immutable launcher copy, settles spent traffic before reporting launcher error,
+  and wrapper exits nonzero on errors. No repeat paid job for this bookkeeping bug.
+  Original meter report remains invalid; recovery tool is taking fresh readings
+  in recovered_settlement.json. Consult that artifact for final settlement status.
+  No Network issues guard event occurred on success; do not claim causal proof.
+- Daily backend: eight real HTTP build+ingest round trips pass against isolated
+  PostgreSQL, duplicates200/conflicts409/historyNULL. Admin/API bundles build.
+  Typecheck comparison:64 baseline/64current API errors, none new (same installed
+  dependencies); whole workspace is NOT green. Removed newly introduced Zod name
+  collision through generator config;16older barrel collisions remain.
+  Lightweight daily-catalog endpoint avoids slow historical activity queries.
+  Old keyword GET timed out on both App Runner and CloudFront; partial snapshot
+  folders must not be used. No backend deploy/migration yet; Docker daemon off.
+- Nine address parsing fixes reduce unresolved campaigns25→16:457,277,389–402.
+  Async permission request to complete these location settings remains unanswered.
+  Do not infer LehiUT for VoiceDepot campaigns nationwide. No campaign data changed.
+  Daily now skips stale local LLM build server, validates quotas before dispatch,
+  always resumes typed slots, disables nested retries, defaults3rounds, returns
+  incomplete rather than success when retries exhaust. Never delete old results.
+
 - DAILY IMPLEMENTATION CHECKPOINT: local source and13 focused tests now present;
   API bundle builds, but NOT deployed/migrated or phone-tested. See
   `docs/DAILY_EIGHT_IMPLEMENTATION_2026-09-10.md` for exact release gates.

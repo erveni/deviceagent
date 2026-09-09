@@ -6,7 +6,7 @@ import glob,json,os,random,re,time,urllib.request,urllib.error
 from collections import Counter,defaultdict
 from pathlib import Path
 
-from daily_prompt_plan import campaign_slots,cycle_day,validate_typed_jobs,PROMPT_TYPES
+from daily_prompt_plan import campaign_slots,cycle_day,validate_typed_jobs,validate_typed_plan,PROMPT_TYPES,reconcile_legacy_credits
 
 EXCLUDED_BIZ_NAMES={'Caspian Painting Co, Inc.','Nez Perce Traditions Gift Shop',"Smith's Enterprise"}
 
@@ -20,7 +20,8 @@ def eligible_groups(businesses,keywords,clients,free_trial_ids,top3):
     groups=defaultdict(list)
     for kw in keywords:
         biz=business.get(kw.get('businessId'))
-        if not active(kw) or not biz or not active(biz) or biz.get('clientId') not in client_ids:continue
+        if not active(kw) or kw.get('archivedAt') or kw.get('status')=='locked' or not biz or not active(biz) or biz.get('clientId') not in client_ids:continue
+        if kw.get('campaignStatus') not in (None,'active'):continue
         if (biz.get('name') or biz.get('businessName')) in EXCLUDED_BIZ_NAMES:continue
         key=((biz.get('name') or biz.get('businessName') or '').strip().lower(),kw.get('keywordText','').strip().lower())
         if kw.get('aeoPlanId') in free_trial_ids and key in top3:continue
@@ -70,14 +71,19 @@ def main():
     run_date=os.environ.get('DATE',datetime.now(timezone.utc).date().isoformat());cycle_day(run_date)
     output=Path(os.environ.get('PLAN_PATH',f'daily_plan_{run_date}.json'))
     dry=os.environ.get('DRY_RUN')=='1'
+    legacy_rows=[]
+    legacy_plan=os.environ.get('DAILY_LEGACY_PLAN')
+    credit=os.environ.get('DAILY_LEGACY_POLICY')=='credit-existing-toward-eight'
+    if credit and not legacy_plan:raise SystemExit('Legacy credit requires DAILY_LEGACY_PLAN')
     if output.exists() and not dry:raise SystemExit(f'Refusing to overwrite existing plan: {output}; use a new PLAN_PATH')
     # Old successes have no type/slot identity. Never silently treat them as
     # failures and buy eight additional sessions for an already-started day.
-    if not dry:
-        for file in glob.glob(f'daily_plan_{run_date}*results*.csv'):
-            with open(file, newline='') as stream:
-                if any(r.get('status')=='success' and not r.get('daily_slot_id')
-                       for r in csv.DictReader(stream)):
+    for file in glob.glob(f'daily_plan_{run_date}*results*.csv'):
+        with open(file, newline='') as stream:
+            historical=[r for r in csv.DictReader(stream) if r.get('status')=='success' and not r.get('daily_slot_id')]
+            if historical:
+                legacy_rows.extend(historical)
+                if not dry and not credit:
                     raise SystemExit('Historical successes exist for this date. Reconcile the transition '
                                      'before building a new eight-type daily; nothing was overwritten.')
     admin=os.environ.get('ADMIN_BASE','https://jjm59vpn3y.us-east-1.awsapprunner.com')
@@ -91,7 +97,9 @@ def main():
     if catalog:
         data={name:json.loads((Path(catalog)/file).read_text()) for name,file in
               [('businesses','biz_admin.json'),('keywords','kw_admin.json'),('clients','clients_admin.json')]}
-    else:data={name:request('/api/'+name) for name in ('businesses','keywords','clients')}
+    else:
+        data=request('/api/llm/daily-catalog')
+        if data.get('version')!='daily-guide-v1':raise SystemExit('Backend daily catalog capability missing')
     trial_file=Path(os.environ.get('EXCLUDE_PLAN_IDS_FILE','/tmp/exclude_plan_ids.json'))
     trials=set(json.loads(trial_file.read_text())) if trial_file.exists() else set()
     top3=set()
@@ -104,6 +112,11 @@ def main():
     groups=eligible_groups(data['businesses'],data['keywords'],data['clients'],trials,top3)
     if not groups:raise SystemExit('No eligible campaigns; refusing empty daily')
     slots=[slot for key in sorted(groups) for slot in campaign_slots(groups[key],run_date)]
+    transition=None
+    if credit:
+        slots,transition=reconcile_legacy_credits(slots,legacy_rows,json.loads(Path(legacy_plan).read_text()),run_date)
+        print(json.dumps(dict(legacy_credits=len(transition['credits']),
+            historical_outside_scope=len(transition['outside_current_scope']),new_jobs=len(slots))),flush=True)
     print(json.dumps(dict(date=run_date,campaigns=len(groups),total_slots=len(slots),
         sessions_per_campaign=8,platforms=dict(Counter(s['platform'] for s in slots))),indent=2),flush=True)
     if dry:return
@@ -124,10 +137,12 @@ def main():
         raise RuntimeError('Unreachable build failure')
     with ThreadPoolExecutor(max_workers=int(os.environ.get('BUILD_WORKERS','8'))) as workers:
         jobs=list(workers.map(build,slots)) # Never silently drop failed slots.
-    validate_typed_jobs(jobs,run_date)
+    validate_typed_jobs(jobs,run_date,require_complete=transition is None)
     plan=dict(daily_protocol='eight-v1',generated_at=datetime.now(timezone.utc).isoformat(),target_date=run_date,
         total_jobs=len(jobs),total_campaigns=len(groups),sessions_per_campaign=8,cycle_day=cycle_day(run_date),
         _source='build_daily_eight.py',waves=pack_waves(jobs,'daily-v1:'+run_date))
+    if transition is not None:plan['legacy_transition']=transition
+    validate_typed_plan(plan)
     with output.open('x') as stream:json.dump(plan,stream,indent=1)
     print(f'Wrote {output}: {len(jobs)} jobs; no browser jobs launched')
 
