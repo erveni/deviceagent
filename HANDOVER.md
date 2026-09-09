@@ -29,8 +29,11 @@
   Likely script edited while Bash was reading it. Harness now saves/checks an
   immutable launcher copy, settles spent traffic before reporting launcher error,
   and wrapper exits nonzero on errors. No repeat paid job for this bookkeeping bug.
-  Original meter report remains invalid; recovery tool is taking fresh readings
-  in recovered_settlement.json. Consult that artifact for final settlement status.
+  Original meter report remains invalid; recovered_settlement.json is SETTLED:
+  before29746.471228 minus after29745.815882 =0.655346MB,1row/1success.
+  Recovery waited5min with16stable readings and no local competing workload;
+  no extra paid job. Account-wide attribution caveat remains. Pushed code2462895;
+  backend e4d9e48 on its daily-eight feature branch. Neither is a production rollout.
   No Network issues guard event occurred on success; do not claim causal proof.
 - Daily backend: eight real HTTP build+ingest round trips pass against isolated
   PostgreSQL, duplicates200/conflicts409/historyNULL. Admin/API bundles build.

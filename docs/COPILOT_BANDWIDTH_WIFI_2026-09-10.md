@@ -1,5 +1,29 @@
 # Copilot bandwidth: fresh-profile downloads and Wi-Fi preparation
 
+## Second-phone checkpoint —05:09 Manila
+
+Device106, same keyword5225, fresh Edge Wi-Fi settlement:
+
+- APK86 attempt4:3.133920MB,0 successes. Real submitted/no-answer outcome.
+- APK87 attempt5:0.655346MB,1 success, native screenshot reviewed (rank1/8,
+  prompt excluded). Original79/accessibility/noVPN restored automatically.
+- Attempt5 launcher errored AFTER success. Original report stays invalid;
+  `copilot_bootstrap_wifi_20260910_device-106_attempt5_metered/recovered_settlement.json`
+  records separate recovered measurement:29746.471228→29745.815882MB,16 stable
+  readings across5minutes, no new job and no competing local proxy workload.
+- New native guard confirms visible Network issues continuously for3seconds.
+  It did not trigger on attempt5; success cannot be causally attributed to it.
+- Host harness now executes a syntax-checked saved launcher, retains settlement
+  despite nonzero launcher exit, and propagates wrapper failure correctly.
+- This expands evidence to a second phone, NOT fleet-wide validation. Normal
+  ranking launcher is fail-closed pending rollout, not enabled low-cost production.
+  Keep stale queue paused. Daily production deployment also remains outstanding.
+
+The preceding failure must count in economics: these two paid106 attempts total
+3.789266MB for one finished pair, not0.655346MB including retries. Across the four
+Wi-Fi-settled paid samples (two104 successes,106 failure+success), total4.959175MB
+for3 successes =1.653058MB/success. This tiny selected sample is not a forecast.
+
 Status at03:16 Manila: two automatically successful, settled low-cost samples.
 Costs0.629016 and0.540893MB; average0.584955MB (~97% below19.652356MB control).
 Both actual screenshots reviewed; both wrappers restored original79/accessibility/
