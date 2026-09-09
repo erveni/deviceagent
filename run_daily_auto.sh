@@ -8,8 +8,9 @@ set -u
 cd /Users/seolocalph/projects/device-agent
 
 DATE="${1:?usage: run_daily_auto.sh <DATE e.g. 2026-06-08>}"
-PLAN="daily_plan_${DATE}.json"
-REMAIN="daily_plan_${DATE}_REMAIN.json"
+PLAN="${DAILY_PLAN_PATH:-daily_plan_${DATE}.json}"
+REMAIN="${DAILY_REMAIN_PATH:-daily_plan_${DATE}_REMAIN.json}"
+export DAILY_PLAN_PATH="$PLAN" DAILY_REMAIN_PATH="$REMAIN"
 LOG="/private/tmp/daily_auto_${DATE}.log"
 
 export SSL_CERT_FILE=$(python3 -c "import certifi;print(certifi.where())")

@@ -45,6 +45,7 @@ from device_dispatch import (
     DEVICES, BASE_GOST, PROXY_USER, TUNNEL_SETTLE_S, RETRY_TRIGGERS,
     POOL, _run_session, _err_row, append_row,
 )
+from daily_prompt_plan import metadata as daily_metadata
 from run_with_proxy import (
     gost_start, gost_stop, socksdroid_connect, socksdroid_disconnect,
     wait_tunnel, rsid, build_upstream_user,
@@ -56,7 +57,7 @@ MAX_PARALLEL = int(os.environ.get("MAX_PARALLEL", "3"))
 # ~70% success, ~5 of 15 (base wave) 28-38%, ~15 (retry round, almost all Copilot) 8%,
 # 8 simultaneous 0/7. ChatGPT/Gemini are unaffected by the same load. Cap Copilot
 # in-flight fleet-wide; Chrome jobs keep the remaining phones busy.
-COPILOT_MAX_PARALLEL = int(os.environ.get("COPILOT_MAX_PARALLEL", "4"))
+COPILOT_MAX_PARALLEL = max(1, min(4, int(os.environ.get("COPILOT_MAX_PARALLEL", "4"))))
 _COPILOT_SLOTS = threading.BoundedSemaphore(COPILOT_MAX_PARALLEL)
 PROXY_TARGET = os.environ.get("PROXY_TARGET", "country-us")
 DURATION = int(os.environ.get("PROXY_DURATION", "60"))
@@ -70,6 +71,7 @@ ROLLING_RETRY = os.environ.get("ROLLING_RETRY", "1") == "1"
 def normalize_plan_job(j: dict) -> dict:
     """Plan-file job → dispatch job format."""
     return {
+        **daily_metadata(j),
         "keyword_text": j.get("keyword_text") or j.get("keyword") or "",
         "keyword_variant": j.get("keyword_variant") or j.get("keyword_text") or "",
         "variant_id": j.get("variant_id"),
@@ -188,6 +190,10 @@ def main() -> None:
     plan_path = sys.argv[1]
     csv_path = os.path.splitext(plan_path)[0] + "_results.csv"
     plan = json.load(open(plan_path))
+    if plan.get('daily_protocol') == 'eight-v1':
+        from daily_prompt_plan import validate_typed_jobs
+        validate_typed_jobs([j for w in plan['waves'] for j in w], plan['target_date'],
+                            require_complete=not plan.get('is_remaining', False))
     jobs = [normalize_plan_job(j) for w in plan["waves"] for j in w]
 
     print("=" * 70, flush=True)

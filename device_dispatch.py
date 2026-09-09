@@ -15,6 +15,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+from daily_prompt_plan import DAILY_FIELDS, metadata as daily_metadata
 
 # Match ", XX 12345" or ", XX 12345-6789" near the end of a US address.
 _STATE_RE = re.compile(r',\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?')
@@ -373,6 +374,7 @@ def _run_session(
 
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        **daily_metadata(job),
         "date": (str(job.get("targetDate") or "")[:10]) or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "wave_index": wave_index,
         "client_id": job.get("client_id", ""),
@@ -422,6 +424,7 @@ def _err_row(
     msg: str,
 ) -> dict[str, Any]:
     return {
+        **daily_metadata(job),
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "date": (str(job.get("targetDate") or "")[:10]) or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "wave_index": wave_index,
@@ -466,10 +469,16 @@ def append_row(csv_path: str, row: dict[str, Any]) -> None:
     base, ext = os.path.splitext(csv_path)
     date = row.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     dated_path = f"{base}_{date}{ext}"
-    write_header = not os.path.exists(dated_path)
     with _csv_lock:
+        write_header = not os.path.exists(dated_path) or os.path.getsize(dated_path) == 0
+        fields = CSV_FIELDS + DAILY_FIELDS
+        if not write_header:
+            with open(dated_path, newline='') as existing:
+                fields = next(csv.reader(existing))
+            if row.get('daily_slot_id') and not set(DAILY_FIELDS).issubset(fields):
+                raise ValueError('Typed daily needs a new CSV path; refusing to corrupt a historical header')
         with open(dated_path, "a", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            w = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
             if write_header:
                 w.writeheader()
             w.writerow(row)

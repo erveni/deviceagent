@@ -7,16 +7,17 @@ daily_plan_<DATE>*results*.csv and writes the not-yet-successful jobs to
 daily_plan_<DATE>_REMAIN.json. Prints the remaining count on stdout (for the
 auto-retry loop / dashboard).
 """
-import csv, json, glob, sys
+import csv, json, glob, sys, os
 from collections import Counter
+from daily_prompt_plan import remaining_jobs
 
 if len(sys.argv) < 2:
     print("usage: _build_remaining.py <DATE e.g. 2026-06-08>", file=sys.stderr)
     sys.exit(2)
 DATE = sys.argv[1]
-BALANCED = f"daily_plan_{DATE}.json"
+BALANCED = os.environ.get('DAILY_PLAN_PATH',f"daily_plan_{DATE}.json")
 RESULTS = sorted(set(glob.glob(f"daily_plan_{DATE}*results*.csv")))
-OUT = f"daily_plan_{DATE}_REMAIN.json"
+OUT = os.environ.get('DAILY_REMAIN_PATH',f"daily_plan_{DATE}_REMAIN.json")
 
 
 def norm(v):
@@ -31,23 +32,21 @@ def key(platform, client_id, campaign_id, biz_name, keyword_text):
             norm(biz_name).lower(), norm(keyword_text).lower())
 
 
-done = set()
+rows = []
 for f in RESULTS:
     try:
         for r in csv.DictReader(open(f)):
             if r.get("status") == "success":
-                done.add(key(r["platform"], r["client_id"], r["campaign_id"],
-                             r["biz_name"], r["keyword"]))
+                rows.append(r)
     except FileNotFoundError:
         pass
 
 bal = json.load(open(BALANCED))
 all_jobs = [j for w in bal["waves"] for j in w]
-delta = [j for j in all_jobs
-         if key(j.get("platform"), j.get("client_id"), j.get("campaign_id"),
-                j.get("biz_name"), j.get("keyword_text")) not in done]
+delta = remaining_jobs(bal,rows)
 
 json.dump({"generated_at": bal.get("generated_at"), "total_jobs": len(delta),
+           "daily_protocol": bal.get("daily_protocol"), "target_date": DATE, "is_remaining": True,
            "_source": f"REMAIN auto-retry of {DATE} daily", "waves": [delta]},
           open(OUT, "w"), indent=1)
 

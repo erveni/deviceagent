@@ -61,12 +61,15 @@ if [ "${JOBS:-0}" -lt 800 ]; then
   exit 1
 fi
 say "plan job count ok: ${JOBS}"
+EIGHT_DAILY=$(python3 -c "import json;print(int(json.load(open('$PLAN')).get('daily_protocol')=='eight-v1'))")
 
 # 2) merge Mae from tracked mae_plan.json — no-op if already merged (guarded inside)
 python3 - "$DATE" >>"$LOG" 2>&1 <<'PY'
 import json, sys
 DATE=sys.argv[1]; PLAN=f"daily_plan_{DATE}.json"
 p=json.load(open(PLAN))
+if p.get('daily_protocol')=='eight-v1':
+    print('[dailyfull] eight-type protocol: no separate210-session Mae override'); raise SystemExit(0)
 flat=lambda pl:[j for w in pl.get("waves",[]) for j in w]
 if "Mae's Childcare" in {j.get("biz_name") for j in flat(p)}:
     print(f"[dailyfull] Mae already present, skip merge"); raise SystemExit(0)
@@ -85,12 +88,12 @@ PY
 # armed by dropping the job count into .copilot_slice. It is consumed and DELETED here:
 # a one-night trial must not quietly become the permanent config because nobody
 # remembered to unset it.
-if [ -z "${COPILOT_SLICE:-}" ] && [ -f .copilot_slice ]; then
+if [ "$EIGHT_DAILY" != "1" ] && [ -z "${COPILOT_SLICE:-}" ] && [ -f .copilot_slice ]; then
   COPILOT_SLICE="$(tr -dc '0-9' < .copilot_slice)"
   rm -f .copilot_slice
   say "copilot slice armed for tonight only: ${COPILOT_SLICE:-none} (marker consumed)"
 fi
-if [ -n "${COPILOT_SLICE:-}" ]; then
+if [ "$EIGHT_DAILY" != "1" ] && [ -n "${COPILOT_SLICE:-}" ]; then
   COPILOT_SLICE="$COPILOT_SLICE" python3 slice_copilot_into_plan.py "$PLAN" >>"$LOG" 2>&1 \
     && say "copilot slice applied (${COPILOT_SLICE} jobs)" \
     || say "WARN: copilot slice failed — continuing with the unmodified plan"
@@ -124,10 +127,12 @@ say "launching run_daily_auto"
 say "run_daily_auto exited rc=$?"
 
 # 6) consolidate Mae-excluded: swap plan -> dailyonly
-if [ -s "$DONLY" ]; then
+if [ "$EIGHT_DAILY" != "1" ] && [ -s "$DONLY" ]; then
   mv "$PLAN" "$WITHMAE"; cp "$DONLY" "$PLAN"; say "swapped plan -> dailyonly"
 fi
 DATE="$DATE" python3 _consolidate_daily.py >>"$LOG" 2>&1
 say "consolidate rc=$?"
-[ -s "$WITHMAE" ] && mv "$WITHMAE" "$PLAN" && say "restored withmae plan"
+if [ "$EIGHT_DAILY" != "1" ] && [ -s "$WITHMAE" ]; then
+  mv "$WITHMAE" "$PLAN"; say "restored withmae plan"
+fi
 say "ALL DONE"

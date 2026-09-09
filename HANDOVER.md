@@ -2,6 +2,14 @@
 
 ## Current user-approved order — September10
 
+- DAILY IMPLEMENTATION CHECKPOINT: local source and13 focused tests now present;
+  API bundle builds, but NOT deployed/migrated or phone-tested. See
+  `docs/DAILY_EIGHT_IMPLEMENTATION_2026-09-10.md` for exact release gates.
+  Live READ ONLY preview:265 campaigns,1558 active keywords;25 campaign locations
+  need verification. Cached273-group dry-run is not the launch count. Sep9 old
+  successes must be reconciled; builder blocks silently purchasing8 extra runs.
+  Daily/stale remain paused. Do not treat this checkpoint as production ready.
+
 - AUTHORITATIVE UPDATE03:16: Wi-Fi-settled Copilot pilot VERIFIED2/2 automatic
   successes1/8, both PNGs root-reviewed, settled Evomi0.629016 and0.540893MB.
   Previous successful traced control19.652356MB; mean0.584955MB (~97% reduction).
