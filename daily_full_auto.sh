@@ -115,7 +115,7 @@ done
 
 # 5) run daily to 100%
 say "launching run_daily_auto"
-./run_daily_auto.sh "$DATE" >>"$LOG" 2>&1
+bash "${DAILY_AUTO_SCRIPT:-./run_daily_auto.sh}" "$DATE" >>"$LOG" 2>&1
 RUN_RC=$?
 say "run_daily_auto exited rc=$RUN_RC"
 

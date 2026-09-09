@@ -18,6 +18,7 @@ class DailyBudget:
         if not all(map(math.isfinite,(self.limit,self.floor))) or self.limit<=0 or self.floor<0:
             raise ValueError('Invalid daily budget/floor')
         self.path=Path(env['DAILY_METER_LEDGER']);self.read=read
+        self.deadline=float(env.get('DAILY_ADMISSION_DEADLINE_EPOCH','inf'))
         self.lock=threading.Lock();self.last_at=0;self.stopped=False;self.reason=''
         if env.get('PROXY_PROVIDER')!='evomi':raise ValueError('Daily meter guard requires Evomi')
         if self.path.exists():
@@ -35,6 +36,9 @@ class DailyBudget:
     def admit(self):
         with self.lock:
             if self.stopped:return False
+            if time.time()>=self.deadline:
+                self.stopped=True;self.reason='Daily admission deadline reached'
+                print('DAILY SPEND GUARD: '+self.reason,flush=True);return False
             if time.monotonic()-self.last_at<20:return True
             try:
                 value=self.read()
