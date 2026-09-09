@@ -32,8 +32,13 @@ single = os.environ.get('COST_DRIVER') == 'reframe_single'
 pilot = os.environ.get('COST_DRIVER') == 'cache_pilot'
 rerun_four = os.environ.get('COST_DRIVER') == 'rerun_four'
 yokl_priority = os.environ.get('COST_DRIVER') == 'yokl_priority'
-one_phone = single or pilot or rerun_four or yokl_priority
+yokl_followup = os.environ.get('COST_DRIVER') == 'yokl_cache_followup'
+one_phone = single or pilot or rerun_four or yokl_priority or yokl_followup
 job_count = 4 if rerun_four else (1 if single else 10)
+if yokl_followup:
+    job_count = 4
+    if keywords != [5222,5223,5224,5225] or os.environ.get('COST_CACHE_EVIDENCE')!='1' or os.environ.get('COST_CACHE_TRIAL')!='1':
+        raise SystemExit('YOKL follow-up requires exact remaining four and combined cache flags')
 if yokl_priority:
     job_count = 15
     if keywords != [5221,5222,5223,5224,5225]:
@@ -50,6 +55,8 @@ catalog = {k['id']: k for k in json.loads((catalog_dir/'kw_admin.json').read_tex
 if any(k not in catalog for k in keywords):
     raise SystemExit('Manifest keyword missing from runner catalog')
 expected_pairs = {(str(catalog[k]['businessId'] * 10000 + k), 'gemini') for k in keywords}
+if yokl_followup and any(catalog[k]['businessId'] != 363 or catalog[k]['clientId'] != 329 for k in keywords):
+    raise SystemExit('YOKL cache follow-up business/client mismatch')
 if yokl_priority:
     if any(catalog[k]['businessId'] != 363 or catalog[k]['clientId'] != 329 for k in keywords):
         raise SystemExit('YOKL business/client mismatch')
@@ -71,6 +78,8 @@ if rerun_four:
     budget_mb, leg_timeout = 150, 40 * 60
 if yokl_priority:
     budget_mb, leg_timeout = 750, 75 * 60
+if yokl_followup:
+    budget_mb, leg_timeout = 100, 25 * 60
 hard_deadline = None
 if pilot:
     try:
@@ -89,7 +98,7 @@ spend_baseline = float(spend_baseline) if spend_baseline is not None else None
 if spend_baseline is not None and (not math.isfinite(spend_baseline) or spend_baseline < 0):
     raise SystemExit('Invalid cumulative spend baseline')
 driver = os.environ.get('COST_DRIVER', 'city')
-if driver not in ('city', 'generation_timeout', 'gemini_app_screenshot', 'warmup', 'reframe_single', 'cache_pilot', 'rerun_four', 'yokl_priority'):
+if driver not in ('city', 'generation_timeout', 'gemini_app_screenshot', 'warmup', 'reframe_single', 'cache_pilot', 'rerun_four', 'yokl_priority', 'yokl_cache_followup'):
     raise SystemExit('Unsupported COST_DRIVER')
 initial = None
 active = None
@@ -400,7 +409,7 @@ try:
                        DEVICE_EXCLUDE=','.join(f'device-{n}' for n in range(101,126) if n != 104))
         if pilot or os.environ.get('COST_PHASE_TELEMETRY') == '1':
             env['GOST_PHASE_LEDGER'] = str(legdir / 'gost_phases.jsonl')
-        if pilot:
+        if pilot or driver == 'yokl_cache_followup':
             env['RANK_CACHE_PILOT'] = '1'
         if pilot or os.environ.get('COST_CACHE_TRIAL') == '1':
             if not one_phone:
@@ -411,7 +420,7 @@ try:
             env['RANK_CACHE_PILOT'] = '0'
             env['RANK_GEMINI_PROMPT_FREE'] = os.environ.get('COST_PROMPT_FREE', '0')
         if os.environ.get('COST_CACHE_EVIDENCE') == '1':
-            if not single or env['RANK_GEMINI_CACHE_TRIAL'] != '1':
+            if (not single and driver != 'yokl_cache_followup') or env['RANK_GEMINI_CACHE_TRIAL'] != '1':
                 raise RuntimeError('Combined evidence/cache trial requires exactly one cache job')
             env.update(RANK_GEMINI_CACHE_EVIDENCE='1', RANK_GEMINI_PROMPT_FREE='1')
         if driver == 'yokl_priority':

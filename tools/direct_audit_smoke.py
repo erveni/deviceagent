@@ -23,6 +23,7 @@ def main():
     p.add_argument('--cache-evidence', action='store_true', help='Opt-in v83 cache + prompt-free validation; one paid job maximum')
     p.add_argument('--yokl-priority', action='store_true', help='Exact five YOKL keywords, three live platforms, isolated catalog')
     p.add_argument('--single-manifest', help='One explicit keyword for the combined cache evidence test')
+    p.add_argument('--yokl-cache-followup', action='store_true', help='Four remaining Gemini keywords after the successful metered YOKL cache proof')
     p.add_argument('--pilot-manifest', help='Ten distinct Gemini keyword IDs; requires cache trial and UTC deadline')
     args=p.parse_args()
     if args.yokl_priority and (args.cache_trial or args.cache_evidence or args.pilot_manifest or args.rerun_manifest or not args.metered_output):
@@ -31,6 +32,21 @@ def main():
         p.error('--cache-evidence requires --cache-trial and forbids multi-job modes')
     manifest=ROOT/'tools/ranking_one_reframe_0908.json'
     planned_jobs=1
+    if args.yokl_cache_followup:
+        if not args.cache_trial or not args.cache_evidence or args.single_manifest or args.yokl_priority or args.rerun_manifest or args.pilot_manifest or not args.metered_output:
+            p.error('YOKL cache follow-up requires combined cache mode only')
+        prior=json.loads((ROOT/'yokl_cache_20260909_metered/report.json').read_text())
+        rollback=json.loads((ROOT/'yokl_cache_20260909_direct_v2/report.json').read_text())
+        leg=(prior.get('legs') or [{}])[0]
+        if (prior.get('status')!='complete' or prior.get('keywords')!=[5221]
+                or leg.get('successful_pairs')!=1 or not 0 < leg.get('used_mb',0) < 8
+                or rollback.get('restored_health',{}).get('versionCode')!=79
+                or rollback.get('restored_no_tun0') is not True or rollback.get('restore_error')):
+            p.error('Successful cheap YOKL cache proof and rollback required')
+        manifest=ROOT/'tools/yokl_remaining_cache_0909.json'
+        if json.loads(manifest.read_text())!=[5222,5223,5224,5225]:
+            p.error('YOKL remaining manifest mismatch')
+        planned_jobs=4
     if args.single_manifest:
         if not args.cache_evidence or not args.cache_trial or args.yokl_priority or args.rerun_manifest or args.pilot_manifest:
             p.error('Single manifest requires combined cache evidence mode only')
@@ -190,6 +206,9 @@ def main():
                 env.update(COST_CACHE_TRIAL='1', COST_PHASE_TELEMETRY='1')
             if args.cache_evidence:
                 env.update(COST_CACHE_EVIDENCE='1', COST_PROMPT_FREE='1')
+            if args.yokl_cache_followup:
+                env['COST_DRIVER']='yokl_cache_followup'
+                env['RANK_CATALOG_DIR']=str(ROOT/'ranking_yokl_20260909/catalog')
             if args.yokl_priority:
                 env.update(COST_DRIVER='yokl_priority', COST_PHASE_TELEMETRY='1',
                            RANK_CATALOG_DIR=str(ROOT/'ranking_yokl_20260909/catalog'))

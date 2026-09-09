@@ -55,6 +55,12 @@ class CombinedCacheTests(unittest.TestCase):
         self.assertIn('not args.cache_evidence or not args.cache_trial or args.yokl_priority',wrapper)
         self.assertEqual(json.loads((ROOT/'tools/yokl_one_cache_0909.json').read_text()),[5221])
 
+    def test_followup_requires_prior_success_and_exact_remaining_keywords(self):
+        wrapper=(ROOT/'tools/direct_audit_smoke.py').read_text()
+        self.assertIn("leg.get('successful_pairs')!=1 or not 0 < leg.get('used_mb',0) < 8",wrapper)
+        self.assertIn("prior.get('status')!='complete'",wrapper)
+        self.assertEqual(json.loads((ROOT/'tools/yokl_remaining_cache_0909.json').read_text()),[5222,5223,5224,5225])
+
     def test_answer_rejects_prompt_partial_and_failed_job_without_browser(self):
         with tempfile.TemporaryDirectory() as folder:
             for text in ('[RANK: 4/4]', 'You said\n1. A\n2. B\n3. C\n[RANK: 4/4]',

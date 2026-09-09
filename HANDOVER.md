@@ -1,5 +1,34 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-09 22:30 — VERIFIED cache+v83 Gemini:3.018897MB/success; four-keyword follow-up
+
+- yokl_cache_20260909_metered/report.json COMPLETE:1paidkw5221/Gemini accepted4/4,
+  no retries. Evomi29903.801635 ->29900.782738MB =3.018897MB. >=300s postsettle,
+  >120s stable. Root viewed actual paid fulltop3/rank/no-prompt PNG. No newanswer
+  recovery needed. CDP26cachehits/140finished/2.478432encodedMB;2unfinished,
+ 14failedresources,earlyeventsmaybemissing; not providerbyteattribution.
+- Directv2/report.json COMPLETE restored79/accessibilitytrue/noVPN. Directchecks
+  warmedcache outsideEvomi, so this is warm-cache Gemini/city-first evidence, NOT
+  cold-cache/normalZIPfirst/mixed-platform/fleet savings. Detailed ANALYSIS.md in
+  measured directory. OldcacheOFFpass total109.547768MB remains separate.
+- User authorizes usingcache. New com.deviceagent.yoklcachefour0909 validates prior
+  complete1success<8MB+rollback then runsONLYremaining5222–5225Gemini on104/v83,
+  cacheON,promptfreeON,singleattempt/no retries,100MBguard,25minexecution,10GBreserve.
+  Direct readiness on5222first, then same settledbaseline reused only if fresh and
+  unchanged. Separateper-keyword cache/network receipts (RANK_CACHE_PILOT1).
+  No repeat of5221Gemini or its previously successfulCopilot capture.
+- Follow-up paths yokl_cache_four_20260909_direct/report.json and
+  yokl_cache_four_20260909_metered/report.json; log yokl_cache_four_20260909.log.
+  CURRENT104maytemporarily83duringfollowup; do not assume79untilfinalrollback.
+- Daily remains paused267/1601saved,1334remaining. No automatic daily resume in
+  cache wrapper. ChatGPT/Copilot remaining jobs held. Oldyoklpriority,yoklexport,
+  cacheevidence and completedyoklcache LaunchAgents now launchctl-disabled so a
+  reboot cannot restart the canceled expensive path or its automaticdailyresume.
+  chain0906 remains disabled. Normal daily20:00schedule itself notdisabled.
+- Current valid YOKL paid captures:5221Copilot1/3 (root viewed) and5221Gemini4/4.
+  Full15pairrequest NOT complete. Afterfollowup, inspect allpaidimages and export
+  partial results honestly; old15-pair export watcher is intentionally disabled.
+
 ## 2026-09-09 22:15 — User switches YOKL to cache-preserving Gemini; other work HELD
 
 - User explicitly said use the cheaper cache setup. Stopped cache-OFF15pair run

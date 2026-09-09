@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.deviceagent.yoklcachefour0909</string>
+<key>ProgramArguments</key><array>
+<string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string><string>-u</string>
+<string>/Users/seolocalph/projects/device-agent/tools/direct_audit_smoke.py</string>
+<string>--cache-trial</string><string>--cache-evidence</string><string>--yokl-cache-followup</string>
+<string>--request-json</string><string>/Users/seolocalph/projects/device-agent/tools/yokl_trolley_direct_0909.json</string>
+<string>--output</string><string>/Users/seolocalph/projects/device-agent/yokl_cache_four_20260909_direct</string>
+<string>--metered-output</string><string>/Users/seolocalph/projects/device-agent/yokl_cache_four_20260909_metered</string>
+</array>
+<key>WorkingDirectory</key><string>/Users/seolocalph/projects/device-agent</string>
+<key>EnvironmentVariables</key><dict>
+<key>PATH</key><string>/Users/seolocalph/.nvm/versions/node/v24.14.0/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+<key>RANK_CATALOG_DIR</key><string>/Users/seolocalph/projects/device-agent/ranking_yokl_20260909/catalog</string>
+<key>COST_SETTLED_BASELINE_REPORT</key><string>/Users/seolocalph/projects/device-agent/yokl_cache_20260909_metered/report.json</string>
+</dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><false/>
+<key>StandardOutPath</key><string>/Users/seolocalph/projects/device-agent/yokl_cache_four_20260909.log</string>
+<key>StandardErrorPath</key><string>/Users/seolocalph/projects/device-agent/yokl_cache_four_20260909.log</string>
+</dict></plist>

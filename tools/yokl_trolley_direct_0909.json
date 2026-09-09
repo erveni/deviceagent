@@ -1,0 +1,12 @@
+{
+  "type": "audit",
+  "platform": "gemini",
+  "bizName": "Yokl, Inc.",
+  "bizUrl": "https://www.shopyokl.com/",
+  "city": "Hershey",
+  "state": "PA",
+  "searchAddress": "129 Cedar Avenue, Hershey, PA",
+  "keyword": "Hershey trolley tours",
+  "genTimeoutSec": 90,
+  "async": true
+}
