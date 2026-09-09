@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 84
-        versionName = "0.9.67-chatgpt-cache-trial"
+        versionCode = 85
+        versionName = "0.9.68-copilot-cache-trial"
     }
 
     buildTypes {

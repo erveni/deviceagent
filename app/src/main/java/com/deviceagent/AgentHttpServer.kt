@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.67-chatgpt-cache-trial"
-        const val APP_VERSION_CODE = 84
+        const val APP_VERSION_NAME = "0.9.68-copilot-cache-trial"
+        const val APP_VERSION_CODE = 85
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -229,7 +229,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             platformsFilter: String? = null,
             searchAddress: String = "",
             geminiCachePrepared: Boolean = false,
-            chatgptCachePrepared: Boolean = false
+            chatgptCachePrepared: Boolean = false,
+            copilotCacheTrial: Boolean = false
         ) {
             result.type = "audit"
 
@@ -315,11 +316,15 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     // reader has scrolled the whole answer past the viewport.
                     var copilotAnswer = ""
                     if (platform == "copilot") {
-                        if (!step("reset_edge") { flowEngine.copilot.reset() }) {
+                        val cached = copilotCacheTrial && platformsFilter == "copilot"
+                        if (!step("reset_edge") { flowEngine.copilot.reset(cached) }) {
                             pr.status = "error"; pr.error = "reset_edge failed"; continue
                         }
                         if (!step("open_copilot") { flowEngine.copilot.open() }) {
                             pr.status = "error"; pr.error = "open_copilot failed"; continue
+                        }
+                        if (cached && !step("verify_fresh_cached_conversation") { flowEngine.copilot.freshCachedConversation() }) {
+                            pr.status = "error"; pr.error = "cache trial fresh conversation not verified"; continue
                         }
                         if (!step("input") { flowEngine.copilot.inputPrompt(prompt) }) {
                             pr.status = "error"; pr.error = "input failed"; continue
@@ -752,6 +757,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     json.optString("searchAddress", "").let { if (it == "null") "" else it },
                     json.optBoolean("geminiCachePrepared", false),
                     json.optBoolean("chatgptCachePrepared", false),
+                    json.optBoolean("copilotCacheTrial", false),
                 )
             }
             else -> {
@@ -891,7 +897,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val platformFilter = json.optString("platform", "").let { if (it.isBlank()) null else it }
         val searchAddress = json.optString("searchAddress", "").let { if (it == "null") "" else it }
         executeAuditSession(result, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress,
-            json.optBoolean("geminiCachePrepared", false), json.optBoolean("chatgptCachePrepared", false))
+            json.optBoolean("geminiCachePrepared", false), json.optBoolean("chatgptCachePrepared", false),
+            json.optBoolean("copilotCacheTrial", false))
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -1016,9 +1023,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         platformFilter: String? = null,
         searchAddress: String = "",
         geminiCachePrepared: Boolean = false,
-        chatgptCachePrepared: Boolean = false
+        chatgptCachePrepared: Boolean = false,
+        copilotCacheTrial: Boolean = false
     ) {
-        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress, geminiCachePrepared, chatgptCachePrepared)
+        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress, geminiCachePrepared, chatgptCachePrepared, copilotCacheTrial)
     }
 
     private fun handleMqttConfig(writer: OutputStreamWriter, body: String) {

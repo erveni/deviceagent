@@ -1610,7 +1610,16 @@ def dispatch_audit_job(
         # leaves the Microsoft sign-in sheet behind on some phones: 104/113/119/123 went
         # 0/20 on the 2026-09-05 ranking with the sheet up every time, while the daily ran
         # the same phones at 95%.
-        if platform.lower() == "copilot" and os.environ.get("COPILOT_PM_CLEAR", "1") == "1":
+        copilot_cache_trial = os.environ.get('RANK_COPILOT_CACHE_TRIAL','0') == '1'
+        if copilot_cache_trial:
+            if device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+                raise RuntimeError('Copilot cache trial restricted to one device104 audit')
+            with urllib.request.urlopen(f'http://127.0.0.1:{http_port}/health',timeout=5) as reply:
+                health=json.load(reply)
+            if health.get('versionCode')!=85 or health.get('accessibility') is not True:
+                raise RuntimeError('Copilot cache trial requires test85 with accessibility')
+            body['copilotCacheTrial']=True
+        if platform.lower() == "copilot" and not copilot_cache_trial and os.environ.get("COPILOT_PM_CLEAR", "1") == "1":
             for cmd in (("pm", "clear", "com.microsoft.emmx"), ("am", "force-stop", "com.microsoft.emmx")):
                 try:
                     _adb(serial, "shell", *cmd, timeout=60)

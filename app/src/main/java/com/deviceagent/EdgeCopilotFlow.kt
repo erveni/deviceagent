@@ -95,19 +95,31 @@ class EdgeCopilotFlow(
      * The wipe stays as the fallback: on a phone whose Edge has never been through the
      * FRE there is no menu to drive, and only the wipe-then-walk path can get there.
      */
-    fun reset(): Boolean {
+    fun reset(preserveCacheTrial: Boolean = false): Boolean {
         s.log("── RESET EDGE ──")
         launch()
         leaveInPrivate()
-        if (clearBrowsingData()) {
+        if (clearBrowsingData(preserveCacheTrial)) {
             // The clear leaves us deep in Settings; get back to the browser so the
             // Copilot button is reachable.
             launch()
+            if (preserveCacheTrial) {
+                for (attempt in 0 until 5) {
+                    val button = copilotButton()
+                    if (button != null) { button.recycle(); break }
+                    s.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                    Thread.sleep(700)
+                }
+            }
             if (copilotButton()?.also { it.recycle() } != null) {
                 s.log("[edge] light reset done (no FRE)")
                 return true
             }
             s.log("[edge] light reset left no Copilot button — falling back to full wipe")
+        }
+        if (preserveCacheTrial) {
+            s.log("[edge] cache trial reset refused; no full-wipe fallback")
+            return false
         }
         return fullWipeReset()
     }
@@ -160,7 +172,7 @@ class EdgeCopilotFlow(
      * label text elsewhere; every step returns false rather than guessing, so a layout
      * change degrades to the full wipe instead of silently skipping the clear.
      */
-    private fun clearBrowsingData(): Boolean {
+    private fun clearBrowsingData(preserveCacheTrial: Boolean = false): Boolean {
         s.log("── EDGE CLEAR BROWSING DATA ──")
         val menu = s.findNode(resourceId = OVERFLOW_BUTTON_ID, timeoutMs = 6000)
             ?: s.findNode(contentDesc = "Browser menu", timeoutMs = 1500)
@@ -186,8 +198,27 @@ class EdgeCopilotFlow(
         clickSelfOrParent(entry)
         Thread.sleep(2500)
 
-        selectAllTimeRange()
-        tickClearTargets()
+        if (preserveCacheTrial) {
+            if (!selectAllTimeRange()) return false
+            val selections = mapOf("Browsing history" to true, "Cookies and site data" to true,
+                "Tabs" to true, "Cached images and files" to false,
+                "Saved passwords" to false, "Autofill form data" to false, "Site settings" to false)
+            for ((label, checked) in selections) {
+                val row = s.findNode(text = label, timeoutMs = 1500) ?: return false
+                val box = checkboxFor(row) ?: run { row.recycle(); return false }
+                if (box.isChecked != checked) { s.clickNode(box); Thread.sleep(500) }
+                box.recycle(); row.recycle()
+                val verifyRow = s.findNode(text = label, timeoutMs = 1500) ?: return false
+                val verifyBox = checkboxFor(verifyRow) ?: run { verifyRow.recycle(); return false }
+                val matches = verifyBox.isChecked == checked
+                verifyBox.recycle(); verifyRow.recycle()
+                if (!matches) return false
+            }
+            s.log("[edge] cache trial: all-time history/cookies/tabs selected; HTTP cache excluded")
+        } else {
+            selectAllTimeRange()
+            tickClearTargets()
+        }
 
         val go = s.findNode(resourceId = CLEAR_BUTTON_ID, timeoutMs = 4000)
             ?: s.findNode(text = "Delete data", timeoutMs = 1500)
@@ -202,15 +233,40 @@ class EdgeCopilotFlow(
     }
 
     /** Default range is "Last hour", which would leave older cookies in place. */
-    private fun selectAllTimeRange() {
+    private fun selectAllTimeRange(): Boolean {
         val spinner = TIME_RANGE_LABELS.firstNotNullOfOrNull { s.findNode(text = it, timeoutMs = 800) }
-        if (spinner == null) { s.log("[edge] time range spinner not found — leaving default"); return }
+        if (spinner == null) { s.log("[edge] time range spinner not found — leaving default"); return false }
         clickSelfOrParent(spinner)
         Thread.sleep(1200)
         val allTime = s.findNode(text = "All time", timeoutMs = 3000)
-        if (allTime == null) { s.log("[edge] 'All time' not offered"); return }
+        if (allTime == null) { s.log("[edge] 'All time' not offered"); return false }
         clickSelfOrParent(allTime)
         Thread.sleep(1000)
+        val verified = s.findNode(text = "All time", timeoutMs = 1000) ?: return false
+        verified.recycle()
+        return true
+    }
+
+    /** Trial only: reset embedded conversation too; browser-cookie clearing alone is insufficient. */
+    fun freshCachedConversation(): Boolean {
+        val fresh = s.findNode(contentDesc = "New chat", timeoutMs = 2000)
+            ?: return false
+        s.clickNode(fresh); fresh.recycle(); Thread.sleep(2500)
+        val root = s.rootInActiveWindow ?: return false
+        fun stale(n: AccessibilityNodeInfo): Boolean {
+            if (n.contentDescription?.toString()?.startsWith(PROMPT_BUBBLE_DESC) == true ||
+                n.text?.toString()?.contains("[RANK:") == true) return true
+            for (i in 0 until n.childCount) {
+                val child = n.getChild(i) ?: continue
+                val found = stale(child); child.recycle()
+                if (found) return true
+            }
+            return false
+        }
+        val oldAnswer = stale(root); root.recycle()
+        val box = composer(timeoutMs = 2000) ?: return false
+        val text = box.text?.toString().orEmpty(); box.recycle()
+        return !oldAnswer && (text.isBlank() || text.startsWith("Message Copilot"))
     }
 
     /**

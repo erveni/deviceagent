@@ -1,5 +1,33 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## Sep10 — Copilot bandwidth fix requested; ONE cache trial active
+
+- UPDATE01:18: first wrapper stopped BEFORE any proxy job: reused baseline was
+  older than15min. Original79 restored/accessibilitytrue/noVPN, no paid attempt.
+  ACTIVE fresh-baseline rerun outputs copilot_cache_one_20260910_v2_wrapper and
+  copilot_cache_one_20260910_v2_metered. No baseline reuse; wait full settlement.
+  Existing non-v2 directories are failed preflight evidence, not a paid sample.
+
+- YOKL delivery remains complete15/15. User now asks to fix Copilot bandwidth.
+- ACTIVE wrapper tools/copilot_cache_trial.py, output copilot_cache_one_20260910_wrapper;
+  meter copilot_cache_one_20260910_metered. One104, exact5225 comparison ONLY,
+  ZIP-first, notification denial, no retries,30MB guard/10min plus meter settlement.
+  Not a report replacement; do not merge into YOKL export or rerun completed queue.
+- Candidate85/0.9.68-copilot-cache-trial: opt-in audit copilotCacheTrial only.
+  Host skips pm-clear only104/singleattempt/85. Native UI verifies All time,
+  history/cookies/tabs ON, cached files/passwords/autofill/site settings OFF;
+  no full-wipe fallback. Opens New chat and checks empty composer/no old rank or
+  prompt before submit. Default daily/fleet reset unchanged, cap4 unchanged.
+- Edge CDP /json/version identifies com.microsoft.emmx, but embedded Copilot not
+  exposed as target. Do not claim Chrome CDP identity cleanup covers this surface.
+  Device Edge UI inspected offline; original saved answer remains in finalreport.
+- Wrapper installs85 only104 and restores original79/accessibility/noVPN in finally.
+  Check wrapper restore_error and meter completion before claiming savings.
+  Prior same-keyword full-reset successful baseline12.727877MB, warm retained state;
+  one comparison cannot prove fleet-wide reliability or cold-cache savings.
+- Build85 and host compile pass; ongoing test requires real screenshot review.
+  Keep daily/stale paused. No commercial toolkit skills applied.
+
 ## Sep10 00:56 — YOKL COMPLETE: 15/15 accepted; no ranking running
 
 This completion supersedes all ACTIVE/PREPARED YOKL notes below.
