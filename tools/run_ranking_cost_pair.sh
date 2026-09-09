@@ -565,6 +565,17 @@ try:
         # Catch and stop any own proxy/watcher descendants left after launcher exit.
         stop_owned()
         active = None
+        if copilot_bootstrap:
+            runlog = (legdir / 'ranking.log').read_text()
+            if ('phase=offline_edge_prepare_start ' in runlog
+                    and 'phase=gost_start ' not in runlog
+                    and not (legdir / 'gost.jsonl').exists()):
+                # A failed offline check cannot produce the billed deduction
+                # required by settled(before=...). Do not wait for nonexistent
+                # paid work or label the failed run a zero-cost success.
+                leg.update(status='invalid-before-proxy', proxy_started=False)
+                save()
+                raise RuntimeError('Offline preparation aborted before proxy startup; no ranking dispatched')
         after = settled(name + '-after', before, max_seconds=330 if pilot else None)
         rows = [row for path in legdir.glob('results*.csv')
                 for row in csv.DictReader(path.open())]

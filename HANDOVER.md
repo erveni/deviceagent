@@ -2,6 +2,19 @@
 
 ## Current user-approved order — September10
 
+- AUTHORITATIVE UPDATE03:16: Wi-Fi-settled Copilot pilot VERIFIED2/2 automatic
+  successes1/8, both PNGs root-reviewed, settled Evomi0.629016 and0.540893MB.
+  Previous successful traced control19.652356MB; mean0.584955MB (~97% reduction).
+  Both wrappers COMPLETE, original79/accessibility/noVPN restored; no active test.
+  Hostsource/docs committed; defaultOFF and104only, NOT fleet-wide deployment.
+  Cause supported by measured14.87/14.54MB Wi-Fi bursts before paid proxy; earlier
+  paid proxy sessions transferred14MB. Same proxy duration, not just shorter wait.
+- NOW proceeding with daily8/backend implementation, as user ordered. AEOAdmin
+  worktree `/Users/seolocalph/projects/AEOAdmin-daily-eight`, branch
+  `feat/daily-eight-prompt-types-20260910` from refreshedorigin/main. Original
+  AEOAdmin stale .env/.gitignore conflicts and other changes preserved untouched.
+  Daily/stale queues STILL PAUSED. Sep9legacy-credit choice still unanswered.
+
 - UPDATE03:00: WiFi-settled pilot SUCCESS1/8, actual PNG root-verified (top3/rank/
   summary, prompt absent). Offline wlan0 transferred14.874494MB over154s with51.2s
   quiet; paid Gost cumulative0.404801MB. Evomi currently0.629016MB vs traced

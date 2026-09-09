@@ -4,11 +4,19 @@ User requested this sequence. Do not launch September 9 daily before the gates b
 
 ## 1. Finish the ranking bandwidth investigation/fix first
 
-- [ ] Resolve Copilot with a valid answer screenshot and settled Evomi measurement.
-- [ ] Do not promote the failed Edge cache-preservation experiment to the fleet.
-- [ ] Test the prepared off-proxy full-reset/bootstrap alternative on device104 only.
-- [ ] Verify savings, reliability, original-APK restoration and no lingering test VPN.
-- [ ] Commit the verified change, tests and clear operational documentation.
+- [x] Resolve Copilot pilot with valid screenshots and settled Evomi measurements.
+- [x] Do not promote the failed Edge cache-preservation experiment to the fleet.
+- [x] Test off-proxy full-reset/bootstrap with Wi-Fi settlement on device104 only.
+- [x] Verify two successful samples, original-APK restoration and no test VPN.
+- [x] Commit scoped change, tests and operational documentation.
+
+Measured successful control19.652356MB; Wi-Fi-settled runs0.629016 and0.540893MB,
+both automatic1/8 with root-reviewed PNGs. Average0.584955MB (~97% lower).
+This is a two-job pilot on104, NOT a fleet-wide reliability claim. The fix moves
+fresh-profile downloads to ordinary Wi-Fi; it does not eliminate total network
+bytes. All pilot flags remain defaultOFF. Controlled wider rollout remains needed;
+do not restart the stale queue as part of the daily implementation.
+See `docs/COPILOT_BANDWIDTH_WIFI_2026-09-10.md`.
 
 YOKL delivery is already complete: 15/15 results. Do not rerun or overwrite those
 results. Comparison samples remain separate. Daily and stale ranking stay paused.
