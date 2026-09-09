@@ -31,6 +31,16 @@
 - Offline84tests passed/1optionalintegration skipped; Android candidate remains
   already-built83. No fleetwide APK rollout; no backend ranking writes made by
   preparation. Need final screenshots/deliverable and actual meter after paid run.
+- Direct check completed63s; root inspected prompt-free full answer PNG. It is
+  readiness evidence only, excluded from deliverables. Paid15-pair pass started
+  21:53:50Manila, settled baseline30013.349403MB. First job5221/ChatGPT/104;
+  do not call the overall run complete until its report/CSV confirms outcomes.
+- com.deviceagent.yoklexport0909 waits for wrapper's final report (up to3h), then
+  automatically exports all15observed outcomes and accepted PNGs to
+  Desktop/Rankings/Yokl_initial_2026-09-09/. Delivery status is
+  ranking_yokl_20260909/delivery_state.json; export.log records failures. Failed
+  rows remain visibly failed; no fabricated ranks/backdating/backend upload.
+  Root visual review of paid captures and any failed-pair follow-up remain required.
 
 ## 2026-09-09 evening — Combined cache/evidence test prepared; waiting for daily
 

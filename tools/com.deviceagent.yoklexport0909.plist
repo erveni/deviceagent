@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.deviceagent.yoklexport0909</string>
+<key>ProgramArguments</key><array><string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string><string>-u</string><string>/Users/seolocalph/projects/device-agent/tools/watch_yokl_export_0909.py</string></array>
+<key>WorkingDirectory</key><string>/Users/seolocalph/projects/device-agent</string>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><false/>
+<key>StandardOutPath</key><string>/Users/seolocalph/projects/device-agent/ranking_yokl_20260909/export.log</string>
+<key>StandardErrorPath</key><string>/Users/seolocalph/projects/device-agent/ranking_yokl_20260909/export.log</string>
+</dict></plist>
