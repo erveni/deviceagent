@@ -2,6 +2,14 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- UPDATE Sep10 00:26: retryCopilot5222 SUCCESS2/3. Root viewed fulltop3/rank/summary
+  withshopyokl.com citation/no prompt. Native reset completed, postresetnotification
+  denialverified, generation6s,read14s. Firstfailedattempt4.440335MB remainscost.
+  Retrymeter nowsettling; no finalizedretrycostyet.12/15usable; last3Copilot pending.
+  WaitretryreportCOMPLETE +cost<30MB, thenstartpreparedcom.deviceagent.yoklcopilotthree0909.
+  No newAPK; original79 throughoutCopilot. Clear104notificationUSER_FIXEDatfinal
+  cleanup (retainnormaldeniedUSER_SET), no otherphonepermissions touched.
+
 - UPDATE Sep10around00:23: firstCopilot5222 FAILED networkissues,0answers; final
   meter29877.186870->29872.746535 =4.440335MB. Root savedfailedscreen showinglate
   Androidnotificationdialog aftersubmit. DismissedDon'tallow; underlyingCopilot

@@ -20,6 +20,15 @@ RUNS=(
     'yokl_copilot_three_20260909_metered',
 )
 PLATFORMS=('chatgpt','gemini','copilot')
+RUN_LABELS={
+    'yokl_cache_20260909_metered':'Gemini — first cached keyword',
+    'yokl_cache_four_20260909_metered':'Gemini — remaining four keywords',
+    'yokl_chatgpt_one_20260909_metered':'ChatGPT — first keyword, screenshot recovered locally',
+    'yokl_chatgpt_four_20260909_metered':'ChatGPT — remaining four keywords, including two reviewed captures',
+    'yokl_copilot_one_20260909_metered':'Copilot — first attempt failed',
+    'yokl_copilot_retry_20260910_metered':'Copilot — successful retry of the first missing keyword',
+    'yokl_copilot_three_20260909_metered':'Copilot — final three keywords',
+}
 ALLOWED={(k,p) for k in range(5221,5226) for p in PLATFORMS}
 
 
@@ -101,7 +110,7 @@ def main():
             row=accepted.get((kid,platform))
             columns.append(f'<td><a href="kw{kid}_{platform}.png">{esc(row["rank_position"])}/{esc(row["rank_total"])}</a></td>' if row else '<td>Pending</td>')
         cells.append('<tr><th>'+esc(keys[kid])+'</th>'+''.join(columns)+'</tr>')
-    cost_rows=''.join(f'<tr><td>{esc(c["run"])}</td><td>{c["mb"]:.2f}</td><td>{c["successes"]}</td></tr>' for c in costs)
+    cost_rows=''.join(f'<tr><td>{esc(RUN_LABELS.get(c["run"],c["run"]))}</td><td>{c["mb"]:.2f}</td><td>{c["successes"]}</td></tr>' for c in costs)
     total=sum(c['mb'] for c in costs)
     document=f'''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>YOKL ranking results</title><style>body{{font:17px/1.55 system-ui;max-width:1100px;margin:40px auto;padding:0 20px;color:#17212b}}table{{border-collapse:collapse;width:100%;margin:20px 0}}th,td{{border-bottom:1px solid #dce1e5;padding:12px;text-align:left}}a{{color:#0759b6}}small{{color:#536170}}</style>
