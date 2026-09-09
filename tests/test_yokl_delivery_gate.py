@@ -2,10 +2,22 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from tools.yokl_delivery_gate import require_chatgpt_proof
+from tools.yokl_delivery_gate import require_chatgpt_proof, require_copilot_proof
 
 
 class DeliveryGateTests(unittest.TestCase):
+    def test_copilot_continuation_requires_measured_success(self):
+        leg={'status':'valid','successful_pairs':1,'actual_pairs':[['3635222','copilot']],'used_mb':12}
+        meter={'status':'complete','keywords':[5222],'legs':[leg]}
+        with tempfile.TemporaryDirectory() as name:
+            path=Path(name)/'yokl_copilot_one_20260909_metered';path.mkdir()
+            (path/'report.json').write_text(json.dumps(meter))
+            self.assertEqual(require_copilot_proof(name)['used_mb'],12)
+            for key,bad in [('used_mb',30),('successful_pairs',0),('actual_pairs',[['3635222','chatgpt']])]:
+                old=leg[key];leg[key]=bad;(path/'report.json').write_text(json.dumps(meter))
+                with self.assertRaises(ValueError):require_copilot_proof(name)
+                leg[key]=old
+
     def test_requires_real_success_cost_identity_and_rollback(self):
         leg={'status':'valid','successful_pairs':1,'actual_pairs':[['3635221','chatgpt']],'used_mb':4.5}
         meter={'status':'complete','keywords':[5221],'legs':[leg]}

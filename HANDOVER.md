@@ -2,6 +2,18 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- UPDATE23:50:37: firstChatGPT meter COMPLETE,29882.103466->29880.609667,
+  1.493799MB. Raw0automatic/1row; oneusable1/8afterdocumentedfree recovery.
+  Wrappercomplete restored79/accessibilitytrue/noVPN. FirstLaunchAgent disabled.
+- ACTIVE now com.deviceagent.yoklchatgptfour0909 (launched23:50): newdirect5222
+  readiness then4paidremaining5222–5225. Inspect yokl_chatgpt_four_20260909.log,
+  *_direct/report.json, *_metered/report.json. Finalmeter/rollback stillpending.
+- Copilot1 and3 launchers prepared/notloaded. Start one ONLY afterGPTfour final
+  meter+rollback/rootreview, reusing unchangedfreshGPTfourbaseline; then3requires
+  first5222Copilot complete1success<30MB. Remaining3 reusefirstCopilotfinalbaseline.
+  Outputs yokl_copilot_one_20260909_metered, yokl_copilot_three_20260909_metered.
+  Never resume daily/fullstale; never re-run6originalsuccesses or recoveredGPT5221.
+
 - Paid ChatGPT5221 completed with real1/8 answer, raw ocr_no_answer because
   capture moved during screenshot. No paid retry. Proxy/Gost finished; root
   stopped lingering104SocksDroid before local same-answer recovery (no newprompt,

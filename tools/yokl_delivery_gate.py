@@ -43,3 +43,14 @@ def require_chatgpt_proof(root):
             or wrapper.get('restored_no_tun0') is not True):
         raise ValueError('Complete ChatGPT success below15MB and verified original79 rollback required')
     return legs[0]
+
+
+def require_copilot_proof(root):
+    meter=json.loads((Path(root)/'yokl_copilot_one_20260909_metered/report.json').read_text())
+    legs=meter.get('legs',[])
+    if (meter.get('status')!='complete' or meter.get('keywords')!=[5222] or len(legs)!=1
+            or legs[0].get('status')!='valid' or legs[0].get('successful_pairs')!=1
+            or legs[0].get('actual_pairs')!=[['3635222','copilot']]
+            or not 0 < legs[0].get('used_mb',0) < 30):
+        raise ValueError('Copilot continuation requires exact first success below30MB')
+    return legs[0]

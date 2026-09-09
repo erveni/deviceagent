@@ -51,6 +51,11 @@ one_phone = single or pilot or rerun_four or yokl_priority or yokl_followup
 job_count = 4 if rerun_four else (1 if single else 10)
 if copilot_yokl:
     job_count = len(keywords)
+    if keywords == [5223,5224,5225]:
+        from tools.yokl_delivery_gate import require_copilot_proof
+        require_copilot_proof(root)
+    elif keywords != [5222]:
+        raise SystemExit('Copilot requires first5222 or gated remaining5223–5225')
 if chatgpt_followup:
     job_count = 4
 if yokl_followup:
