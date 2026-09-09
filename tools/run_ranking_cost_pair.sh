@@ -48,7 +48,7 @@ if len(expected_pairs) != job_count:
 fixed = out / 'keywords.json'
 fixed.write_text(json.dumps(keywords) + '\n')
 date = '2026-09-02'
-if rerun_four:
+if rerun_four or os.environ.get('COST_CACHE_EVIDENCE') == '1':
     # New captures are dated today, never presented as observations from August.
     date = datetime.date.today().isoformat()
 shared_log = Path('/private/tmp/ranking_auto_' + date + '.log')
@@ -377,6 +377,7 @@ try:
                    RANK_WARMUP_S='60',
                    RANK_SINGLE_ATTEMPT='0', RANK_GEMINI_SAME_ANSWER_REFRAME='0',
                    RANK_GEMINI_CACHE_TRIAL='0',
+                   RANK_GEMINI_CACHE_EVIDENCE='0', RANK_GEMINI_PROMPT_FREE='0',
                    OCR_VALIDATE_SCREENSHOT='1', GEMINI_CDP='0', RANK_PHASE_TRACE='1',
                    GOST_COST_LEDGER=str(legdir / 'gost.jsonl'), COPILOT_MAX_PARALLEL='4')
         if one_phone:
@@ -394,6 +395,10 @@ try:
             env['RANK_GEMINI_CACHE_TRIAL'] = '0'
             env['RANK_CACHE_PILOT'] = '0'
             env['RANK_GEMINI_PROMPT_FREE'] = os.environ.get('COST_PROMPT_FREE', '0')
+        if os.environ.get('COST_CACHE_EVIDENCE') == '1':
+            if not single or env['RANK_GEMINI_CACHE_TRIAL'] != '1':
+                raise RuntimeError('Combined evidence/cache trial requires exactly one cache job')
+            env.update(RANK_GEMINI_CACHE_EVIDENCE='1', RANK_GEMINI_PROMPT_FREE='1')
         if driver == 'generation_timeout' and name == 'candidate':
             env['AEO_ROTATE_ON_GENERATION_TIMEOUT'] = '0'
         if driver == 'gemini_app_screenshot' and name == 'candidate':
@@ -409,6 +414,8 @@ try:
                                  'RANK_GEMINI_APP_SCREENSHOT',
                                  'RANK_WARMUP_S',
                                  'RANK_SINGLE_ATTEMPT', 'RANK_GEMINI_SAME_ANSWER_REFRAME',
+                                 'RANK_GEMINI_CACHE_TRIAL', 'RANK_GEMINI_CACHE_EVIDENCE',
+                                 'RANK_GEMINI_PROMPT_FREE',
                                  'RANK_GEMINI_RANK_TEXT_ONLY']}, indent=2))
         if env.get('RANK_GEMINI_CACHE_TRIAL') == '1':
             report['cache_trial'] = True

@@ -1,5 +1,31 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-09 evening — Combined cache/evidence test prepared; waiting for daily
+
+- User authorized the next direct-then-ONE-metered-job test, NOT a queue restart.
+  Sep09 daily is still building its plan; no phone touched or paid trial started
+  during preparation. Fullchain0906 remains disabled; daily/Copilot unchanged.
+- Explicit wrapper `--cache-trial --cache-evidence` adds83 opt-in compatibility;
+  legacy gate still82/defaultoff. One device104, one paidkw64, no retries, no pilot
+  or four-row mode. Requires completed native top3 answer plus prompt-free real
+  screenshot/exact-rank production OCR BEFORE releasing the lock for paidphase.
+- One-shot waiter tools/after_daily_cache_evidence.py under LaunchAgent
+  com.deviceagent.cacheevidence0909: exact Sep09 ALL DONE, no fleet/build/proxy
+  processes or mutex,60s quiet before direct actions. Source/APK fingerprint guard,
+  output-directory no-repeat guard; deadline Sep10noon Manila/no start after10:00.
+  It does NOT cancel daily or restore/resume anything unrelated.
+- Inspect cost_cache_evidence_20260909/state.json FIRST for actual current state;
+  queued is NOT measured. direct/report.json owns APKrollback79+accessibility+noVPN;
+  metered/report.json and meter.jsonl own settled provider costs. test.log captures
+  execution. No second paid job on failure. Final screenshots require root visual
+  review; waiter does not turn measurement completion into a savings claim.
+- Candidate preserves HTTP cache but clears identity/conversation state. Direct
+  precheck WARMS the cache; single paid job uses city-first like prior cachepilot,
+  not normal ZIP-first like the four replacements. Warmup60unchanged;100MBguard
+  (lag can overshoot),10GBreserve. No cold-cache/fleet/daily-level cost claim.
+- Offline82tests passed/1optionalintegration skipped,24helper tests passed; test83
+  APK build succeeded. Pending phone regression, meter and visual confirmation.
+
 ## 2026-09-09 05:37 — Four replacements DELIVERED; three automatic + one same-answer recovery
 
 - Finished the supervised repair pass below. Exact4 keyword IDs; no automatic

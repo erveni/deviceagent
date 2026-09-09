@@ -27,7 +27,8 @@ class CacheTrialGuardTests(unittest.TestCase):
         block = source[start:source.index('# Same for Edge', start)]
         self.assertIn('device_label != "device-104"', block)
         self.assertIn('not _RANK_SINGLE_ATTEMPT', block)
-        self.assertIn('cache_health.get("versionCode") != 82', block)
+        self.assertIn('cache_health_allowed(cache_health, cache_evidence)', block)
+        self.assertIn('combined cache evidence trial requires prompt-free proof', block)
         self.assertLess(block.index('if not cache_prepared.get("ok")'),
                         block.index('body["geminiCachePrepared"] = True'))
         self.assertIn('elif os.environ.get("CHROME_HARD_CLEAR", "1") == "1":', block)

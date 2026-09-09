@@ -24,10 +24,14 @@ not a migration of the entire farm's data or the aeo-appium application.
 - Source now builds test version 83 (Gemini audit evidence/input guards); production
   phones remain on version 79 outside explicitly supervised device104 tests.
 - The tracked root APK is intentionally not replaced by the experimental APK.
-- Gemini cache preservation defaults off and the host restricts it to device104,
-  Gemini, a single attempt, and verified version82 health.
-- The cache gate deliberately still requires82. Do not enable it on83 without a
-  separate cache-regression validation. The Sep09 repair pass uses83 with cache OFF.
+- Gemini cache preservation defaults off and is restricted to device104, Gemini
+  and single attempts. Legacy cache tests still require version82 health.
+- The new explicit `--cache-trial --cache-evidence` wrapper mode accepts only83,
+  forbids multi-job manifests, and requires a direct answer-only/native-rank plus
+  prompt-free framing/OCR check before ONE paid job. Host flags
+  `RANK_GEMINI_CACHE_EVIDENCE=1` and `RANK_GEMINI_PROMPT_FREE=1` are required together.
+  This is a pending combined regression, not a deployment or new savings result.
+  The completed Sep09 four-row repair used83 with cache OFF.
 - `RANK_GEMINI_PROMPT_FREE=1` additionally requires same-answer framing to verify
   the prompt is above the safe answer band. It is opt-in for the four-row repair,
   not a change to the daily. A visible full answer alone does not prove no prompt leak.
@@ -69,3 +73,24 @@ No credentials or APK backups are included here.
 - `HANDOVER.md`: safety constraints, remaining four IDs and next validation steps.
 
 No commit in this checkpoint authorizes a fleet-wide claim of 80% savings.
+
+## One-shot combined validation after the Sep09 daily
+
+`tools/after_daily_cache_evidence.py` waits for the exact daily's ALL DONE marker,
+no other fleet/build/Gost processes, no fleet lock, and 60 seconds quiet. No phone
+or provider actions occur while waiting. Output-directory creation prevents a
+duplicate run after restart. Source/APK fingerprints must remain unchanged while
+queued. Deadline is Sep10 12:00 Manila; no test may start after10:00.
+
+The LaunchAgent `com.deviceagent.cacheevidence0909` starts this one-shot waiter,
+not the stale ranking chain. Receipt: `cost_cache_evidence_20260909/state.json`.
+The wrapper runs a direct kw64-equivalent audit, validates it, then one paid kw64
+Gemini job with city-first targeting, warmup60, no retries,100MB spend guard
+(delayed-meter overshoot possible),10GB reserve, and automatic original79 rollback.
+Measurement files live under `metered/`; direct precheck and rollback under `direct/`.
+
+Direct precheck warms the HTTP cache for free. Therefore any low paid bill is a
+WARM-cache observation, not cold-start economics, normal ZIP-first equivalence,
+or proof of cache surviving mixed daily/Copilot workloads. A successful runner
+and settled meter still require visual review; the waiter never announces savings
+or starts additional jobs. On failure it stops and preserves evidence.

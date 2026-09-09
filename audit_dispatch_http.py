@@ -1548,8 +1548,12 @@ def dispatch_audit_job(
                 raise RuntimeError("cache trial restricted to one device-104 Gemini audit")
             with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/health", timeout=5) as health_response:
                 cache_health = json.load(health_response)
-            if cache_health.get("versionCode") != 82 or not cache_health.get("accessibility"):
-                raise RuntimeError("cache trial requires verified test APK v82")
+            from tools.cache_evidence_policy import cache_health_allowed
+            cache_evidence = os.environ.get("RANK_GEMINI_CACHE_EVIDENCE", "0") == "1"
+            if not cache_health_allowed(cache_health, cache_evidence):
+                raise RuntimeError("cache trial requires verified matching test APK (82 legacy / 83 evidence)")
+            if cache_evidence and os.environ.get("RANK_GEMINI_PROMPT_FREE", "0") != "1":
+                raise RuntimeError("combined cache evidence trial requires prompt-free proof")
             from tools.gemini_cache_reset import prepare_gemini_cache
             phase("cache_prepare_start")
             _adb(serial, "shell", "am", "start", "-n",

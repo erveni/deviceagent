@@ -20,8 +20,11 @@ def main():
     p.add_argument('--rerun-manifest', help='Exactly four Gemini IDs; requires --metered-output, no cache trial')
     p.add_argument('--metered-output', help='After direct success only, run one isolated paid job and restore APK')
     p.add_argument('--cache-trial', action='store_true', help='Verify host-prepared v82 cache reset on device104')
+    p.add_argument('--cache-evidence', action='store_true', help='Opt-in v83 cache + prompt-free validation; one paid job maximum')
     p.add_argument('--pilot-manifest', help='Ten distinct Gemini keyword IDs; requires cache trial and UTC deadline')
     args=p.parse_args()
+    if args.cache_evidence and (not args.cache_trial or args.pilot_manifest or args.rerun_manifest):
+        p.error('--cache-evidence requires --cache-trial and forbids multi-job modes')
     manifest=ROOT/'tools/ranking_one_reframe_0908.json'
     planned_jobs=1
     if args.rerun_manifest:
@@ -108,8 +111,9 @@ def main():
             body['async']=True
             body['genTimeoutSec']=min(int(body.get('genTimeoutSec',90)),150)
         if args.cache_trial:
-            if report['candidate_health'].get('versionCode') != 82:
-                raise RuntimeError('Cache experiment requires v82')
+            from tools.cache_evidence_policy import cache_health_allowed
+            if not cache_health_allowed(report['candidate_health'], args.cache_evidence):
+                raise RuntimeError('Cache experiment requires matching accessible APK (82 legacy / 83 evidence)')
             from tools.gemini_cache_reset import prepare_gemini_cache
             # Installing/rebinding the agent brings its UI forward. Chrome's
             # Android debugger exposes no page targets while it is backgrounded.
@@ -146,6 +150,12 @@ def main():
         (out/'last_screen.png').write_bytes(adb('exec-out','screencap','-p'))
         report.update(status='complete',elapsed_s=round(time.monotonic()-started,2),
                       result_status=pr.get('status'),error=pr.get('error'),steps=result.get('step_log'))
+        if args.cache_evidence:
+            from tools.direct_evidence_gate import validate_direct_answer
+            evidence = validate_direct_answer(serial, body['keyword'], pr, out)
+            report['direct_evidence'] = evidence
+            if not evidence.get('ok'):
+                raise RuntimeError('Direct answer/capture evidence failed; refusing paid job')
         if args.metered_output:
             if pr.get('status') not in ('success', 'completed') or pr.get('error'):
                 raise RuntimeError('Direct smoke failed; refusing paid job')
@@ -159,6 +169,8 @@ def main():
                 env.update(COST_DRIVER='rerun_four', COST_PROMPT_FREE='1', COST_PHASE_TELEMETRY='1')
             if args.cache_trial:
                 env.update(COST_CACHE_TRIAL='1', COST_PHASE_TELEMETRY='1')
+            if args.cache_evidence:
+                env.update(COST_CACHE_EVIDENCE='1', COST_PROMPT_FREE='1')
             print(f'Direct passed; starting {planned_jobs} metered jobs, no retries',flush=True)
             completed=subprocess.run(['bash',str(ROOT/'tools/run_ranking_cost_pair.sh'),
                 str(manifest),args.metered_output],
