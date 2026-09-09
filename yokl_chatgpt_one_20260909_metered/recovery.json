@@ -1,0 +1,18 @@
+{
+  "status": "recovered_same_paid_answer",
+  "keyword_id": 5221,
+  "platform": "chatgpt",
+  "rank": [1, 8],
+  "screenshot": "candidate/recovered_kw5221.png",
+  "screenshot_sha256": "7896eaef66bbb092e514b6830f98d00d5f4380fda9936e6c2cbd87ba99a12db6",
+  "response_unchanged": true,
+  "ocr_verified": true,
+  "visual_review_passed": true,
+  "new_prompts": 0,
+  "reloads": 0,
+  "navigations": 0,
+  "proxy_connected": false,
+  "capture_method": "browser_answer_clip",
+  "layout_zoom": 0.55,
+  "note": "Raw paid row remains ocr_no_answer. Root reviewed the recovered full top3/rank/summary screenshot. This is one delivered result after local recovery, not one automatic success."
+}

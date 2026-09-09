@@ -5,8 +5,10 @@ import html
 import json
 from pathlib import Path
 import shutil
+import sys
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
 RUNS=(
     'ranking_yokl_20260909/metered',
     'yokl_cache_20260909_metered',
@@ -55,7 +57,9 @@ def main():
                 for leg in report.get('legs',[]):
                     if leg.get('status')=='valid':
                         costs.append({'run':run,'mb':leg['used_mb'],'successes':leg['successful_pairs']})
-    accepted=select_records(rows)
+    from tools.yokl_delivery_gate import chatgpt_recovery
+    recovered=chatgpt_recovery(ROOT)
+    accepted=select_records(rows+([recovered] if recovered else []))
     if set(accepted)!=ALLOWED and not args.allow_partial:
         raise RuntimeError(f'Only {len(accepted)}/15 accepted; refusing complete export')
     keys={k['id']:k['keywordText'] for k in json.loads((ROOT/'ranking_yokl_20260909/catalog/kw_admin.json').read_text())}
@@ -72,7 +76,8 @@ def main():
         records.append(dict(keyword_id=kid,keyword=keys[kid],platform=platform,
             status='success' if row else 'pending',rank_position=row.get('rank_position',''),
             rank_total=row.get('rank_total',''),observed_at_utc=row.get('timestamp',''),
-            screenshot=shot,response_text=row.get('response_text',''),source_run=row.get('source_run','')))
+            screenshot=shot,response_text=row.get('response_text',''),source_run=row.get('source_run',''),
+            evidence_status=row.get('evidence_status','automatic' if row else 'pending')))
     with (out/'rankings.csv').open('w',newline='') as stream:
         writer=csv.DictWriter(stream,fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
     (out/'attempts.json').write_text(json.dumps(rows,indent=2))
@@ -100,8 +105,8 @@ def main():
 <title>YOKL ranking results</title><style>body{{font:17px/1.55 system-ui;max-width:1100px;margin:40px auto;padding:0 20px;color:#17212b}}table{{border-collapse:collapse;width:100%;margin:20px 0}}th,td{{border-bottom:1px solid #dce1e5;padding:12px;text-align:left}}a{{color:#0759b6}}small{{color:#536170}}</style>
 <h1>YOKL ranking results</h1><p>{len(accepted)} of 15 keyword/platform results are accepted. Click a rank to see the actual answer screenshot.</p>
 <table><thead><tr><th>Keyword</th><th>ChatGPT</th><th>Gemini</th><th>Copilot</th></tr></thead><tbody>{''.join(cells)}</tbody></table>
-<p>These are the rankings stated by each AI platform, not an independent verification of business facts. The fractions are preserved as returned. Exact observation times (UTC) and responses are in <a href="rankings.csv">rankings.csv</a>. Direct readiness tests are excluded.</p>
-<h2>Evomi usage for these runs</h2><table><tr><th>Run</th><th>MB used</th><th>Successful captures</th></tr>{cost_rows}<tr><th>Total, including the interrupted run</th><td>{total:.2f}</td><td>{len(accepted)}</td></tr></table>
+<p>These are the rankings stated by each AI platform, not an independent verification of business facts. The fractions are preserved as returned. Exact observation times (UTC) and responses are in <a href="rankings.csv">rankings.csv</a>. Direct readiness tests are excluded. {"The first ChatGPT result required local screenshot recovery from the same paid answer, with no new generation; the raw failed attempt is preserved." if recovered else ""}</p>
+<h2>Evomi usage for these runs</h2><table><tr><th>Run</th><th>MB used</th><th>Automatic successes</th></tr>{cost_rows}<tr><th>Total, including the interrupted run</th><td>{total:.2f}</td><td>{sum(c['successes'] for c in costs)}</td></tr></table>
 <p>Failed attempts still cost bandwidth. The total includes the initial interrupted run; it is not just the cheaper cache-enabled passes. Warm-cache test results do not establish fleet-wide savings. Evomi is account-wide, with delayed deductions.</p>
 <small>Local report only. No backend upload or historical-date replacement was performed. Raw attempts are preserved in attempts.json.</small></html>'''
     (out/'index.html').write_text(document)

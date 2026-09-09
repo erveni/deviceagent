@@ -1750,6 +1750,7 @@ def dispatch_audit_job(
                             platform='chatgpt', prompt_free=True,
                             ocr_validator=lambda path: _screenshot_has_expected_rank(path, _expected))
                         print(f"  [chatgpt-cache-evidence] ok={_proof.get('ok')} reason={_proof.get('reason')}", flush=True)
+                        _path.with_suffix('.json').write_text(json.dumps(_proof, indent=2))
                         if _proof.get('ok'):
                             ss_local = _proof['screenshot']
                             _prompt_free_verified = True
@@ -1785,6 +1786,7 @@ def dispatch_audit_job(
         # app screenshot if CDP fails.
         if (not ss_local and capture_prompt is None
                 and platform.lower() in ("chatgpt", "perplexity", "gemini")
+                and not (platform.lower() == "chatgpt" and os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1")
                 and not (platform.lower() == "gemini"
                          and os.environ.get("RANK_GEMINI_APP_SCREENSHOT", "0") == "1")
                 and status in ("success", "no_rank")):

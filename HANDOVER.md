@@ -2,6 +2,21 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- Paid ChatGPT5221 completed with real1/8 answer, raw ocr_no_answer because
+  capture moved during screenshot. No paid retry. Proxy/Gost finished; root
+  stopped lingering104SocksDroid before local same-answer recovery (no newprompt,
+  reload,navigation). Root viewed recovered_kw5221.png:fulltop3/rank/summary,
+  no prompt. recovery.json records explicitmanualrecovery + SHA256; rawCSV stays
+  failed. Current7acceptedYOKL pairs includes this recovery, not7automatic.
+- Added3stable geometry observations beforeChatGPT capture; recovered SAMEpaid
+  answer passed newhostcode. ChatGPTtrial now skips oldCDP fallback on proof
+  failure (it cost extra proxy time and freezes JS); persists proofdiagnostics.
+  Firstsettlement ongoingasof23:48,provisional1.493799MB/oneDELIVEREDcapture,
+  zeroautomatic successes. Do not call finaluntilmetercomplete+79rollback.
+- Follow-up gate accepts explicitreviewed/hashverified same-paid-answer recovery
+  matched to rawrow plus settled<15MB + rollback; stillrequiresfreshdirectproof
+  beforefourremainingpaidjobs. Mergeexport labels recovery and preservesrawrow.
+
 - Fresh ChatGPT direct check PASSED automatically (103s); root viewed its full
   real answer clip1/3 with map + top3 + summary, no prompt. Baseline started
   23:34:13Manila,29882.103466MB. No paid row as of23:39; await meter supervisor.

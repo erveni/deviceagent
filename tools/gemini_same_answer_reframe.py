@@ -316,6 +316,21 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
         # A short answer can fit while the page has no scroll range to hide the
         # prompt. Capture only that rendered answer rectangle, never synthesize or
         # edit its pixels. Oversized/clipped answers are still rejected.
+        if platform == 'chatgpt':
+            # Wheel input animates. Do not capture at the first passing frame:
+            # require an unchanged answer rectangle for three observations.
+            stable = 0
+            for _ in range(15):
+                time.sleep(.2)
+                snapshot = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
+                if not snapshot.get('ok'):
+                    return result | {'reason':'answer_changed_while_settling'}
+                stable = stable+1 if snapshot.get('answer_clip') == framed.get('answer_clip') else 0
+                framed = snapshot
+                if stable >= 2:
+                    break
+            else:
+                return result | {'reason':'answer_layout_did_not_settle'}
         answer_clip = _safe_answer_clip(framed) if prompt_free else None
         cropped = bool(answer_clip and not framed.get('full_answer_in_view'))
         if not framed.get('ok') or not framed.get('rank_in_view') or not (framed.get('full_answer_in_view') or cropped):
