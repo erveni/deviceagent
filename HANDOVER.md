@@ -2,7 +2,28 @@
 
 ## Current user-approved order — September10
 
-- UPDATE02:34: automatic bootstrap confirmation COMPLETE, **19.302452 MB**;
+- UPDATE02:47: traced confirmation generated SUCCESS1/8 with nativePNG; root
+  visually verified top3/rank/summary, no prompt leak. Final local traffic14.073361MB:
+  HTTP:80 without hostname11.734250MB, edge.microsoft.com1.943364MB,
+  copilot.microsoft.com0.084736MB. HTTP Host parser added for NEXT trace (current
+  process only labels TLS SNI). Therefore large background HTTP transfer dominates;
+  exact HTTP hostname not yet established. Do not claim it is MSN/news based on UI.
+  Meter after still settling (~19.652356MB deduction), wrapper then restores79.
+- NEXT PREPARED, NOT LAUNCHED: add COPILOT_BOOTSTRAP_SETTLE=1 to traced wrapper
+  command below. Prefix copilot_bootstrap_wifi_20260910_{wrapper,metered}. Uses
+  previous traced report ONLY after settled/rollback. Same104/86/5225/30MB/no retry.
+  One changed behavior: after offline full reset, wait >=150s and >=30s without
+  bulk WiFi traffic (>16KB/5s), max300s; fail closed before paid proxy if busy.
+  Records actual wlan0 RX+TX deltas, submits zero AI prompts during preparation.
+  This shifts downloads to ordinary WiFi, does NOT reduce total internet usage.
+  No update/security endpoints blocked. Defaults remainOFF.12Copilot+4observer tests pass.
+- Daily remains queued; Sep9 recheck270rows/267success/3errors. User asked through
+  async question whether267legacy successes count toward8 (recommended) or eight
+  new types are additional. No reply yet; don't invent historical prompt types.
+  AEOAdmin has pre-existing unresolved .env/.gitignore conflicts: do not resolve
+  or commit secrets; no backend source edits yet.
+
+- UPDATE02:31: automatic bootstrap confirmation COMPLETE, **19.302452 MB**;
   NOT a confirmed saving. Native answer1/8 valid but nativePNG missing; recovered
   actual same screen locally (candidate/recovered_screen.png), raw CSV unchanged.
   Original79/accessibility/noVPN restored. Full cumulative Gost metrics14.035936MB;

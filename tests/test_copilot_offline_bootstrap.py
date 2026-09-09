@@ -4,10 +4,28 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
-from tools.copilot_offline_bootstrap import prepare
+from tools.copilot_offline_bootstrap import prepare,settle_wifi
 
 
 class OfflineBootstrapTests(unittest.TestCase):
+    def test_wifi_settlement_waits_for_late_bulk_download(self):
+        clock=[0]
+        def sleep(n):clock[0]+=n
+        def adb(serial,*args,**kwargs):
+            if args[:3]==('shell','ip','link'):return SimpleNamespace(returncode=0,stdout='1: lo: UP')
+            n=1000 if clock[0]<120 else 12001000
+            return SimpleNamespace(returncode=0,stdout=f' wlan0: {n} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0')
+        proof=settle_wifi('104',adb,now=lambda:clock[0],sleep=sleep)
+        self.assertEqual(proof['wifi_bytes'],12000000)
+        self.assertEqual(proof['elapsed_s'],150)
+
+    def test_wifi_busy_refuses_paid_tunnel(self):
+        clock=[0]
+        def sleep(n):clock[0]+=n
+        def adb(*args,**kwargs):
+            return SimpleNamespace(returncode=0,stdout=f' wlan0: {int(clock[0]*1000000)} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0')
+        with self.assertRaises(ValueError):settle_wifi('104',adb,minimum_s=10,quiet_s=5,deadline_s=20,now=lambda:clock[0],sleep=sleep)
+
     def run_prepare(self,tunnel=False,steps=None):
         def adb(serial,*args,**kwargs):
             text=''

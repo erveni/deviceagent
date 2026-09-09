@@ -16,10 +16,13 @@ def main():
     bootstrap=os.environ.get('COPILOT_BOOTSTRAP_TRIAL')=='1'
     confirm=os.environ.get('COPILOT_BOOTSTRAP_CONFIRM')=='1'
     observe=os.environ.get('COPILOT_TRAFFIC_CONFIRM')=='1'
+    wifi_settle=os.environ.get('COPILOT_BOOTSTRAP_SETTLE')=='1'
+    if wifi_settle and not observe:raise RuntimeError('WiFi settlement requires traced confirmation')
     if observe and not confirm:raise RuntimeError('Traffic confirmation requires automatic bootstrap')
     if confirm and not bootstrap:raise RuntimeError('Confirmation requires bootstrap mode')
     prefix=('copilot_bootstrap_auto_20260910' if confirm else 'copilot_bootstrap_one_20260910') if bootstrap else 'copilot_cache_one_20260910_v5'
     if observe:prefix='copilot_bootstrap_trace_20260910'
+    if wifi_settle:prefix='copilot_bootstrap_wifi_20260910'
     out=ROOT/(prefix+'_wrapper')
     out.mkdir(exist_ok=False)
     meter=ROOT/(prefix+'_metered')
@@ -111,6 +114,9 @@ def main():
                 env.update(RANK_COPILOT_TRAFFIC_OBSERVER='1',USE_SNI_RELAY='0')
                 # Fresh settlement; the previous run may no longer be within15min.
                 env.pop('COST_SETTLED_BASELINE_REPORT',None)
+            if wifi_settle:
+                env.update(RANK_COPILOT_WIFI_SETTLE='1',
+                    COST_SETTLED_BASELINE_REPORT=str(ROOT/'copilot_bootstrap_trace_20260910_metered/report.json'))
         print('Starting ONE cache measurement; not a YOKL report replacement',flush=True)
         completed=subprocess.run(['bash',str(ROOT/'tools/run_ranking_cost_pair.sh'),
             str(ROOT/'tools/yokl_copilot_final_retry_0910.json'),str(meter)],env=env)

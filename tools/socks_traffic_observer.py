@@ -60,7 +60,18 @@ class Destination:
                 else:
                     # Do not persist destination IPs; TLS SNI gives useful host labels.
                     self.host = 'ip_without_sni'
-                self.stage = 'tls' if self.port == 443 else 'done'
+                self.stage = 'tls' if self.port == 443 else ('http' if self.port == 80 else 'done')
+            elif self.stage == 'http':
+                if b'\r\n\r\n' not in b:
+                    return
+                for line in b.split(b'\r\n')[1:]:
+                    if line.lower().startswith(b'host:'):
+                        host=line[5:].strip().split(b':')[0].decode('ascii',errors='replace')
+                        if re.fullmatch(r'[A-Za-z0-9._-]{1,253}',host):
+                            self.host=host.lower()
+                        break
+                self.stage,self.buffer='done',b''
+                return
             elif self.stage == 'tls':
                 if len(b) < 5:
                     return
