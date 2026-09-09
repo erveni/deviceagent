@@ -4,6 +4,35 @@
 
 ### Latest daily release checkpoint (supersedes earlier blockers below)
 
+**LIVE Sep9 daily started06:26 Manila, September10.** Supervisor PID48091,
+`daily_release_20260910_sep09/report.json`; launcher.log in same directory;
+worker log `/private/tmp/daily_auto_2026-09-09.log`. Eight workers actually started
+on1850 remaining slots.267 legacy credits+3 smoke successes already counted.
+Actual run overrides:8500MB admission budget,9000MB floor,8hour admission deadline,
+3outer rounds/no nested retries/Copilot cap4/devices108&125 excluded. Meter baseline
+29698.300338MB. Do NOT start ranking, a second daily, or edit active runtime modules.
+The supervisor automatically consolidates typed successes and imports via API;
+budget/deadline/exhausted retries mean partial-stopped, never false complete.
+Immutable Bash snapshots are in the release directory. No unattended queue restart.
+
+Deployment SUCCEEDED:AppRunner operationd4d1c465975e481fb71ee3c25ce79820 ended06:08:21;
+API commit571811c, latest backend source/importer d8f80d8. Admin index-Bzp3LbO4.js
+live, CloudFront invalidation I4C358BKBHA2SR63HHROG3OYZ2 completed. Additive migration
+and16 location repairs applied; all265 GPS/timezones verified. Three daily smoke
+queries completed and screenshots root-reviewed. Copilot brand verification confused
+Yokl with another company: retain this finding; is_discovery=false, NOT a verified
+recommendation. DB session IDs147659/147660/147661 imported successfully, types/flags
+checked read-only. Slot date isSep9; pg Date JSON timezone serialization is not a
+change to the SQL date. No historical types overwritten or legacy rows re-imported.
+
+Smoke settled44.359568MB/3 =14.786523MB/job, not proof of low-cost daily. Evidence:
+daily_eight_smoke_20260910/settled.json. Account-wide meter, delayed deductions;
+do not allocate billed bytes by interim platform readings or extrapolate3jobs.
+Full run may hit8.5GB guard before finishing; report actual remaining, do not refill
+budget/restart automatically. Ranking efficient fleet rollout STILL incomplete.
+
+The following setup checkpoints are historical and superseded by this live state.
+
 - User approved verifying/completing the16 location settings and asked to push/run.
   All16 campaign search_address repairs APPLIED atomically with exact-before checks.
   Backup:/tmp/daily-location-repair-20260910-before.json. No historical sessions edited.

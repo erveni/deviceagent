@@ -1,4 +1,22 @@
-# Eight-type daily — implementation checkpoint (NOT released)
+# Eight-type daily — deployed, September9 guarded run active
+
+Live update06:26 Manila:API571811c deployed successfully; admin index-Bzp3LbO4.js
+active; additive migration and16 campaign-location repairs applied. All265 campaign
+GPS/timezones verified.15 focused daily Python tests plus typed consolidation test
+and8 backend tests pass. Full workspace typecheck still has preexisting errors.
+
+Three phone queries completed, actual screenshots checked and sessions147659–147661
+imported with typed metadata. Copilot's brand check confused Yokl with another company;
+this is a verification finding, not a verified recommendation or discovery win.
+Settled smoke44.359568MB/3 (14.786523MB each) is NOT a low-cost fleet forecast.
+
+Full Sep9 run now active:267 legacy credits+3 new successes leave1850 slots.
+Supervisor PID48091, status `daily_release_20260910_sep09/report.json`.
+8workers, Copilot cap4, devices108/125 excluded,8500MB admission budget,9000MB floor,
+8hour admission deadline,3outer rounds/no nested retries. In-flight jobs/meter lag
+can overshoot. It auto-consolidates/imports typed successes without timestamp rewriting
+or legacy duplication. Partial runs stay partial; no silent budget reset/restart.
+Stale ranking remains paused. The setup checkpoints below are historical.
 
 User order: measured ranking fix first, then eight-type daily + AEO Admin,
 then tests, then September9 execution. Stale ranking must not be restarted.
