@@ -16,6 +16,7 @@ RUNS=(
     'yokl_chatgpt_one_20260909_metered',
     'yokl_chatgpt_four_20260909_metered',
     'yokl_copilot_one_20260909_metered',
+    'yokl_copilot_retry_20260910_metered',
     'yokl_copilot_three_20260909_metered',
 )
 PLATFORMS=('chatgpt','gemini','copilot')

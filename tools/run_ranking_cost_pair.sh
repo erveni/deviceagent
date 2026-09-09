@@ -37,6 +37,12 @@ if chatgpt_followup:
     from tools.yokl_delivery_gate import require_chatgpt_proof
     require_chatgpt_proof(root)
 copilot_yokl = os.environ.get('COST_YOKL_COPILOT') == '1'
+copilot_retry = os.environ.get('COST_COPILOT_RETRY') == '1'
+if copilot_retry:
+    if not copilot_yokl or keywords != [5222]:
+        raise SystemExit('Copilot retry requires exact failed5222')
+    from tools.yokl_delivery_gate import require_copilot_retry
+    require_copilot_retry(root)
 if copilot_yokl and (not single or chatgpt_cache or not isinstance(keywords,list)
         or not 1 <= len(keywords) <= 4 or any(k not in (5222,5223,5224,5225) for k in keywords)
         or os.environ.get('COST_CACHE_TRIAL') == '1' or os.environ.get('COST_CACHE_EVIDENCE') == '1'):
@@ -388,6 +394,8 @@ try:
         initial = settled('initial')
     legs = [('candidate', '1')] if one_phone else [('control', '0'), ('candidate', '1')]
     for name, city_first in legs:
+        if copilot_yokl and os.environ.get('COST_COPILOT_ZIP_FIRST')=='1':
+            city_first='0'
         if rerun_four:
             city_first = '0'  # preserve normal geo targeting for replacement captures
         if yokl_priority:
@@ -437,6 +445,7 @@ try:
                    RANK_SINGLE_ATTEMPT='0', RANK_GEMINI_SAME_ANSWER_REFRAME='0',
                    RANK_GEMINI_CACHE_TRIAL='0',
                    RANK_CHATGPT_CACHE_TRIAL='0',
+                   RANK_COPILOT_TEST_NOTIFICATION_DENY='0',
                    RANK_GEMINI_CACHE_EVIDENCE='0', RANK_GEMINI_PROMPT_FREE='0',
                    OCR_VALIDATE_SCREENSHOT='1', GEMINI_CDP='0', RANK_PHASE_TRACE='1',
                    GOST_COST_LEDGER=str(legdir / 'gost.jsonl'), COPILOT_MAX_PARALLEL='4')
@@ -448,6 +457,9 @@ try:
             report['chatgpt_cache_trial'] = True
         if copilot_yokl:
             env.update(PLATFORMS='copilot', COPILOT_PM_CLEAR='1')
+            env['RANK_COPILOT_TEST_NOTIFICATION_DENY']=os.environ.get('COST_COPILOT_NOTIFICATION_DENY','0')
+            if env['RANK_COPILOT_TEST_NOTIFICATION_DENY']=='1':
+                env['AEO_POLL_EVERY_S']='2'
             report['copilot_yokl_delivery'] = True
         if pilot or os.environ.get('COST_PHASE_TELEMETRY') == '1':
             env['GOST_PHASE_LEDGER'] = str(legdir / 'gost_phases.jsonl')
@@ -486,6 +498,7 @@ try:
                                  'RANK_SINGLE_ATTEMPT', 'RANK_GEMINI_SAME_ANSWER_REFRAME',
                                  'RANK_GEMINI_CACHE_TRIAL', 'RANK_GEMINI_CACHE_EVIDENCE',
                                  'RANK_CHATGPT_CACHE_TRIAL', 'PLATFORMS',
+                                 'RANK_COPILOT_TEST_NOTIFICATION_DENY',
                                  'RANK_GEMINI_PROMPT_FREE',
                                  'RANK_GEMINI_RANK_TEXT_ONLY']}, indent=2))
         if env.get('RANK_GEMINI_CACHE_TRIAL') == '1':

@@ -833,9 +833,11 @@ _ASYNC_SESSION = os.environ.get("AEO_ASYNC_SESSION", "1") == "1"
 _POLL_EVERY_S = float(os.environ.get("AEO_POLL_EVERY_S", "5"))
 
 
-def _post_audit(local_port: int, body: dict) -> dict:
+def _post_audit(local_port: int, body: dict, progress_callback=None) -> dict:
     if _ASYNC_SESSION:
-        return _post_audit_async(local_port, body)
+        return _post_audit_async(local_port, body, progress_callback=progress_callback)
+    if progress_callback is not None:
+        raise RuntimeError('Test progress hook requires asynchronous sessions')
     return _post_audit_blocking(local_port, body)
 
 
@@ -859,7 +861,7 @@ def _post_audit_blocking(local_port: int, body: dict) -> dict:
             return {"status": "error", "error": f"HTTP {e.code} (no body)"}
 
 
-def _post_audit_async(local_port: int, body: dict) -> dict:
+def _post_audit_async(local_port: int, body: dict, progress_callback=None) -> dict:
     """Kick the job off, then poll /result until it stops running.
 
     Every request is short, so a dropped socket costs one retried poll instead of the
@@ -907,6 +909,8 @@ def _post_audit_async(local_port: int, body: dict) -> dict:
             continue
         if not last.get("running", False):
             return {k: v for k, v in last.items() if k != "running"}
+        if progress_callback is not None:
+            progress_callback(last)
     return {"status": "error", "error": "generation timeout (async poll deadline)",
             **{k: v for k, v in last.items() if k != "running"}}
 
@@ -1612,8 +1616,38 @@ def dispatch_audit_job(
                     _adb(serial, "shell", *cmd, timeout=60)
                 except Exception as e:
                     print(f"  [edge-clear] {serial}: {type(e).__name__} {e} — continuing")
+        if os.environ.get('RANK_COPILOT_TEST_NOTIFICATION_DENY','0') == '1':
+            if device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT:
+                raise RuntimeError('Notification-denial experiment restricted to one-device104 Copilot test')
+            for command in (
+                ('pm','revoke','com.microsoft.emmx','android.permission.POST_NOTIFICATIONS'),
+                ('pm','set-permission-flags','com.microsoft.emmx','android.permission.POST_NOTIFICATIONS','user-set','user-fixed')):
+                reply=_adb(serial,'shell',*command,timeout=10)
+                if reply.returncode:
+                    raise RuntimeError('Could not apply test notification denial')
+            permissions=_adb(serial,'shell','dumpsys','package','com.microsoft.emmx',timeout=10)
+            evidence=re.search(r'android.permission.POST_NOTIFICATIONS: granted=false, flags=\[([^\]]+)\]',permissions.stdout)
+            if not evidence or 'USER_FIXED' not in evidence[1] or 'USER_SET' not in evidence[1]:
+                raise RuntimeError('Test notification denial not verified')
+            print('  [edge-notification-test] denied/user-fixed verified',flush=True)
+        notification_applied_after_reset=False
+        def deny_after_native_reset(progress):
+            nonlocal notification_applied_after_reset
+            if notification_applied_after_reset or not any('[copilot] reset_edge OK' in step for step in progress.get('step_log',[])):
+                return
+            # Native reset can wipe Edge again, clearing the flags set above.
+            # Reapply denial once reset finishes, before its open/input/submit.
+            reply=_adb(serial,'shell','pm','set-permission-flags','com.microsoft.emmx',
+                       'android.permission.POST_NOTIFICATIONS','user-set','user-fixed',timeout=10)
+            permissions=_adb(serial,'shell','dumpsys','package','com.microsoft.emmx',timeout=10)
+            evidence=re.search(r'android.permission.POST_NOTIFICATIONS: granted=false, flags=\[([^\]]+)\]',permissions.stdout)
+            if reply.returncode or not evidence or 'USER_FIXED' not in evidence[1]:
+                raise RuntimeError('Post-reset notification denial not verified')
+            notification_applied_after_reset=True
+            print('  [edge-notification-test] denied/user-fixed verified after native reset',flush=True)
+        callback=deny_after_native_reset if os.environ.get('RANK_COPILOT_TEST_NOTIFICATION_DENY','0')=='1' else None
         phase("session_start_and_poll")
-        result = _post_audit(http_port, body)
+        result = _post_audit(http_port, body, progress_callback=callback)
         phase("session_returned")
         return result
 

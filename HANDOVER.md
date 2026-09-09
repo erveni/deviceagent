@@ -2,6 +2,24 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- UPDATE Sep10around00:23: firstCopilot5222 FAILED networkissues,0answers; final
+  meter29877.186870->29872.746535 =4.440335MB. Root savedfailedscreen showinglate
+  Androidnotificationdialog aftersubmit. DismissedDon'tallow; underlyingCopilot
+  reportsNetworkissues,noanswerrecoverable. Not claimingpopupsolecause.
+- Offline104diagnostic proved pmclear erasesUSER_FIXED notificationflags. Explicit
+  test-only hostguard nowdeniesnotifications afterhostclear AND reappliesvia2s
+  asyncprogresshook once native reset_edge succeeds. NoAPKchange; original79.
+  Restore normalpermissionbehavior at end by clearingUSER_FIXED flag on104.
+- ACTIVE com.deviceagent.yoklcopilotretry0910: exactlyONEretry5222, newoutput
+  yokl_copilot_retry_20260910_metered,log yokl_copilot_retry_20260910.log. Requires
+  settledfailedfirst<30MB;100MBguard/noinnerorouterretries. Restores ZIP-first
+  targetingusedbyoldsuccessfulYOKLCopilot; also suppresseslatepermissionprompt.
+  This is delivery repair withtwocorrections,notisolatedcausalsavingsproof.
+- Three-keywordcontinuation now requires success<30MB fromretryreport and reuses
+  retryfinalbaseline. SameZIP-first/notificationguard. Preparedlabel
+  com.deviceagent.yoklcopilotthree0909 STILLNOTLOADED. Do not runit before retry
+  settles androotreviewsPNG. OriginalfirstCopilotlabeldisabled.11/15usable remain.
+
 - UPDATE Sep10 00:11:15 ChatGPTfour meterCOMPLETE3.422797MB; first+four total
   4.916596MB/5delivered =0.9833192MB/delivery. Only2automatic successes;3other
   accepted through explicitreview/recovery, no paidretries. Wrappercomplete

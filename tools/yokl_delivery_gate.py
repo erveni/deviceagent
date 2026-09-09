@@ -46,7 +46,9 @@ def require_chatgpt_proof(root):
 
 
 def require_copilot_proof(root):
-    meter=json.loads((Path(root)/'yokl_copilot_one_20260909_metered/report.json').read_text())
+    retry=Path(root)/'yokl_copilot_retry_20260910_metered/report.json'
+    path=retry if retry.exists() else Path(root)/'yokl_copilot_one_20260909_metered/report.json'
+    meter=json.loads(path.read_text())
     legs=meter.get('legs',[])
     if (meter.get('status')!='complete' or meter.get('keywords')!=[5222] or len(legs)!=1
             or legs[0].get('status')!='valid' or legs[0].get('successful_pairs')!=1
@@ -54,6 +56,16 @@ def require_copilot_proof(root):
             or not 0 < legs[0].get('used_mb',0) < 30):
         raise ValueError('Copilot continuation requires exact first success below30MB')
     return legs[0]
+
+
+def require_copilot_retry(root):
+    meter=json.loads((Path(root)/'yokl_copilot_one_20260909_metered/report.json').read_text())
+    legs=meter.get('legs',[])
+    if (meter.get('status')!='complete' or meter.get('keywords')!=[5222] or len(legs)!=1
+            or legs[0].get('status')!='valid' or legs[0].get('successful_pairs')!=0
+            or legs[0].get('actual_pairs')!=[['3635222','copilot']]
+            or not 0 < legs[0].get('used_mb',0) < 30):
+        raise ValueError('One Copilot retry requires settled failed first attempt below30MB')
 
 
 def reviewed_chatgpt_followup(root):
