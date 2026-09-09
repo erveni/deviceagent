@@ -13,9 +13,9 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
     os.chdir(ROOT)
-    out=ROOT/'copilot_cache_one_20260910_v4_wrapper'
+    out=ROOT/'copilot_cache_one_20260910_v5_wrapper'
     out.mkdir(exist_ok=False)
-    meter=ROOT/'copilot_cache_one_20260910_v4_metered'
+    meter=ROOT/'copilot_cache_one_20260910_v5_metered'
     if meter.exists():raise RuntimeError('Measurement already exists')
     original=ROOT/'direct_ui_20260908_apk/device104-original-v79.apk'
     candidate=ROOT/'app/build/outputs/apk/debug/app-debug.apk'
@@ -36,8 +36,11 @@ def main():
             'candidate_sha256':hashlib.sha256(candidate.read_bytes()).hexdigest()}
     changed=False
     port=int(adb('forward','tcp:0','tcp:8765').strip())
-    def request(path):
-        with urllib.request.urlopen(f'http://127.0.0.1:{port}/{path}',timeout=5) as r:return json.load(r)
+    def request(path,body=None):
+        req=urllib.request.Request(f'http://127.0.0.1:{port}/{path}',
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={'Content-Type':'application/json'})
+        with urllib.request.urlopen(req,timeout=10) as r:return json.load(r)
     def rebind():
         service='com.deviceagent/com.deviceagent.AgentAccessibilityService'
         old=adb('shell','settings','get','secure','enabled_accessibility_services').strip()
@@ -60,13 +63,31 @@ def main():
         report['candidate_health']=rebind()
         if report['candidate_health'].get('versionCode')!=85 or report['candidate_health'].get('accessibility') is not True:
             raise RuntimeError('Candidate85 unavailable')
+        adb('shell','am','force-stop','com.microsoft.emmx')
+        adb('shell','am','start','-n','com.microsoft.emmx/com.microsoft.ruby.Main')
+        time.sleep(3)
+        request('session',dict(type='audit',platform='copilot',bizName='Yokl, Inc.',
+            bizUrl='https://www.shopyokl.com/',city='Hershey',state='PA',keyword='private group tours in Hershey PA',
+            copilotCacheTrial=True,copilotCacheResetOnly=True,**{'async':True}))
+        print('Offline reset-only readiness running; no AI prompt or proxy',flush=True)
+        deadline=time.monotonic()+120
+        while time.monotonic()<deadline:
+            time.sleep(2)
+            readiness=request('result')
+            if not readiness.get('running'):break
+        else:raise RuntimeError('Offline reset readiness timed out')
+        report['offline_reset_steps']=readiness.get('step_log',[])
+        if (not any('[copilot] reset_edge OK' in s for s in report['offline_reset_steps'])
+                or any('[copilot] submit' in s or '[copilot] input' in s for s in report['offline_reset_steps'])):
+            raise RuntimeError('Offline reset readiness failed; refusing paid test')
+        print('Offline reset-only readiness PASSED',flush=True)
         if not owned():raise RuntimeError('Lost preparation lock')
         lock.unlink()
         env=os.environ.copy()
         env.update(COST_DRIVER='reframe_single',COST_YOKL_COPILOT='1',COST_COPILOT_CACHE='1',
                    COST_COPILOT_ZIP_FIRST='1',COST_COPILOT_NOTIFICATION_DENY='1',COST_PHASE_TELEMETRY='1',
                    RANK_CATALOG_DIR=str(ROOT/'ranking_yokl_20260909/catalog'))
-        env['COST_SETTLED_BASELINE_REPORT']=str(ROOT/'copilot_cache_one_20260910_v3_metered/report.json')
+        env['COST_SETTLED_BASELINE_REPORT']=str(ROOT/'copilot_cache_one_20260910_v4_metered/report.json')
         print('Starting ONE cache measurement; not a YOKL report replacement',flush=True)
         completed=subprocess.run(['bash',str(ROOT/'tools/run_ranking_cost_pair.sh'),
             str(ROOT/'tools/yokl_copilot_final_retry_0910.json'),str(meter)],env=env)

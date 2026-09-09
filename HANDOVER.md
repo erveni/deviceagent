@@ -2,6 +2,15 @@
 
 ## Sep10 — Copilot bandwidth fix requested; ONE cache trial active
 
+- UPDATE01:46: v4 failed reset18s/no submit; logcat shows Edge background role
+  activity launch blocked, phone on launcher. OFFPROXY explicit amstart Main
+  brought normalEdge toolbar back. Provisional0.126629MB; v4 meter settling.
+- v5 PREPARED: hostforce-stop thenexplicit amstart Edge/Main+3s. New native
+  audit-only copilotCacheResetOnly stops immediately afterreset; wrapper must
+  pass this OFFPROXY/0prompts readiness before any metered job. Same85 withAPKhash.
+  Output copilot_cache_one_20260910_v5_wrapper/metered. Waitv4complete/rollback,
+  thenrun tools/copilot_cache_trial.py, not whilev4wrapper stillactive.
+
 - UPDATE01:41: v3 COMPLETE0.330991MB/0success (resetfailed,no submit),79rollback
   verified. ACTIVE v4 copilot_cache_one_20260910_v4_wrapper/metered, one5225,
   processrestart+personalizationNotnow+strictcache reset/freshchat. No success yet.

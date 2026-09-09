@@ -1623,6 +1623,10 @@ def dispatch_audit_job(
             stopped=_adb(serial,'shell','am','force-stop','com.microsoft.emmx',timeout=10)
             if stopped.returncode:
                 raise RuntimeError('Copilot cache trial could not stop old Edge process')
+            launched=_adb(serial,'shell','am','start','-n','com.microsoft.emmx/com.microsoft.ruby.Main',timeout=10)
+            if launched.returncode:
+                raise RuntimeError('Copilot cache trial could not foreground Edge')
+            time.sleep(3)
             body['copilotCacheTrial']=True
         if platform.lower() == "copilot" and not copilot_cache_trial and os.environ.get("COPILOT_PM_CLEAR", "1") == "1":
             for cmd in (("pm", "clear", "com.microsoft.emmx"), ("am", "force-stop", "com.microsoft.emmx")):

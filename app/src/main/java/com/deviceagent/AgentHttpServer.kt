@@ -230,7 +230,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             searchAddress: String = "",
             geminiCachePrepared: Boolean = false,
             chatgptCachePrepared: Boolean = false,
-            copilotCacheTrial: Boolean = false
+            copilotCacheTrial: Boolean = false,
+            copilotCacheResetOnly: Boolean = false
         ) {
             result.type = "audit"
 
@@ -319,6 +320,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         val cached = copilotCacheTrial && platformsFilter == "copilot"
                         if (!step("reset_edge") { flowEngine.copilot.reset(cached) }) {
                             pr.status = "error"; pr.error = "reset_edge failed"; continue
+                        }
+                        if (cached && copilotCacheResetOnly) {
+                            pr.status = "completed"
+                            continue // Offline readiness only: never open/input/submit.
                         }
                         if (!step("open_copilot") { flowEngine.copilot.open() }) {
                             pr.status = "error"; pr.error = "open_copilot failed"; continue
@@ -758,6 +763,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     json.optBoolean("geminiCachePrepared", false),
                     json.optBoolean("chatgptCachePrepared", false),
                     json.optBoolean("copilotCacheTrial", false),
+                    json.optBoolean("copilotCacheResetOnly", false),
                 )
             }
             else -> {
@@ -898,7 +904,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val searchAddress = json.optString("searchAddress", "").let { if (it == "null") "" else it }
         executeAuditSession(result, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress,
             json.optBoolean("geminiCachePrepared", false), json.optBoolean("chatgptCachePrepared", false),
-            json.optBoolean("copilotCacheTrial", false))
+            json.optBoolean("copilotCacheTrial", false), json.optBoolean("copilotCacheResetOnly", false))
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -1024,9 +1030,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         searchAddress: String = "",
         geminiCachePrepared: Boolean = false,
         chatgptCachePrepared: Boolean = false,
-        copilotCacheTrial: Boolean = false
+        copilotCacheTrial: Boolean = false,
+        copilotCacheResetOnly: Boolean = false
     ) {
-        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress, geminiCachePrepared, chatgptCachePrepared, copilotCacheTrial)
+        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress, geminiCachePrepared, chatgptCachePrepared, copilotCacheTrial, copilotCacheResetOnly)
     }
 
     private fun handleMqttConfig(writer: OutputStreamWriter, body: String) {

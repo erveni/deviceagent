@@ -1,0 +1,38 @@
+{
+  "status": "complete",
+  "measurement_only": true,
+  "device": "device-104",
+  "candidate_sha256": "97d2e5c195579754b4e232d9df49310b7e6ce0d205f857976b80034f3fc2fd18",
+  "candidate_health": {
+    "ok": true,
+    "version": "0.9.68-copilot-cache-trial",
+    "versionCode": 85,
+    "wifiIp": "192.168.0.123",
+    "accessibility": true,
+    "lastJobStatus": "idle",
+    "uptimeMs": 2718,
+    "lastContactAgoMs": 18,
+    "selfHealCount": 0,
+    "tun0": {
+      "up": false,
+      "addr": ""
+    }
+  },
+  "meter_exit_code": 0,
+  "restored_health": {
+    "ok": true,
+    "version": "0.9.62-copilot-frame-top",
+    "versionCode": 79,
+    "wifiIp": "192.168.0.123",
+    "accessibility": true,
+    "lastJobStatus": "idle",
+    "uptimeMs": 2787,
+    "lastContactAgoMs": 13,
+    "selfHealCount": 0,
+    "tun0": {
+      "up": false,
+      "addr": ""
+    }
+  },
+  "restored_no_tun0": true
+}
