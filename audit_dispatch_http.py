@@ -1299,6 +1299,7 @@ def dispatch_audit_job(
     phase_started = time.monotonic()
     gost = None
     network_trace = None
+    traffic_observer = None
 
     def phase(name: str) -> None:
         if os.environ.get("RANK_PHASE_TRACE") == "1":
@@ -1427,6 +1428,22 @@ def dispatch_audit_job(
     # transparent — start once here, stop once in finally.
     relay_proc = None
     phone_port = gost_port
+    if os.environ.get('RANK_COPILOT_TRAFFIC_OBSERVER') == '1':
+        if device_label != 'device-104' or platform.lower() != 'copilot' or not _RANK_SINGLE_ATTEMPT or USE_SNI_RELAY:
+            gost.stop()
+            _release_gost_port(gost_port)
+            POOL.release(device_idx)
+            raise ValueError('Passive traffic pilot requires single104/Copilot, no SNI rewriting')
+        from tools.socks_traffic_observer import TrafficObserver
+        phone_port = gost_port + 1
+        try:
+            traffic_observer = TrafficObserver(phone_port, gost_port,
+                str(Path(os.environ['GOST_PHASE_LEDGER']).parent / 'traffic_hosts.jsonl')).start()
+        except Exception:
+            gost.stop()
+            _release_gost_port(gost_port)
+            POOL.release(device_idx)
+            raise
     if USE_SNI_RELAY:
         phone_port = gost_port + 1
         relay_proc = _relay_start(phone_port, gost_port)
@@ -1888,6 +1905,21 @@ def dispatch_audit_job(
             ss_local = _write_b64_screenshot(ss_b64, platform, int(keyword_id))
         if not ss_local:
             ss_local = _pull_screenshot(serial, ss_remote, platform, int(keyword_id))
+        if (not ss_local and platform.lower()=='copilot' and offline_edge_proof
+                and status=='success' and device_label=='device-104'):
+            from tools.copilot_frame_fallback import capture_missing
+            def current_copilot_result():
+                with urllib.request.urlopen(f'http://127.0.0.1:{http_port}/result',timeout=5) as reply:
+                    return json.load(reply)
+            try:
+                png=capture_missing(serial,response,current_copilot_result)
+                if png:
+                    fallback=_write_b64_screenshot(base64.b64encode(png).decode(),platform,int(keyword_id),artifact='reframe_source')
+                    if _screenshot_has_expected_rank(fallback,(int(rank_pos),int(rank_total))):
+                        ss_local=fallback
+                        print('  [copilot-frame-fallback] same framed answer captured locally; no regeneration',flush=True)
+            except Exception as error:
+                print(f'  [copilot-frame-fallback] refused: {type(error).__name__}',flush=True)
         # Persist full LLM response text to a .txt file alongside the screenshot
         # for archival, BUT the DB column gets the actual text blob (not the path).
         resp_text_blob = (response.get("platforms") or {}).get(platform.lower(), {}).get("response_text", "")
@@ -2120,6 +2152,11 @@ def dispatch_audit_job(
             socksdroid_disconnect(serial)
         except Exception:
             pass
+        if traffic_observer is not None:
+            try:
+                traffic_observer.stop()
+            except Exception:
+                pass
         try:
             gost.stop()
         except Exception:

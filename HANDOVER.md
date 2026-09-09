@@ -2,6 +2,21 @@
 
 ## Current user-approved order — September10
 
+- UPDATE02:34: automatic bootstrap confirmation COMPLETE, **19.302452 MB**;
+  NOT a confirmed saving. Native answer1/8 valid but nativePNG missing; recovered
+  actual same screen locally (candidate/recovered_screen.png), raw CSV unchanged.
+  Original79/accessibility/noVPN restored. Full cumulative Gost metrics14.035936MB;
+  terminal-only ledger0.426021MB missed open connections. Most transfer occurred
+  during Copilot, not preflight; inspect cumulative counters, never sum snapshots.
+- ACTIVE ONE diagnostic: COPILOT_BOOTSTRAP_TRIAL=1 COPILOT_BOOTSTRAP_CONFIRM=1
+  COPILOT_TRAFFIC_CONFIRM=1 python3 -u tools/copilot_cache_trial.py. Output prefix
+  copilot_bootstrap_trace_20260910_{wrapper,metered};104only/86/30MB/no retries.
+  Passive SOCKS forwarding records hostname/port/cumulative counts (no payload or
+  credentials, no DNS/SNI rewrite), to locate large download bursts. Fresh meter
+  baseline, automatic original79 rollback. Native-null screenshot fallback now
+  scoped to inline104/Copilot and same idle framed answer with strict rankOCR.
+  All trial flags defaultOFF; no daily/backend rollout. Await measured result.
+
 - UPDATE02:15: first off-proxy FULL Edge bootstrap SUCCESS1/8, root reviewedPNG;
   settled0.513867MB vspriorfull-reset paid12.727877MB (~96%less Evomi thissample).
   Manualforegroundassistance disclosed; notfullyautomatic.79rollback verified.
