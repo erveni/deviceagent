@@ -2,6 +2,21 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- Fresh ChatGPT direct check PASSED automatically (103s); root viewed its full
+  real answer clip1/3 with map + top3 + summary, no prompt. Baseline started
+  23:34:13Manila,29882.103466MB. No paid row as of23:39; await meter supervisor.
+- Follow-up now PREPARED, not launched: --chatgpt-cache --chatgpt-followup,
+  com.deviceagent.yoklchatgptfour0909, remaining5222–5225. Requires completed
+  exact5221ChatGPT success below15MB and original79/accessibility/noVPN rollback.
+  Same100MBguard/25min, one104, no retries. Reuses first settled meter only when
+  fresh and rechecked unchanged. No duplicate5221 or Gemini captures.
+- tools/export_yokl_merged.py --output NEW_DIRECTORY merges the explicit paid run
+  directories into15-pair CSV, PNGs and team-readable index.html; default refuses
+  incomplete15. --allow-partial labels missing pairs Pending. Includes old
+  interrupted-run109.547768MB via settled-boundary difference, not just newcache
+  costs. Not yet executed; no completed report claimed. Copilot remaining-three
+  expected output yokl_copilot_three_20260909_metered after first5222 measurement.
+
 - User requests all missing ChatGPT/Copilot YOKL results. Preserve5Gemini and
   kw5221Copilot already accepted. Daily/fullchain remain held. Toolkit skills not
   used (client-use trial restriction); independent work continues.

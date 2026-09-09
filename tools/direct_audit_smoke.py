@@ -26,6 +26,7 @@ def main():
     p.add_argument('--yokl-cache-followup', action='store_true', help='Four remaining Gemini keywords after the successful metered YOKL cache proof')
     p.add_argument('--pilot-manifest', help='Ten distinct Gemini keyword IDs; requires cache trial and UTC deadline')
     p.add_argument('--chatgpt-cache', action='store_true', help='Device104/v84 YOKL ChatGPT direct then one metered job')
+    p.add_argument('--chatgpt-followup', action='store_true', help='Remaining four YOKL ChatGPT keywords after settled cheap first success')
     args=p.parse_args()
     if args.yokl_priority and (args.cache_trial or args.cache_evidence or args.pilot_manifest or args.rerun_manifest or not args.metered_output):
         p.error('YOKL priority requires metered output and forbids other trial modes')
@@ -33,12 +34,21 @@ def main():
         p.error('--cache-evidence requires --cache-trial and forbids multi-job modes')
     manifest=ROOT/'tools/ranking_one_reframe_0908.json'
     planned_jobs=1
+    if args.chatgpt_followup and (not args.chatgpt_cache or not args.metered_output):
+        p.error('ChatGPT follow-up requires ChatGPT cache and metered output')
     if args.chatgpt_cache:
         if any((args.cache_trial,args.cache_evidence,args.yokl_priority,args.yokl_cache_followup,args.single_manifest,args.rerun_manifest,args.pilot_manifest)):
             p.error('ChatGPT cache is a separate one-job mode')
         manifest=ROOT/'tools/yokl_one_cache_0909.json'
         if json.loads(manifest.read_text()) != [5221]:
             p.error('ChatGPT test requires YOKL keyword5221')
+        if args.chatgpt_followup:
+            from tools.yokl_delivery_gate import require_chatgpt_proof
+            require_chatgpt_proof(ROOT)
+            manifest=ROOT/'tools/yokl_remaining_cache_0909.json'
+            if json.loads(manifest.read_text())!=[5222,5223,5224,5225]:
+                p.error('ChatGPT follow-up manifest mismatch')
+            planned_jobs=4
     if args.yokl_cache_followup:
         if not args.cache_trial or not args.cache_evidence or args.single_manifest or args.yokl_priority or args.rerun_manifest or args.pilot_manifest or not args.metered_output:
             p.error('YOKL cache follow-up requires combined cache mode only')
@@ -148,6 +158,8 @@ def main():
                         searchAddress='129 Cedar Avenue, Hershey, PA',keyword='food tours in Hershey PA')
         if args.chatgpt_cache:
             body['platform']='chatgpt'
+            if args.chatgpt_followup:
+                body['keyword']='Hershey trolley tours'
         if args.request_json:
             body=json.loads(Path(args.request_json).read_text())
             if body.get('type') != 'audit' or body.get('platform') != ('chatgpt' if args.chatgpt_cache else 'gemini') or body.get('geminiCachePrepared') or body.get('chatgptCachePrepared'):
@@ -216,6 +228,8 @@ def main():
             if args.chatgpt_cache:
                 env.update(COST_CHATGPT_CACHE='1', COST_PHASE_TELEMETRY='1',
                            RANK_CATALOG_DIR=str(ROOT/'ranking_yokl_20260909/catalog'))
+                if args.chatgpt_followup:
+                    env['COST_CHATGPT_FOLLOWUP']='1'
             if args.rerun_manifest:
                 env.update(COST_DRIVER='rerun_four', COST_PROMPT_FREE='1', COST_PHASE_TELEMETRY='1')
             if args.cache_trial:

@@ -30,12 +30,18 @@ out = Path(sys.argv[2]).resolve()
 keywords = json.loads(manifest.read_text())
 single = os.environ.get('COST_DRIVER') == 'reframe_single'
 chatgpt_cache = os.environ.get('COST_CHATGPT_CACHE') == '1'
+chatgpt_followup = os.environ.get('COST_CHATGPT_FOLLOWUP') == '1'
+if chatgpt_followup:
+    if not chatgpt_cache or not single or keywords != [5222,5223,5224,5225]:
+        raise SystemExit('ChatGPT follow-up requires exact remaining four and one-device cache mode')
+    from tools.yokl_delivery_gate import require_chatgpt_proof
+    require_chatgpt_proof(root)
 copilot_yokl = os.environ.get('COST_YOKL_COPILOT') == '1'
 if copilot_yokl and (not single or chatgpt_cache or not isinstance(keywords,list)
         or not 1 <= len(keywords) <= 4 or any(k not in (5222,5223,5224,5225) for k in keywords)
         or os.environ.get('COST_CACHE_TRIAL') == '1' or os.environ.get('COST_CACHE_EVIDENCE') == '1'):
     raise SystemExit('Copilot delivery is restricted to YOKL missing keywords5222–5225, no cache trial')
-if chatgpt_cache and (not single or keywords != [5221] or os.environ.get('COST_CACHE_TRIAL') == '1' or os.environ.get('COST_CACHE_EVIDENCE') == '1'):
+if chatgpt_cache and (not single or (not chatgpt_followup and keywords != [5221]) or os.environ.get('COST_CACHE_TRIAL') == '1' or os.environ.get('COST_CACHE_EVIDENCE') == '1'):
     raise SystemExit('ChatGPT cache requires one YOKL5221 job and no Gemini flags')
 pilot = os.environ.get('COST_DRIVER') == 'cache_pilot'
 rerun_four = os.environ.get('COST_DRIVER') == 'rerun_four'
@@ -45,6 +51,8 @@ one_phone = single or pilot or rerun_four or yokl_priority or yokl_followup
 job_count = 4 if rerun_four else (1 if single else 10)
 if copilot_yokl:
     job_count = len(keywords)
+if chatgpt_followup:
+    job_count = 4
 if yokl_followup:
     job_count = 4
     if keywords != [5222,5223,5224,5225] or os.environ.get('COST_CACHE_EVIDENCE')!='1' or os.environ.get('COST_CACHE_TRIAL')!='1':
@@ -99,6 +107,8 @@ if yokl_priority:
 if yokl_followup:
     budget_mb, leg_timeout = 100, 25 * 60
 if copilot_yokl:
+    budget_mb, leg_timeout = 100, 25 * 60
+if chatgpt_followup:
     budget_mb, leg_timeout = 100, 25 * 60
 hard_deadline = None
 if pilot:
