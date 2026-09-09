@@ -31,7 +31,12 @@ export EXECUTOR_TOKEN=$(aws secretsmanager get-secret-value --secret-id aeo-admi
 _ov_provider="${PROXY_PROVIDER:-}"   # a caller-exported provider wins over .env.dev
 set -a; source .env.dev; set +a
 [ -n "$_ov_provider" ] && export PROXY_PROVIDER="$_ov_provider"
-if [ "$EIGHT_DAILY" = "1" ]; then export SKIP_BASE=1 ROLLING_RETRY=0; fi
+if [ "$EIGHT_DAILY" = "1" ]; then
+  export SKIP_BASE=1 ROLLING_RETRY=0
+  export DAILY_BUDGET_MB="${DAILY_BUDGET_MB:-12000}"
+  export DAILY_BALANCE_FLOOR_MB="${DAILY_BALANCE_FLOOR_MB:-9000}"
+  export DAILY_METER_LEDGER="${DAILY_METER_LEDGER:-daily_meter_${DATE}.jsonl}"
+fi
 # RESIDENTIAL daily proxy. Default Decodo; set PROXY_PROVIDER=dataimpulse in .env.dev
 # to switch to the DataImpulse gateway (TEMPORARY, while Decodo funding). Runs AFTER
 # the .env.dev source so it wins over stale proxy host/port. Note: DataImpulse only
@@ -75,10 +80,12 @@ export ONLY_ONLINE=1
 # to them — no stale hardcoded exclude list. Caller can still override by exporting
 # DEVICE_EXCLUDE / MAX_PARALLEL before invoking.
 if [ -z "${DEVICE_EXCLUDE:-}" ] || [ -z "${MAX_PARALLEL:-}" ]; then
-  eval "$(python3 probe_phones.py 2>/tmp/probe_${DATE}.log)"   # sets DOWN=... GOOD=N
+  eval "$(python3 probe_phones.py 2>/tmp/probe_${DATE}.log | grep -E '^(DOWN|GOOD)=')"
   export DEVICE_EXCLUDE="${DEVICE_EXCLUDE:-$DOWN}"
   export MAX_PARALLEL="${MAX_PARALLEL:-$GOOD}"
 fi
+# Test phone125 and repeatedly failing108 are not release candidates.
+if [ "$EIGHT_DAILY" = "1" ]; then export DEVICE_EXCLUDE="${DEVICE_EXCLUDE:+$DEVICE_EXCLUDE,}device-108,device-125"; fi
 echo "[daily ${DATE}] phones: MAX_PARALLEL=$MAX_PARALLEL  DEVICE_EXCLUDE='${DEVICE_EXCLUDE:-none}'" | tee -a "$LOG"
 
 echo "[daily ${DATE}] $(date) START" | tee -a "$LOG"
@@ -114,6 +121,11 @@ for round in $(seq 1 "$DAILY_MAX_ROUNDS"); do
   pgrep -f reconnect_watcher >/dev/null || nohup ./reconnect_watcher.sh >/tmp/rw.log 2>&1 &
   echo "[daily ${DATE} retry $round] running $cnt jobs..." | tee -a "$LOG"
   python3 -u run_rolling_plan.py "$REMAIN" >>"$LOG" 2>&1
+  run_rc=$?
+  if [ "$EIGHT_DAILY" = "1" ] && [ "$run_rc" -ne 0 ]; then
+    echo "Daily runner stopped with status $run_rc; no automatic relaunch" | tee -a "$LOG"
+    exit "$run_rc"
+  fi
 done
 # Reconcile after the final attempt too; the pre-attempt count is not final.
 cnt=$(python3 _build_remaining.py "$DATE" 2>>"$LOG") || exit 2

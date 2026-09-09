@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import glob,json,os,random,re,time,urllib.request,urllib.error
 from collections import Counter,defaultdict
 from pathlib import Path
+from daily_geo import coordinates
 
 from daily_prompt_plan import campaign_slots,cycle_day,validate_typed_jobs,validate_typed_plan,PROMPT_TYPES,reconcile_legacy_credits
 
@@ -39,6 +40,8 @@ def make_job(slot,session,run_date):
     if any(session.get(k)!=v for k,v in expected.items()):
         raise ValueError(f"Backend daily contract mismatch for {slot['daily_slot_id']}")
     addr=session.get('searchAddress') or biz.get('publishedAddress') or ''
+    city,state=session.get('city') or '',session.get('state') or ''
+    lat,lng,tz=coordinates(city,state)
     zips=re.findall(r'\b\d{5}\b',addr)
     return dict(client_id=session['clientId'],client_name='',campaign_id=kw['aeoPlanId'],
         campaign_name=kw.get('campaignName') or f"biz{biz['id']}",business_id=biz['id'],keyword_id=kw['id'],
@@ -46,8 +49,8 @@ def make_job(slot,session,run_date):
         variant_id=None,platform=slot['platform'],biz_name=session.get('bizName') or biz.get('name') or '',
         biz_city=session.get('city') or biz.get('city') or '',biz_state=session.get('state') or biz.get('state') or '',
         biz_zip=session.get('zip') or (zips[-1] if zips else ''),biz_address=addr,
-        biz_lat=biz.get('latitude') or 0,biz_lng=biz.get('longitude') or 0,
-        biz_timezone=biz.get('timezone') or 'America/Los_Angeles',
+        biz_lat=lat,biz_lng=lng,
+        biz_timezone=tz,
         gmb_url=biz.get('gmbUrl') or biz.get('websiteUrl'),backlinks=[],backlink_injected=False,backlink_url=None,
         prompt=session.get('prompt') or '',follow_up='',targetDate=run_date+'T12:00:00Z',
         daily_slot_id=slot['daily_slot_id'],prompt_type=slot['prompt_type'],

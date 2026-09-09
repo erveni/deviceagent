@@ -84,6 +84,9 @@ def normalize_plan_job(j: dict) -> dict:
         "client_name": j.get("client_name", ""),
         "biz_name": j.get("biz_name", ""),
         "biz_address": j.get("biz_address", "") or j.get("search_address", ""),
+        "biz_city": j.get("biz_city", ""),
+        "biz_state": j.get("biz_state", ""),
+        "biz_zip": j.get("biz_zip", ""),
         "biz_lat": j.get("biz_lat", 0) or 0,
         "biz_lng": j.get("biz_lng", 0) or 0,
         "biz_timezone": j.get("biz_timezone", ""),
@@ -206,6 +209,11 @@ def main() -> None:
     print(f"  csv:         {csv_path}", flush=True)
     print("=" * 70, flush=True)
 
+    budget = None
+    if any(j.get('daily_slot_id') for j in jobs):
+        from daily_budget import DailyBudget
+        budget = DailyBudget()
+        if not budget.admit():raise SystemExit(3)
     job_q: queue.Queue = queue.Queue()
     for j in jobs:
         job_q.put(j)
@@ -219,6 +227,7 @@ def main() -> None:
     def worker(worker_id: int) -> None:
         nonlocal ok_count, err_count
         while True:
+            if budget is not None and not budget.admit():return
             try:
                 job = job_q.get(block=False)
             except queue.Empty:
@@ -284,6 +293,7 @@ def main() -> None:
         f"{elapsed/60:.1f} min | {csv_path}",
         flush=True,
     )
+    if budget is not None and budget.stopped:raise SystemExit(3)
 
 
 if __name__ == "__main__":

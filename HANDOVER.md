@@ -2,6 +2,31 @@
 
 ## Current user-approved order — September10
 
+### Latest daily release checkpoint (supersedes earlier blockers below)
+
+- User approved verifying/completing the16 location settings and asked to push/run.
+  All16 campaign search_address repairs APPLIED atomically with exact-before checks.
+  Backup:/tmp/daily-location-repair-20260910-before.json. No historical sessions edited.
+  Fresh preview:1558/1558 keywords across265 campaigns pass location rendering.
+- Found/fixed new planner HQ-GPS fallback. All265 campaigns now resolve through
+  daily_city_geo.json (156 city/state keys), including polygon-derived timezone.
+  This is city-level GPS, not street-level precision. No paid proxy geocoding.
+  OSM attribution/ODbL retained; one-time lookup evidence /tmp/daily-city-geo-20260910.jsonl.
+- Additive production daily columns/index migration COMPLETE. Backend571811c pushed;
+  deployment GitHub run34409776482 is still IN_PROGRESS (AppRunner operation
+  d4d1c465975e481fb71ee3c25ce79820). Verify completion + JSON capability before jobs.
+- Admin assets uploaded, index NOT switched yet. Previous index backup:
+  /tmp/aeo-admin-index-before-daily-20260910.html. No old assets deleted.
+- New admission budget guard:typed daily requires Evomi ledger; runner defaults
+  12000MB budget,9000MB floor, no nested retries. Existing in-flight jobs finish;
+  meter lag/flight traffic can overshoot. Stops on meter failure; never resets
+  baseline between retry rounds. devices108/125 excluded.15 daily Python tests pass.
+- NEXT: verify deployed API, switch admin index/invalidate, build NEW Sep9 eight-v1
+  plan via tools/build_daily_release.py with267 legacy credits; three-platform
+  single-phone/zero-retry smoke under100MB guard; verify meter/results before full
+ 1853-job remaining launch. No daily phone work started at this checkpoint.
+- Stale ranking STILL PAUSED; efficient ranking fleet rollout still incomplete.
+
 - UPDATE latest user: proceed with daily; next ranking must use efficient usage.
   Sep9 legacy-credit recommendation accepted. Fresh READ ONLY DB snapshot in
   `/tmp/aeo-daily-catalog-20260910-0442`:265 campaigns,267 credits,1853 new jobs
