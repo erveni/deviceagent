@@ -38,6 +38,9 @@ if chatgpt_followup:
     require_chatgpt_proof(root)
 copilot_yokl = os.environ.get('COST_YOKL_COPILOT') == '1'
 copilot_cache = os.environ.get('COST_COPILOT_CACHE') == '1'
+copilot_bootstrap = os.environ.get('COST_COPILOT_BOOTSTRAP') == '1'
+if copilot_bootstrap and (not copilot_yokl or copilot_cache or keywords != [5225]):
+    raise SystemExit('Copilot bootstrap restricted to one fixed5225 comparison, no cache mode')
 if copilot_cache and (not copilot_yokl or keywords != [5225]):
     raise SystemExit('Copilot cache measurement restricted to one fixed5225 comparison')
 copilot_retry = os.environ.get('COST_COPILOT_RETRY') == '1'
@@ -69,7 +72,7 @@ if copilot_yokl:
     if keywords == [5223,5224,5225]:
         from tools.yokl_delivery_gate import require_copilot_proof
         require_copilot_proof(root)
-    elif not copilot_final_retry and not copilot_cache and keywords != [5222]:
+    elif not copilot_final_retry and not copilot_cache and not copilot_bootstrap and keywords != [5222]:
         raise SystemExit('Copilot requires first5222 or gated remaining5223–5225')
 if chatgpt_followup:
     job_count = 4
@@ -131,6 +134,8 @@ if copilot_yokl:
 if copilot_final_retry:
     budget_mb, leg_timeout = 30, 10 * 60
 if copilot_cache:
+    budget_mb, leg_timeout = 30, 10 * 60
+if copilot_bootstrap:
     budget_mb, leg_timeout = 30, 10 * 60
 if chatgpt_followup:
     budget_mb, leg_timeout = 100, 25 * 60
@@ -460,6 +465,8 @@ try:
                    RANK_CHATGPT_CACHE_TRIAL='0',
                    RANK_COPILOT_TEST_NOTIFICATION_DENY='0',
                    RANK_COPILOT_CACHE_TRIAL='0',
+                   RANK_COPILOT_EDGE_RECEIPT='',
+                   RANK_COPILOT_OFFLINE_BOOTSTRAP='0',
                    RANK_GEMINI_CACHE_EVIDENCE='0', RANK_GEMINI_PROMPT_FREE='0',
                    OCR_VALIDATE_SCREENSHOT='1', GEMINI_CDP='0', RANK_PHASE_TRACE='1',
                    GOST_COST_LEDGER=str(legdir / 'gost.jsonl'), COPILOT_MAX_PARALLEL='4')
@@ -479,6 +486,14 @@ try:
                 env.update(RANK_COPILOT_CACHE_TRIAL='1', COPILOT_PM_CLEAR='0')
                 report['copilot_yokl_delivery'] = False
                 report['copilot_cache_measurement_only'] = True
+            if copilot_bootstrap:
+                env['COPILOT_PM_CLEAR']='0'
+                if os.environ.get('COST_COPILOT_INLINE')=='1':
+                    env['RANK_COPILOT_OFFLINE_BOOTSTRAP']='1'
+                else:
+                    env['RANK_COPILOT_EDGE_RECEIPT']=os.environ['COST_COPILOT_EDGE_RECEIPT']
+                report['copilot_yokl_delivery'] = False
+                report['copilot_bootstrap_measurement_only'] = True
         if pilot or os.environ.get('COST_PHASE_TELEMETRY') == '1':
             env['GOST_PHASE_LEDGER'] = str(legdir / 'gost_phases.jsonl')
         if pilot or driver == 'yokl_cache_followup':

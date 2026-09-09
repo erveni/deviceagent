@@ -13,9 +13,13 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
     os.chdir(ROOT)
-    out=ROOT/'copilot_cache_one_20260910_v5_wrapper'
+    bootstrap=os.environ.get('COPILOT_BOOTSTRAP_TRIAL')=='1'
+    confirm=os.environ.get('COPILOT_BOOTSTRAP_CONFIRM')=='1'
+    if confirm and not bootstrap:raise RuntimeError('Confirmation requires bootstrap mode')
+    prefix=('copilot_bootstrap_auto_20260910' if confirm else 'copilot_bootstrap_one_20260910') if bootstrap else 'copilot_cache_one_20260910_v5'
+    out=ROOT/(prefix+'_wrapper')
     out.mkdir(exist_ok=False)
-    meter=ROOT/'copilot_cache_one_20260910_v5_metered'
+    meter=ROOT/(prefix+'_metered')
     if meter.exists():raise RuntimeError('Measurement already exists')
     original=ROOT/'direct_ui_20260908_apk/device104-original-v79.apk'
     candidate=ROOT/'app/build/outputs/apk/debug/app-debug.apk'
@@ -61,14 +65,18 @@ def main():
         changed=True
         adb('install','-r',str(candidate))
         report['candidate_health']=rebind()
-        if report['candidate_health'].get('versionCode')!=85 or report['candidate_health'].get('accessibility') is not True:
-            raise RuntimeError('Candidate85 unavailable')
+        expected_version=86 if bootstrap else 85
+        if report['candidate_health'].get('versionCode')!=expected_version or report['candidate_health'].get('accessibility') is not True:
+            raise RuntimeError('Matching candidate unavailable')
+        if bootstrap:
+            if adb('shell','pm','clear','com.microsoft.emmx').strip()!='Success':
+                raise RuntimeError('Offline full Edge data clear failed')
         adb('shell','am','force-stop','com.microsoft.emmx')
         adb('shell','am','start','-n','com.microsoft.emmx/com.microsoft.ruby.Main')
         time.sleep(3)
         request('session',dict(type='audit',platform='copilot',bizName='Yokl, Inc.',
             bizUrl='https://www.shopyokl.com/',city='Hershey',state='PA',keyword='private group tours in Hershey PA',
-            copilotCacheTrial=True,copilotCacheResetOnly=True,**{'async':True}))
+            copilotCacheTrial=not bootstrap,copilotCacheResetOnly=True,**{'async':True}))
         print('Offline reset-only readiness running; no AI prompt or proxy',flush=True)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:
@@ -81,6 +89,10 @@ def main():
                 or any('[copilot] submit' in s or '[copilot] input' in s for s in report['offline_reset_steps'])):
             raise RuntimeError('Offline reset readiness failed; refusing paid test')
         print('Offline reset-only readiness PASSED',flush=True)
+        if bootstrap:
+            receipt=out/'edge_ready.json'
+            receipt.write_text(json.dumps(dict(status='full_reset_ready',at=time.time(),serial=serial,
+                keyword_id=5225,proxy_connected=False,prompts_submitted=0,steps=report['offline_reset_steps']),indent=2))
         if not owned():raise RuntimeError('Lost preparation lock')
         lock.unlink()
         env=os.environ.copy()
@@ -88,6 +100,10 @@ def main():
                    COST_COPILOT_ZIP_FIRST='1',COST_COPILOT_NOTIFICATION_DENY='1',COST_PHASE_TELEMETRY='1',
                    RANK_CATALOG_DIR=str(ROOT/'ranking_yokl_20260909/catalog'))
         env['COST_SETTLED_BASELINE_REPORT']=str(ROOT/'copilot_cache_one_20260910_v4_metered/report.json')
+        if bootstrap:
+            env.update(COST_COPILOT_CACHE='0',COST_COPILOT_BOOTSTRAP='1',COST_COPILOT_EDGE_RECEIPT=str(receipt),
+                COST_SETTLED_BASELINE_REPORT=str(ROOT/('copilot_bootstrap_one_20260910_metered/report.json' if confirm else 'copilot_cache_one_20260910_v5_metered/report.json')))
+            if confirm:env['COST_COPILOT_INLINE']='1'
         print('Starting ONE cache measurement; not a YOKL report replacement',flush=True)
         completed=subprocess.run(['bash',str(ROOT/'tools/run_ranking_cost_pair.sh'),
             str(ROOT/'tools/yokl_copilot_final_retry_0910.json'),str(meter)],env=env)

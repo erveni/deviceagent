@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 85
-        versionName = "0.9.68-copilot-cache-trial"
+        versionCode = 86
+        versionName = "0.9.69-copilot-bootstrap-trial"
     }
 
     buildTypes {

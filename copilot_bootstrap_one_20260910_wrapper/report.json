@@ -1,0 +1,41 @@
+{
+  "status": "complete",
+  "measurement_only": true,
+  "device": "device-104",
+  "candidate_sha256": "3f616931b0ad6e9d31935264a7c0ee599b3fd796d05fd51ca083642d5ab24825",
+  "candidate_health": {
+    "ok": true,
+    "version": "0.9.69-copilot-bootstrap-trial",
+    "versionCode": 86,
+    "wifiIp": "192.168.0.123",
+    "accessibility": true,
+    "lastJobStatus": "idle",
+    "uptimeMs": 2927,
+    "lastContactAgoMs": 93,
+    "selfHealCount": 0,
+    "tun0": {
+      "up": false,
+      "addr": ""
+    }
+  },
+  "offline_reset_steps": [
+    "[copilot] reset_edge OK 55s (total 55s)"
+  ],
+  "meter_exit_code": 0,
+  "restored_health": {
+    "ok": true,
+    "version": "0.9.62-copilot-frame-top",
+    "versionCode": 79,
+    "wifiIp": "192.168.0.123",
+    "accessibility": true,
+    "lastJobStatus": "idle",
+    "uptimeMs": 2959,
+    "lastContactAgoMs": 13,
+    "selfHealCount": 0,
+    "tun0": {
+      "up": false,
+      "addr": ""
+    }
+  },
+  "restored_no_tun0": true
+}

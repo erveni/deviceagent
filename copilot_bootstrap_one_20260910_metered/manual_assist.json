@@ -1,0 +1,7 @@
+{
+  "assistance": "Explicit adb am start com.microsoft.emmx/com.microsoft.ruby.Main during proxy warm-up, before native audit",
+  "native_idle_verified": true,
+  "new_prompts": 0,
+  "fully_automatic_sample": false,
+  "reason": "Prepared-edge path skipped reset's foreground action; host code now includes explicit foregrounding for subsequent trials."
+}

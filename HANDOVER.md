@@ -2,6 +2,26 @@
 
 ## Current user-approved order — September10
 
+- UPDATE02:15: first off-proxy FULL Edge bootstrap SUCCESS1/8, root reviewedPNG;
+  settled0.513867MB vspriorfull-reset paid12.727877MB (~96%less Evomi thissample).
+  Manualforegroundassistance disclosed; notfullyautomatic.79rollback verified.
+- ACTIVE automatic confirmation: COPILOT_BOOTSTRAP_TRIAL=1 COPILOT_BOOTSTRAP_CONFIRM=1
+  python3 -u tools/copilot_cache_trial.py; outputs copilot_bootstrap_auto_20260910_*
+  (wrapper/metered). Candidate86,1job5225/104/30MB/no retries. Now dispatcher
+  RANK_COPILOT_OFFLINE_BOOTSTRAP=1 runs fullpmclear/native reset-only BEFOREgost,
+  provesoffline/nogeneration, thennativecopilotEdgePrepared skipsduplicatepaidreset.
+  Explicitforegrounding included. AllflagsdefaultOFF; otherdevices/daily unchanged.
+  NineCopilot tests pass. Await automaticactualPNG/settledmeter/79rollback.
+  Do NOT promote failedcache85path. Newapproach shiftsstartuptraffic toWiFi,
+  not proof of smaller totalnetwork traffic. Daily/backend remain queued.
+
+- UPDATE02:08: ACTIVE bootstrap86 test, copilot_bootstrap_one_20260910_wrapper/
+  metered. Offline FULL reset readiness55s passed; baseline29790.243732MB.
+  Root manuallyforegrounded Edge duringproxywarmup afterchecking nativeidle;
+  needed becausepreparedpath skippedreset's launch. manual_assist.json discloses
+  this; hostcode nowautomatesforegroundforfuturetest. Do not callfullyautomatic.
+  Await actualresponse/screenshot/settledmeter/original79rollback. Dailyqueuedonly.
+
 See TODO-ranking-and-daily-2026-09-10.md. Finish/measure ranking bandwidth fix
 FIRST; then implement guide's eight daily prompt types, exactly8sessions per
 campaign,3ChatGPT/3Gemini/2Copilot,14-day distribution, in device-agent AND AEO

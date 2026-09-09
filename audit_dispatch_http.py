@@ -1340,6 +1340,21 @@ def dispatch_audit_job(
             "proxy": {"zip": job.get("zip", ""), "country": "us", "session_duration": 30},
         }
 
+    offline_edge_proof = None
+    offline_edge_consumed = False
+    if os.environ.get('RANK_COPILOT_OFFLINE_BOOTSTRAP','0')=='1':
+        if device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+            raise RuntimeError('Inline offline bootstrap restricted to one104 Copilot audit')
+        from tools.copilot_offline_bootstrap import prepare
+        phase('offline_edge_prepare_start')
+        offline_edge_proof=prepare(serial,_http_port_for_serial(serial),
+            dict(platform='copilot',bizName=entry['biz_name'],bizUrl=entry.get('biz_url',''),
+                 city=entry.get('city',''),state=entry.get('state',''),keyword=_keyword_text(entry,int(keyword_id))),
+            _adb,_post_audit)
+        if os.environ.get('GOST_PHASE_LEDGER'):
+            Path(os.environ['GOST_PHASE_LEDGER']).with_name(f'offline_edge_kw{int(keyword_id)}.json').write_text(json.dumps(offline_edge_proof,indent=2))
+        phase('offline_edge_prepare_done')
+
     # Start gost
     seq = next(_gost_seq)
     gost_key = f"audit-{seq}"
@@ -1424,7 +1439,7 @@ def dispatch_audit_job(
     def _setup_and_post() -> dict:
         """Bring socksdroid + GPS + forwarding online then POST the audit.
         Returns the parsed HTTP response. Caller decides whether to retry."""
-        nonlocal network_trace
+        nonlocal network_trace, offline_edge_consumed
         phase("socksdroid_connect")
         socksdroid_connect(serial, phone_port)
         time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
@@ -1611,6 +1626,27 @@ def dispatch_audit_job(
         # 0/20 on the 2026-09-05 ranking with the sheet up every time, while the daily ran
         # the same phones at 95%.
         copilot_cache_trial = os.environ.get('RANK_COPILOT_CACHE_TRIAL','0') == '1'
+        edge_receipt = os.environ.get('RANK_COPILOT_EDGE_RECEIPT','')
+        if offline_edge_proof:
+            if edge_receipt or copilot_cache_trial or offline_edge_consumed or not 0<=time.time()-offline_edge_proof['at']<=900:
+                raise RuntimeError('Offline preparation cannot be mixed, reused or stale')
+            offline_edge_consumed=True
+            launched=_adb(serial,'shell','am','start','-n','com.microsoft.emmx/com.microsoft.ruby.Main',timeout=10)
+            if launched.returncode:raise RuntimeError('Prepared Edge could not be foregrounded')
+            time.sleep(3)
+            body['copilotEdgePrepared']=True
+        if edge_receipt:
+            if copilot_cache_trial or device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+                raise RuntimeError('Offline bootstrap restricted to one104 Copilot audit')
+            with urllib.request.urlopen(f'http://127.0.0.1:{http_port}/health',timeout=5) as reply:
+                health=json.load(reply)
+            from tools.copilot_edge_receipt import consume_receipt
+            consume_receipt(edge_receipt,serial,keyword_id,health)
+            launched=_adb(serial,'shell','am','start','-n','com.microsoft.emmx/com.microsoft.ruby.Main',timeout=10)
+            if launched.returncode:
+                raise RuntimeError('Prepared Edge could not be foregrounded')
+            time.sleep(3)
+            body['copilotEdgePrepared']=True
         if copilot_cache_trial:
             if device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
                 raise RuntimeError('Copilot cache trial restricted to one device104 audit')
@@ -1628,7 +1664,7 @@ def dispatch_audit_job(
                 raise RuntimeError('Copilot cache trial could not foreground Edge')
             time.sleep(3)
             body['copilotCacheTrial']=True
-        if platform.lower() == "copilot" and not copilot_cache_trial and os.environ.get("COPILOT_PM_CLEAR", "1") == "1":
+        if platform.lower() == "copilot" and not copilot_cache_trial and not edge_receipt and not offline_edge_proof and os.environ.get("COPILOT_PM_CLEAR", "1") == "1":
             for cmd in (("pm", "clear", "com.microsoft.emmx"), ("am", "force-stop", "com.microsoft.emmx")):
                 try:
                     _adb(serial, "shell", *cmd, timeout=60)
