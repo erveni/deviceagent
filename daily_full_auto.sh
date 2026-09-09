@@ -13,10 +13,11 @@ NVM_BIN=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1
 cd /Users/seolocalph/projects/device-agent
 
 DATE="${1:-$(date +%Y-%m-%d)}"
-PLAN="daily_plan_${DATE}.json"
+PLAN="${DAILY_PLAN_PATH:-daily_plan_${DATE}.json}"
+export DAILY_PLAN_PATH="$PLAN"
 DONLY="daily_plan_${DATE}.dailyonly.json"
 WITHMAE="daily_plan_${DATE}.withmae.json"
-LOG="/private/tmp/dailyfull_${DATE}.log"
+LOG="/private/tmp/dailyfull_${DATE}${DAILY_RUN_LABEL:+_$DAILY_RUN_LABEL}.log"
 say(){ echo "[dailyfull ${DATE} $(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 
 say "START"
@@ -38,7 +39,7 @@ else
   # Eight-type daily uses deterministic backend templates, not DeepSeek/Ollama.
   # Require the deployed capability; never silently use a stale local backend.
   say "building eight-type daily against configured/deployed backend"
-  DATE="$DATE" EXECUTOR_TOKEN="$TOK" BUILD_TIMEOUT_S="${BUILD_TIMEOUT_S:-180}" \
+  DATE="$DATE" PLAN_PATH="$PLAN" EXECUTOR_TOKEN="$TOK" BUILD_TIMEOUT_S="${BUILD_TIMEOUT_S:-180}" \
     python3 -u build_daily_plan.py >>"$LOG" 2>&1 || { say "FATAL: daily build failed"; exit 1; }
   [ -s "$PLAN" ] || { say "FATAL: build produced no $PLAN"; exit 1; }
 fi
@@ -56,8 +57,8 @@ say "plan job count ok: ${JOBS}"
 
 # 2) merge Mae from tracked mae_plan.json — no-op if already merged (guarded inside)
 python3 - "$DATE" >>"$LOG" 2>&1 <<'PY'
-import json, sys
-DATE=sys.argv[1]; PLAN=f"daily_plan_{DATE}.json"
+import json, sys, os
+DATE=sys.argv[1]; PLAN=os.environ.get('DAILY_PLAN_PATH',f"daily_plan_{DATE}.json")
 p=json.load(open(PLAN))
 if p.get('daily_protocol')=='eight-v1':
     print('[dailyfull] eight-type protocol: no separate210-session Mae override'); raise SystemExit(0)
@@ -98,7 +99,7 @@ out=subprocess.run(["adb","devices"],capture_output=True,text=True).stdout
 online={l.split("\t")[0] for l in out.splitlines() if "\tdevice" in l}
 n=0
 for label,ser in DEVICES:
-    if label=="device-125" or ser not in online: continue
+    if label in ("device-108","device-125") or ser not in online: continue
     for k in ("KEYCODE_WAKEUP","KEYCODE_MENU"):
         subprocess.run(["adb","-s",ser,"shell","input","keyevent",k],stdin=subprocess.DEVNULL,capture_output=True,timeout=15)
     subprocess.run(["adb","-s",ser,"shell","input","swipe","540","1600","540","400"],stdin=subprocess.DEVNULL,capture_output=True,timeout=15)
@@ -115,7 +116,19 @@ done
 # 5) run daily to 100%
 say "launching run_daily_auto"
 ./run_daily_auto.sh "$DATE" >>"$LOG" 2>&1
-say "run_daily_auto exited rc=$?"
+RUN_RC=$?
+say "run_daily_auto exited rc=$RUN_RC"
+
+if [ "$EIGHT_DAILY" = "1" ]; then
+  OUT="${DAILY_DELIVERY_DIR:-daily_delivery_${DATE}_$(date +%s)}"
+  python3 tools/consolidate_typed_daily.py "$PLAN" "$OUT" >>"$LOG" 2>&1 || exit 2
+  if [ "$RUN_RC" -ne 0 ]; then
+    say "INCOMPLETE — partial typed successes preserved in $OUT; no completion marker"
+    exit "$RUN_RC"
+  fi
+  say "ALL DONE — typed slots consolidated in $OUT (legacy credits not re-imported)"
+  exit 0
+fi
 
 # 6) consolidate Mae-excluded: swap plan -> dailyonly
 if [ "$EIGHT_DAILY" != "1" ] && [ -s "$DONLY" ]; then
