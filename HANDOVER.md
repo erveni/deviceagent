@@ -1,5 +1,37 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-09 evening — YOKL priority supersedes bandwidth test
+
+- User explicitly requested pausing daily and running YOKL free-trial ranking first.
+  Found live API business363/client329 Yokl, Inc., shopyokl.com,129CedarAvenue,
+  Hershey PA17033; five active keywords5221–5225, campaign502, zero ranking history.
+  Published address agrees with every keyword's campaignName. Isolated input
+  snapshot ranking_yokl_20260909/catalog; shared /tmp catalogs untouched.
+- Daily LaunchAgent booted out to pause (in-flight work interrupted), then its
+  original plist reloaded with RunAtLoad=false: scheduled20:00 service preserved,
+  NOT currently running daily. _build_remaining.py recorded267saved successes,
+  1334remaining of1601. No successful daily rows deleted or replayed.
+- com.deviceagent.cacheevidence0909 booted OUT while waiting; no test proxy/jobs
+  started. Its old state.json still says waiting but it is NOT active. Do not
+  reload it: source fingerprints changed for this priority request. Fullchain0906
+  remains disabled. Bandwidth optimization still NOT verified with combined83.
+- Active priority com.deviceagent.yoklpriority0909 -> tools/run_yokl_priority_0909.sh.
+  Monitor ranking_yokl_20260909/priority.log; direct/report.json; metered/report.json.
+  First direct YOKL Gemini readiness check; only104temporarily83, original79backup.
+  Requires valid answer-only top3+prompt-free exact-rank screenshot before paidphase.
+  Then exact15pairs (5keywords x ChatGPT/Gemini/Copilot),1worker104,no retries,
+  normal ZIP-first targeting, cache OFF, prompt-free Gemini ON,750MBguard with
+  meter-lag caveat,10GBreserve,75minpaid execution limit. This is the requested
+  priority delivery, NOT a cache savings trial or full stale queue restart.
+- Wrapper restores79/accessibility/noVPN before shell can resume daily using
+  SKIP_BASE=1 PROXY_PROVIDER=evomi daily_full_auto.sh 2026-09-09. This retains the
+  original plan and rebuilds only remaining jobs. A bad rollback blocks resume.
+  Paid pass completion does not imply15valid captures: inspect CSV and images.
+  Do not kickstart/reload the priority job (output directory is one-shot).
+- Offline84tests passed/1optionalintegration skipped; Android candidate remains
+  already-built83. No fleetwide APK rollout; no backend ranking writes made by
+  preparation. Need final screenshots/deliverable and actual meter after paid run.
+
 ## 2026-09-09 evening — Combined cache/evidence test prepared; waiting for daily
 
 - User authorized the next direct-then-ONE-metered-job test, NOT a queue restart.

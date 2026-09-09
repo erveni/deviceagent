@@ -58,15 +58,16 @@ WARMUP_GATE = os.environ.get("WARMUP_GATE", "1") == "1"
 WARMUP_MIN_FRAC = float(os.environ.get("WARMUP_MIN_FRAC", "0.5"))
 
 # Load catalog (refresh via /tmp/fetch_catalog_full.py if missing)
-biz_by_id = {b["id"]: b for b in json.load(open("/tmp/biz_admin.json"))}
-kws       = json.load(open("/tmp/kw_admin.json"))
-rr        = json.load(open("/tmp/rr_admin.json"))
+CATALOG_DIR = os.environ.get("RANK_CATALOG_DIR", "/tmp")
+biz_by_id = {b["id"]: b for b in json.load(open(os.path.join(CATALOG_DIR, "biz_admin.json")))}
+kws       = json.load(open(os.path.join(CATALOG_DIR, "kw_admin.json")))
+rr        = json.load(open(os.path.join(CATALOG_DIR, "rr_admin.json")))
 # Campaign search_address is the authoritative geo source — a business may run
 # campaigns in several locations, so geo must resolve per-campaign (aeo_plan_id),
 # not per-business. Built from the DB (the client-aeo-plans API route is RBAC-gated).
 # Maps aeo_plan_id (str) -> search_address; empty/absent file = business-only fallback.
-CAMPAIGN_ADDR = ({str(k): v for k, v in json.load(open("/tmp/campaign_addr.json")).items()}
-                 if os.path.exists("/tmp/campaign_addr.json") else {})
+CAMPAIGN_ADDR = ({str(k): v for k, v in json.load(open(os.path.join(CATALOG_DIR, "campaign_addr.json"))).items()}
+                 if os.path.exists(os.path.join(CATALOG_DIR, "campaign_addr.json")) else {})
 # Local geo override — keyword id (str) -> "City, ST". Last-resort geo for campaigns
 # whose target location exists ONLY in the keyword text (NULL search_address AND no
 # business address, e.g. Voice depot metros, Yellow Brick). Neighborhood-only keywords
@@ -89,7 +90,7 @@ def is_active(o: dict) -> bool:
     return o.get("isActive") or o.get("status") == "active"
 
 # Strict filter: kw active AND biz active AND client active
-clients = json.load(open("/tmp/clients_admin.json"))
+clients = json.load(open(os.path.join(CATALOG_DIR, "clients_admin.json")))
 active_client_ids = {c["id"] for c in clients if is_active(c)}
 active_biz_ids = {b["id"] for b in biz_by_id.values() if is_active(b) and b.get("clientId") in active_client_ids}
 print(f"active clients: {len(active_client_ids)}/{len(clients)}")

@@ -31,24 +31,35 @@ keywords = json.loads(manifest.read_text())
 single = os.environ.get('COST_DRIVER') == 'reframe_single'
 pilot = os.environ.get('COST_DRIVER') == 'cache_pilot'
 rerun_four = os.environ.get('COST_DRIVER') == 'rerun_four'
-one_phone = single or pilot or rerun_four
+yokl_priority = os.environ.get('COST_DRIVER') == 'yokl_priority'
+one_phone = single or pilot or rerun_four or yokl_priority
 job_count = 4 if rerun_four else (1 if single else 10)
-if not isinstance(keywords, list) or len(keywords) != job_count or len(set(map(str, keywords))) != job_count:
+if yokl_priority:
+    job_count = 15
+    if keywords != [5221,5222,5223,5224,5225]:
+        raise SystemExit('YOKL priority must use exactly its five keyword IDs')
+keyword_count = 5 if yokl_priority else job_count
+if not isinstance(keywords, list) or len(keywords) != keyword_count or len(set(map(str, keywords))) != keyword_count:
     raise SystemExit(f'Manifest must contain exactly {job_count} distinct keyword IDs')
 if any(type(k) is not int or k <= 0 for k in keywords):
     raise SystemExit('Keyword IDs must be positive JSON integers, matching the catalog')
 # run_ranking.py synthesizes campaign_id as businessId * 10000 + keywordId;
 # audit_dispatch_http preserves it verbatim in CSV. It is NOT keywordId alone.
-catalog = {k['id']: k for k in json.loads(Path('/tmp/kw_admin.json').read_text())}
+catalog_dir = Path(os.environ.get('RANK_CATALOG_DIR', '/tmp'))
+catalog = {k['id']: k for k in json.loads((catalog_dir/'kw_admin.json').read_text())}
 if any(k not in catalog for k in keywords):
     raise SystemExit('Manifest keyword missing from runner catalog')
 expected_pairs = {(str(catalog[k]['businessId'] * 10000 + k), 'gemini') for k in keywords}
+if yokl_priority:
+    if any(catalog[k]['businessId'] != 363 or catalog[k]['clientId'] != 329 for k in keywords):
+        raise SystemExit('YOKL business/client mismatch')
+    expected_pairs = {(str(363 * 10000 + k), p) for k in keywords for p in ('chatgpt','gemini','copilot')}
 if len(expected_pairs) != job_count:
     raise SystemExit('Synthesized campaign IDs collide; choose an unambiguous sample')
 fixed = out / 'keywords.json'
 fixed.write_text(json.dumps(keywords) + '\n')
 date = '2026-09-02'
-if rerun_four or os.environ.get('COST_CACHE_EVIDENCE') == '1':
+if rerun_four or yokl_priority or os.environ.get('COST_CACHE_EVIDENCE') == '1':
     # New captures are dated today, never presented as observations from August.
     date = datetime.date.today().isoformat()
 shared_log = Path('/private/tmp/ranking_auto_' + date + '.log')
@@ -58,6 +69,8 @@ if pilot:
     budget_mb, leg_timeout = 150, 30 * 60
 if rerun_four:
     budget_mb, leg_timeout = 150, 40 * 60
+if yokl_priority:
+    budget_mb, leg_timeout = 750, 75 * 60
 hard_deadline = None
 if pilot:
     try:
@@ -76,7 +89,7 @@ spend_baseline = float(spend_baseline) if spend_baseline is not None else None
 if spend_baseline is not None and (not math.isfinite(spend_baseline) or spend_baseline < 0):
     raise SystemExit('Invalid cumulative spend baseline')
 driver = os.environ.get('COST_DRIVER', 'city')
-if driver not in ('city', 'generation_timeout', 'gemini_app_screenshot', 'warmup', 'reframe_single', 'cache_pilot', 'rerun_four'):
+if driver not in ('city', 'generation_timeout', 'gemini_app_screenshot', 'warmup', 'reframe_single', 'cache_pilot', 'rerun_four', 'yokl_priority'):
     raise SystemExit('Unsupported COST_DRIVER')
 initial = None
 active = None
@@ -333,6 +346,8 @@ try:
     for name, city_first in legs:
         if rerun_four:
             city_first = '0'  # preserve normal geo targeting for replacement captures
+        if yokl_priority:
+            city_first = '0'
         if driver in ('generation_timeout', 'gemini_app_screenshot', 'warmup'):
             city_first = '1'
         check_idle()
@@ -399,6 +414,10 @@ try:
             if not single or env['RANK_GEMINI_CACHE_TRIAL'] != '1':
                 raise RuntimeError('Combined evidence/cache trial requires exactly one cache job')
             env.update(RANK_GEMINI_CACHE_EVIDENCE='1', RANK_GEMINI_PROMPT_FREE='1')
+        if driver == 'yokl_priority':
+            env.update(PLATFORMS='chatgpt,gemini,copilot', RANK_GEMINI_CACHE_TRIAL='0',
+                       RANK_GEMINI_CACHE_EVIDENCE='0', RANK_CACHE_PILOT='0',
+                       RANK_GEMINI_PROMPT_FREE='1')
         if driver == 'generation_timeout' and name == 'candidate':
             env['AEO_ROTATE_ON_GENERATION_TIMEOUT'] = '0'
         if driver == 'gemini_app_screenshot' and name == 'candidate':
@@ -424,7 +443,7 @@ try:
         report['legs'].append(leg)
         save()
         started = time.monotonic()
-        log(f'Starting {name} bounded {job_count}-job Gemini sample')
+        log(f'Starting {name} bounded {job_count}-job sample: {env["PLATFORMS"]}')
         check_idle()
         with (legdir / 'launcher.log').open('w') as stream:
             active = subprocess.Popen(['bash', 'run_ranking_auto.sh', date, 'stale'],

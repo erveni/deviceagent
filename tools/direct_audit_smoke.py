@@ -21,12 +21,20 @@ def main():
     p.add_argument('--metered-output', help='After direct success only, run one isolated paid job and restore APK')
     p.add_argument('--cache-trial', action='store_true', help='Verify host-prepared v82 cache reset on device104')
     p.add_argument('--cache-evidence', action='store_true', help='Opt-in v83 cache + prompt-free validation; one paid job maximum')
+    p.add_argument('--yokl-priority', action='store_true', help='Exact five YOKL keywords, three live platforms, isolated catalog')
     p.add_argument('--pilot-manifest', help='Ten distinct Gemini keyword IDs; requires cache trial and UTC deadline')
     args=p.parse_args()
+    if args.yokl_priority and (args.cache_trial or args.cache_evidence or args.pilot_manifest or args.rerun_manifest or not args.metered_output):
+        p.error('YOKL priority requires metered output and forbids other trial modes')
     if args.cache_evidence and (not args.cache_trial or args.pilot_manifest or args.rerun_manifest):
         p.error('--cache-evidence requires --cache-trial and forbids multi-job modes')
     manifest=ROOT/'tools/ranking_one_reframe_0908.json'
     planned_jobs=1
+    if args.yokl_priority:
+        manifest=ROOT/'ranking_yokl_20260909/keywords.json'
+        if json.loads(manifest.read_text()) != [5221,5222,5223,5224,5225]:
+            p.error('YOKL manifest mismatch')
+        planned_jobs=15
     if args.rerun_manifest:
         if not args.metered_output or args.cache_trial or args.pilot_manifest:
             p.error('Four-job rerun requires metered output and no cache/pilot mode')
@@ -96,7 +104,7 @@ def main():
         changed=True
         adb('install','-r',str(candidate))
         report['candidate_health']=rebind()
-        if args.rerun_manifest and report['candidate_health'].get('versionCode') != 83:
+        if (args.rerun_manifest or args.yokl_priority) and report['candidate_health'].get('versionCode') != 83:
             raise RuntimeError('Four-row evidence repair requires verified candidate v83')
         print('Candidate installed on device104 only; direct network verified',flush=True)
         for cmd in [('keyevent','KEYCODE_WAKEUP'),('keyevent','KEYCODE_MENU'),('swipe','500','1600','500','400','300')]:adb('shell','input',*cmd)
@@ -104,6 +112,9 @@ def main():
               'bizUrl':'https://maps.app.goo.gl/uvmmKU3ezTV1k9hP6','city':'Eugene','state':'OR',
               'searchAddress':'1310 Coburg Rd suite 10, Eugene, OR','keyword':'mobile app development',
               'genTimeoutSec':90,'async':True}
+        if args.yokl_priority:
+            body.update(bizName='Yokl, Inc.',bizUrl='https://www.shopyokl.com/',city='Hershey',state='PA',
+                        searchAddress='129 Cedar Avenue, Hershey, PA',keyword='food tours in Hershey PA')
         if args.request_json:
             body=json.loads(Path(args.request_json).read_text())
             if body.get('type') != 'audit' or body.get('platform') != 'gemini' or body.get('geminiCachePrepared'):
@@ -150,7 +161,7 @@ def main():
         (out/'last_screen.png').write_bytes(adb('exec-out','screencap','-p'))
         report.update(status='complete',elapsed_s=round(time.monotonic()-started,2),
                       result_status=pr.get('status'),error=pr.get('error'),steps=result.get('step_log'))
-        if args.cache_evidence:
+        if args.cache_evidence or args.yokl_priority:
             from tools.direct_evidence_gate import validate_direct_answer
             evidence = validate_direct_answer(serial, body['keyword'], pr, out)
             report['direct_evidence'] = evidence
@@ -171,6 +182,9 @@ def main():
                 env.update(COST_CACHE_TRIAL='1', COST_PHASE_TELEMETRY='1')
             if args.cache_evidence:
                 env.update(COST_CACHE_EVIDENCE='1', COST_PROMPT_FREE='1')
+            if args.yokl_priority:
+                env.update(COST_DRIVER='yokl_priority', COST_PHASE_TELEMETRY='1',
+                           RANK_CATALOG_DIR=str(ROOT/'ranking_yokl_20260909/catalog'))
             print(f'Direct passed; starting {planned_jobs} metered jobs, no retries',flush=True)
             completed=subprocess.run(['bash',str(ROOT/'tools/run_ranking_cost_pair.sh'),
                 str(manifest),args.metered_output],
