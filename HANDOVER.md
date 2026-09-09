@@ -2,6 +2,17 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- UPDATE Sep10 00:30:58: retryCopilot meterCOMPLETE12.728773MB/1success2/3;
+  plusfirstfailed4.440335MB =17.169108MB for this newlydeliveredkeyword sofar.
+- ACTIVE NOW com.deviceagent.yoklcopilotthree0909, exact5223–5225,104/original79,
+  ZIP-first+verifiedpostresetnotificationdenial,1worker,noretries,100MBguard/25min.
+  Reuses settledretrybaseline29860.017762MB. Inspect yokl_copilot_three_20260909.log
+  and *_metered/report.json. Rootmustviewall3savedPNGs and finalmeterbeforeexport.
+  Retrylabeldisabled.12/15usable now; previousChatGPT/Gemini complete, doNOTrerun.
+  Atfinal stop104SocksDroid, clear onlynotificationUSER_FIXED,testlaunchlabeldisable,
+  verify79/idle/noVPN, exporttools/export_yokl_merged.py --output NEWDesktopfolder.
+  Daily/fullstaleheld; nobackendupload. No commercialtoolkitskills used.
+
 - UPDATE Sep10 00:26: retryCopilot5222 SUCCESS2/3. Root viewed fulltop3/rank/summary
   withshopyokl.com citation/no prompt. Native reset completed, postresetnotification
   denialverified, generation6s,read14s. Firstfailedattempt4.440335MB remainscost.
