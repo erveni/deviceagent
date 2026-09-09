@@ -1,5 +1,25 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## Sep10 00:44 — YOKL final Copilot capture failed; one bounded retry prepared
+
+- UPDATE00:47: three-job meter COMPLETE44.021083MB/2automatic successes.
+  ACTIVE NOW com.deviceagent.yoklcopilotfinalretry0910, exact5225, new output
+  yokl_copilot_final_retry_20260910_metered. Baseline29815.996679MB reused only
+  if rechecked unchanged. Three-job LaunchAgent disabled. No other ranking runs.
+  Check final retry screenshot and settled meter, then clean104notification
+  USER_FIXED, stop lingering SocksDroid, disable retrylabel, export15ifaccepted.
+
+- ChatGPT5/Gemini5/Copilot4 =14/15 verified. Root viewed Copilot5223=40/40,
+  5224=1/5. Final5225 raw ocr_no_answer, no rank, screenshot says Unable to reach
+  Copilot. Native read_answer OK was not proof of a valid answer; frame_shot failed.
+- Three-job meter still settling (~44MB); no jobs/Gost active,104SocksDroid stopped.
+- Prepared NOT STARTED com.deviceagent.yoklcopilotfinalretry0910, exact5225 only,
+  original79/104/ZIP-first/notification guard,30MB guard/10min/no automatic retries.
+  Gate requires completed three-job meter below60MB and exact two successes plus
+  failed5225. Reuse settled three-job baseline; never rerun14accepted results.
+- After settlement start prepared final retry, inspect actual PNG and final meter.
+  Final export includes this retry's cost. Daily/fullstale remain paused.
+
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
 - UPDATE Sep10 00:30:58: retryCopilot meterCOMPLETE12.728773MB/1success2/3;

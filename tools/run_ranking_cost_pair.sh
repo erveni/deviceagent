@@ -38,6 +38,12 @@ if chatgpt_followup:
     require_chatgpt_proof(root)
 copilot_yokl = os.environ.get('COST_YOKL_COPILOT') == '1'
 copilot_retry = os.environ.get('COST_COPILOT_RETRY') == '1'
+copilot_final_retry = os.environ.get('COST_COPILOT_FINAL_RETRY') == '1'
+if copilot_final_retry:
+    if not copilot_yokl or copilot_retry or keywords != [5225]:
+        raise SystemExit('Final Copilot retry requires only failed5225')
+    from tools.yokl_delivery_gate import require_copilot_final_retry
+    require_copilot_final_retry(root)
 if copilot_retry:
     if not copilot_yokl or keywords != [5222]:
         raise SystemExit('Copilot retry requires exact failed5222')
@@ -60,7 +66,7 @@ if copilot_yokl:
     if keywords == [5223,5224,5225]:
         from tools.yokl_delivery_gate import require_copilot_proof
         require_copilot_proof(root)
-    elif keywords != [5222]:
+    elif not copilot_final_retry and keywords != [5222]:
         raise SystemExit('Copilot requires first5222 or gated remaining5223–5225')
 if chatgpt_followup:
     job_count = 4
@@ -119,6 +125,8 @@ if yokl_followup:
     budget_mb, leg_timeout = 100, 25 * 60
 if copilot_yokl:
     budget_mb, leg_timeout = 100, 25 * 60
+if copilot_final_retry:
+    budget_mb, leg_timeout = 30, 10 * 60
 if chatgpt_followup:
     budget_mb, leg_timeout = 100, 25 * 60
 hard_deadline = None

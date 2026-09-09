@@ -1,0 +1,65 @@
+{
+  "status": "complete",
+  "keywords": [
+    5223,
+    5224,
+    5225
+  ],
+  "legs": [
+    {
+      "name": "candidate",
+      "before_mb": 29860.017762,
+      "status": "valid",
+      "after_mb": 29815.996679,
+      "used_mb": 44.021082999999635,
+      "completed_rows": 3,
+      "successful_pairs": 2,
+      "mb_per_scheduled_job": 14.673694333333211,
+      "mb_per_success": 22.010541499999817,
+      "expected_pairs": [
+        [
+          "3635223",
+          "copilot"
+        ],
+        [
+          "3635224",
+          "copilot"
+        ],
+        [
+          "3635225",
+          "copilot"
+        ]
+      ],
+      "actual_pairs": [
+        [
+          "3635223",
+          "copilot"
+        ],
+        [
+          "3635224",
+          "copilot"
+        ],
+        [
+          "3635225",
+          "copilot"
+        ]
+      ]
+    }
+  ],
+  "driver": "reframe_single",
+  "jobs_per_leg": 3,
+  "single_attempt": true,
+  "hard_deadline_utc": null,
+  "cumulative_spend_baseline_mb": null,
+  "budget_mb": 100,
+  "leg_timeout_s": 1500,
+  "limitations": [
+    "Evomi is account-wide; remote consumers are undetectable.",
+    "Meter lag means the spend guard can overshoot 100 MB.",
+    "Matched serial legs do not eliminate time/order effects.",
+    "Keywords were previously successful; this is not a random estimate of the full stale set.",
+    "GOST ledger is partial local traffic accounting, not directly comparable to billed MB."
+  ],
+  "settled_baseline_reused_from": "/Users/seolocalph/projects/device-agent/yokl_copilot_retry_20260910_metered/report.json",
+  "copilot_yokl_delivery": true
+}

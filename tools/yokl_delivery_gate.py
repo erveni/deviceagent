@@ -68,6 +68,22 @@ def require_copilot_retry(root):
         raise ValueError('One Copilot retry requires settled failed first attempt below30MB')
 
 
+def require_copilot_final_retry(root):
+    """Permit only the missing final keyword after the three-job meter settles."""
+    path=Path(root)/'yokl_copilot_three_20260909_metered'
+    meter=json.loads((path/'report.json').read_text())
+    legs=meter.get('legs',[])
+    rows=[r for p in (path/'candidate').glob('results*.csv') for r in csv.DictReader(p.open())]
+    expected={'3635223':'success','3635224':'success','3635225':'ocr_no_answer'}
+    if (meter.get('status')!='complete' or meter.get('keywords')!=[5223,5224,5225]
+            or len(legs)!=1 or legs[0].get('status')!='valid'
+            or legs[0].get('successful_pairs')!=2 or not 0 < legs[0].get('used_mb',0) < 60
+            or len(rows)!=3 or {r['campaign_id']:r['status'] for r in rows}!=expected
+            or any(r['client_id']!='329' or r['platform']!='copilot' for r in rows)
+            or any(r['rank_position'] for r in rows if r['campaign_id']=='3635225')):
+        raise ValueError('Final retry requires exact two successes and failed5225, settled below60MB')
+
+
 def reviewed_chatgpt_followup(root):
     path=Path(root)/'yokl_chatgpt_four_20260909_metered'
     if not (path/'reviewed_captures.json').exists():return []

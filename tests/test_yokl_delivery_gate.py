@@ -1,11 +1,33 @@
 import json
+import csv
 from pathlib import Path
 import tempfile
 import unittest
-from tools.yokl_delivery_gate import require_chatgpt_proof, require_copilot_proof
+from tools.yokl_delivery_gate import require_chatgpt_proof, require_copilot_proof, require_copilot_final_retry
 
 
 class DeliveryGateTests(unittest.TestCase):
+    def test_final_retry_cannot_repeat_success_or_unsettled_run(self):
+        meter={'status':'complete','keywords':[5223,5224,5225],
+               'legs':[{'status':'valid','successful_pairs':2,'used_mb':44}]}
+        rows=[dict(campaign_id=str(3630000+k),client_id='329',platform='copilot',
+                   status='ocr_no_answer' if k==5225 else 'success',
+                   rank_position='' if k==5225 else '1') for k in (5223,5224,5225)]
+        with tempfile.TemporaryDirectory() as name:
+            path=Path(name)/'yokl_copilot_three_20260909_metered'
+            (path/'candidate').mkdir(parents=True)
+            def save():
+                (path/'report.json').write_text(json.dumps(meter))
+                with (path/'candidate/results.csv').open('w') as stream:
+                    writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+            save();require_copilot_final_retry(name)
+            for target,key,bad in [(meter,'status','running'),(meter['legs'][0],'used_mb',60),
+                                   (rows[2],'status','success'),(rows[2],'platform','chatgpt'),
+                                   (rows[2],'rank_position','1')]:
+                old=target[key];target[key]=bad;save()
+                with self.assertRaises(ValueError):require_copilot_final_retry(name)
+                target[key]=old
+
     def test_copilot_continuation_requires_measured_success(self):
         leg={'status':'valid','successful_pairs':1,'actual_pairs':[['3635222','copilot']],'used_mb':12}
         meter={'status':'complete','keywords':[5222],'legs':[leg]}

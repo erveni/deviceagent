@@ -18,6 +18,7 @@ RUNS=(
     'yokl_copilot_one_20260909_metered',
     'yokl_copilot_retry_20260910_metered',
     'yokl_copilot_three_20260909_metered',
+    'yokl_copilot_final_retry_20260910_metered',
 )
 PLATFORMS=('chatgpt','gemini','copilot')
 RUN_LABELS={
@@ -28,6 +29,7 @@ RUN_LABELS={
     'yokl_copilot_one_20260909_metered':'Copilot — first attempt failed',
     'yokl_copilot_retry_20260910_metered':'Copilot — successful retry of the first missing keyword',
     'yokl_copilot_three_20260909_metered':'Copilot — final three keywords',
+    'yokl_copilot_final_retry_20260910_metered':'Copilot — retry of private group tours after connection failure',
 }
 ALLOWED={(k,p) for k in range(5221,5226) for p in PLATFORMS}
 
