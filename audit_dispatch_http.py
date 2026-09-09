@@ -1345,15 +1345,22 @@ def dispatch_audit_job(
     offline_edge_consumed = False
     if os.environ.get('RANK_COPILOT_OFFLINE_BOOTSTRAP','0')=='1':
         if device_label!='device-104' or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+            POOL.release(device_idx)
             raise RuntimeError('Inline offline bootstrap restricted to one104 Copilot audit')
         from tools.copilot_offline_bootstrap import prepare
         phase('offline_edge_prepare_start')
-        offline_edge_proof=prepare(serial,_http_port_for_serial(serial),
-            dict(platform='copilot',bizName=entry['biz_name'],bizUrl=entry.get('biz_url',''),
-                 city=entry.get('city',''),state=entry.get('state',''),keyword=_keyword_text(entry,int(keyword_id))),
-            _adb,_post_audit)
-        if os.environ.get('GOST_PHASE_LEDGER'):
-            Path(os.environ['GOST_PHASE_LEDGER']).with_name(f'offline_edge_kw{int(keyword_id)}.json').write_text(json.dumps(offline_edge_proof,indent=2))
+        try:
+            offline_edge_proof=prepare(serial,_http_port_for_serial(serial),
+                dict(platform='copilot',bizName=entry['biz_name'],bizUrl=entry.get('biz_url',''),
+                     city=entry.get('city',''),state=entry.get('state',''),keyword=_keyword_text(entry,int(keyword_id))),
+                _adb,_post_audit)
+            if os.environ.get('GOST_PHASE_LEDGER'):
+                Path(os.environ['GOST_PHASE_LEDGER']).with_name(f'offline_edge_kw{int(keyword_id)}.json').write_text(json.dumps(offline_edge_proof,indent=2))
+        except Exception:
+            # Preparation is outside the paid-proxy try/finally below. Release
+            # the host reservation on failure; this isolated one-job pilot aborts.
+            POOL.release(device_idx)
+            raise
         phase('offline_edge_prepare_done')
 
     # Start gost

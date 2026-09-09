@@ -2,6 +2,19 @@
 
 ## Current user-approved order — September10
 
+- UPDATE03:00: WiFi-settled pilot SUCCESS1/8, actual PNG root-verified (top3/rank/
+  summary, prompt absent). Offline wlan0 transferred14.874494MB over154s with51.2s
+  quiet; paid Gost cumulative0.404801MB. Evomi currently0.629016MB vs traced
+  predecessor19.652356MB. Meter still finishing five-minute post window; do NOT
+  launch confirmation until report complete and original79/noVPN restored.
+  Active prefix copilot_bootstrap_wifi_20260910_{wrapper,metered}.
+- NEXT after settlement/rollback: same wrapper flags plus COPILOT_WIFI_CONFIRM=1;
+  prefix copilot_bootstrap_wifi_confirm_20260910_{wrapper,metered}. Same fix, same
+  single5225/104, no retries,30MB guard, fresh cleared Edge each run. This repeats
+  the measurement rather than generalizing from one cheap sample. No live rollout.
+  Preparation exceptions now release pool reservation before aborting the isolated
+  job. Daily/backend still queued; legacy-count question remains unanswered.
+
 - UPDATE02:47: traced confirmation generated SUCCESS1/8 with nativePNG; root
   visually verified top3/rank/summary, no prompt leak. Final local traffic14.073361MB:
   HTTP:80 without hostname11.734250MB, edge.microsoft.com1.943364MB,

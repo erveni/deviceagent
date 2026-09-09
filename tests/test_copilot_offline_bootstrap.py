@@ -58,6 +58,9 @@ class OfflineBootstrapTests(unittest.TestCase):
         source=(root/'audit_dispatch_http.py').read_text()
         self.assertLess(source.index("phase('offline_edge_prepare_done')"),source.index('phase("gost_start")'))
         self.assertIn("RANK_COPILOT_OFFLINE_BOOTSTRAP','0'",source)
+        prep=source[source.index("phase('offline_edge_prepare_start')"):source.index("phase('offline_edge_prepare_done')")]
+        self.assertIn('except Exception:',prep)
+        self.assertIn('POOL.release(device_idx)',prep)
 
 
 if __name__=='__main__':unittest.main()
