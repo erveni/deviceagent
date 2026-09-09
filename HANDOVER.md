@@ -1,5 +1,39 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-09 22:15 — User switches YOKL to cache-preserving Gemini; other work HELD
+
+- User explicitly said use the cheaper cache setup. Stopped cache-OFF15pair run
+  through owned supervisor SIGTERM after holding its parent shell, allowing APK
+  rollback but preventing automatic daily resume. Verified original79/accessibility
+  true/noVPN; then booted out com.deviceagent.yoklpriority0909. Export watcher also
+  booted out (partial15pair CSV is not a complete deliverable). Daily still paused,
+  original scheduled20:00LaunchAgent installed/notrunning. Fullchain0906disabled.
+- Old priority rawCSV has4completed attempts:5221ChatGPT generationtimeout;
+  5221Gemini submitfailed;5221Copilot success1/3;5222ChatGPT ocr_no_answer. A later
+  started attempt may add charges. Oldmeter report deliberately invalid/interrupted;
+  settle total separately. Preserve the Copilot success; do not re-run successes.
+- Root viewed failedGemini PNG: prompt entered but Send icon not rendered; page
+  progress bar stillloading. Cache may improve this, not yet proof. No blindtapfix.
+- New com.deviceagent.yoklcache0909 runs direct_audit_smoke.py --cache-trial
+  --cache-evidence --single-manifest tools/yokl_one_cache_0909.json ([5221]), using
+  the isolated YOKL catalog and its original direct/request.json. Only104/v83,
+  strict answer+prompt-freeOCR before ONEpaidGemini,no retries,cacheON,100MBguard,
+  10GBreserve,automatic79rollback. No automatic daily/fullranking resume.
+- First free preparation yokl_cache_20260909_direct refused unexpectedpage;0jobs,
+  0proxy,restored79. Inspected actual browser: lastpaidYOKLChatGPT /uc/ tab remained.
+  Verified page text containedYOKL+trolley, closed ONLYthat exactknownpaidtab and
+  openedabout:blank throughCDP, without clearingHTTPcache. Genericguard unchanged.
+- Retrying freecheck under sameLaunchAgent with NEW output
+  yokl_cache_20260909_direct_v2; paid output yokl_cache_20260909_metered; log
+  yokl_cache_20260909.log. Inspect these for current state; savings NOTestablished.
+  Old combined-after-daily waiter remains unloaded. No expansion beyondGemini.
+- Directv2PASSED26s; root viewed full prompt-free4/4answer at.65zoom. Cache receipt
+  confirms2clean snapshots/0cookies/noHTTPcacheclear. Differentfreshanswerfromprior
+  direct1/3; neither direct observation is a proxied deliverable. Meterbaseline
+  started22:14:37at29903.801635MB; onepaidkw5221stillawaitssettling asofcheckpoint.
+  OldcacheOFFpass baseline30013.349403minusnewbaseline=109.547768MB provisional
+  untilnewbaselinefullysettles;4completedrows/1Copilot success plusinterruptedwork.
+
 ## 2026-09-09 evening — YOKL priority supersedes bandwidth test
 
 - User explicitly requested pausing daily and running YOKL free-trial ranking first.

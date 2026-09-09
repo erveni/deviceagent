@@ -22,6 +22,7 @@ def main():
     p.add_argument('--cache-trial', action='store_true', help='Verify host-prepared v82 cache reset on device104')
     p.add_argument('--cache-evidence', action='store_true', help='Opt-in v83 cache + prompt-free validation; one paid job maximum')
     p.add_argument('--yokl-priority', action='store_true', help='Exact five YOKL keywords, three live platforms, isolated catalog')
+    p.add_argument('--single-manifest', help='One explicit keyword for the combined cache evidence test')
     p.add_argument('--pilot-manifest', help='Ten distinct Gemini keyword IDs; requires cache trial and UTC deadline')
     args=p.parse_args()
     if args.yokl_priority and (args.cache_trial or args.cache_evidence or args.pilot_manifest or args.rerun_manifest or not args.metered_output):
@@ -30,6 +31,13 @@ def main():
         p.error('--cache-evidence requires --cache-trial and forbids multi-job modes')
     manifest=ROOT/'tools/ranking_one_reframe_0908.json'
     planned_jobs=1
+    if args.single_manifest:
+        if not args.cache_evidence or not args.cache_trial or args.yokl_priority or args.rerun_manifest or args.pilot_manifest:
+            p.error('Single manifest requires combined cache evidence mode only')
+        manifest=Path(args.single_manifest).resolve()
+        ids=json.loads(manifest.read_text())
+        if not isinstance(ids,list) or len(ids)!=1 or type(ids[0]) is not int or ids[0]<=0:
+            p.error('Single manifest must contain one positive keyword ID')
     if args.yokl_priority:
         manifest=ROOT/'ranking_yokl_20260909/keywords.json'
         if json.loads(manifest.read_text()) != [5221,5222,5223,5224,5225]:

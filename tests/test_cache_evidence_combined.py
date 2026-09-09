@@ -49,6 +49,12 @@ class CombinedCacheTests(unittest.TestCase):
         self.assertLess(wrapper.index('validate_direct_answer(serial'), wrapper.index("lock.unlink()"))
         self.assertIn('not args.cache_trial or args.pilot_manifest or args.rerun_manifest', wrapper)
 
+    def test_single_manifest_is_bounded_and_only_combined_cache_mode(self):
+        wrapper=(ROOT/'tools/direct_audit_smoke.py').read_text()
+        self.assertIn('len(ids)!=1 or type(ids[0]) is not int or ids[0]<=0',wrapper)
+        self.assertIn('not args.cache_evidence or not args.cache_trial or args.yokl_priority',wrapper)
+        self.assertEqual(json.loads((ROOT/'tools/yokl_one_cache_0909.json').read_text()),[5221])
+
     def test_answer_rejects_prompt_partial_and_failed_job_without_browser(self):
         with tempfile.TemporaryDirectory() as folder:
             for text in ('[RANK: 4/4]', 'You said\n1. A\n2. B\n3. C\n[RANK: 4/4]',
