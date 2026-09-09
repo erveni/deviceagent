@@ -1,6 +1,30 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## Current user-approved order — September10
+
+See TODO-ranking-and-daily-2026-09-10.md. Finish/measure ranking bandwidth fix
+FIRST; then implement guide's eight daily prompt types, exactly8sessions per
+campaign,3ChatGPT/3Gemini/2Copilot,14-day distribution, in device-agent AND AEO
+Admin backend. Historical prompt types stay empty/null. Test before executing
+September9 daily, preserving completed results and resolving transition counts.
+No daily launch yet. YOKL15results alreadydelivered; Copilot savings unresolved.
+Last cache trial v5 settled12.088494MB/0success; wrapper restored79/accessibility/
+noVPN. Bootstrap86 alternative prepared, not yet run. Earlier ACTIVE notes stale.
+
 ## Sep10 — Copilot bandwidth fix requested; ONE cache trial active
+
+- UPDATE01:56: v5 offline reset PASS38s then paidreset PASS38s, but openCopilot
+  sign-in sheet swipes twice and failed31s.0answers. Meter STILL SETTLING with
+  large late deductions (~12MB as oflastreading). Do NOT claim cache savings.
+- Cache-preserving path NOT promoted. Candidate86/0.9.69-copilot-bootstrap-trial
+  nowbuilt. Alternative experiment retains FULL Edge pmclear+native reset but
+  performs setup OFFPROXY, then a single-use86/104/5225 receipt allows skipping
+  duplicatepaidreset. Actual Copilot opening/generation stays on Evomi.
+  This shifts startup downloads toWiFi; NOT proof of reduced totalnetwork bytes.
+- PREPARED NOTSTARTED: COPILOT_BOOTSTRAP_TRIAL=1 python3 -u tools/copilot_cache_trial.py
+  Outputs copilot_bootstrap_one_20260910_wrapper/metered. Requires v5 complete,
+  original79rollback, offlinefullresetproof;30MB/1attempt/10min/no retries.
+  NativecopilotEdgePrepared defaultfalse, all daily/fleet defaults unchanged.
 
 - UPDATE01:46: v4 failed reset18s/no submit; logcat shows Edge background role
   activity launch blocked, phone on launcher. OFFPROXY explicit amstart Main
