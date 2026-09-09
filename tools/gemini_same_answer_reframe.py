@@ -344,6 +344,8 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
             screenshot = adb('exec-out', 'screencap', '-p')
         after = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
         geometry_valid = (_safe_answer_clip(after) == answer_clip) if cropped else after.get('full_answer_in_view')
+        if cropped and platform == 'chatgpt':
+            geometry_valid = _same_clip_with_subpixel_rounding(answer_clip, _safe_answer_clip(after))
         if not after.get('ok') or not after.get('rank_in_view') or not geometry_valid:
             return result | {'reason': 'answer_changed_during_screenshot',
                 'before_frame': _frame_diagnostics(framed), 'after_frame': _frame_diagnostics(after)}
@@ -381,6 +383,20 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
                 adb('forward', '--remove', f'tcp:{port}')
             except Exception:
                 pass
+
+
+def _same_clip_with_subpixel_rounding(before, after):
+    """Allow compositor rounding below 1/16 CSS pixel, never actual scrolling.
+
+    Text identity and complete answer/rank visibility are checked separately.
+    Measured ChatGPT drift was0.0084 CSS px; exact float equality rejected it.
+    """
+    return (isinstance(before,dict) and isinstance(after,dict)
+            and set(before)==set(after)=={'x','y','width','height','scale'}
+            and before['scale']==after['scale']==1
+            and all(type(before[k]) in (int,float) and type(after[k]) in (int,float)
+                    and math.isfinite(before[k]) and math.isfinite(after[k])
+                    and abs(before[k]-after[k])<=1/16 for k in ('x','y','width','height')))
 
 
 def _safe_answer_clip(snapshot):

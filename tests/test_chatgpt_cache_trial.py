@@ -9,11 +9,17 @@ import unittest
 from unittest.mock import patch
 from tools import gemini_cache_reset as reset
 from tools.test_gemini_cache_reset import FakeBrowser, FakePage
-from tools.gemini_same_answer_reframe import _expression
+from tools.gemini_same_answer_reframe import _expression, _same_clip_with_subpixel_rounding
 from tools.direct_evidence_gate import validate_direct_answer
 
 
 class ChatGPTCacheTests(unittest.TestCase):
+    def test_compositor_rounding_is_not_real_scrolling(self):
+        before=dict(x=0,y=102.13449,width=300,height=527.42859,scale=1)
+        self.assertTrue(_same_clip_with_subpixel_rounding(before,dict(before,y=102.14286)))
+        for after in (None,dict(before,y=103.13449),dict(before,width=301),dict(before,scale=2),dict(before,y=float('nan'))):
+            self.assertFalse(_same_clip_with_subpixel_rounding(before,after))
+
     def test_native_health_matches_apk_version(self):
         root=Path(__file__).resolve().parents[1]
         gradle=(root/'app/build.gradle.kts').read_text()

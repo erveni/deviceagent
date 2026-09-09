@@ -57,9 +57,10 @@ def main():
                 for leg in report.get('legs',[]):
                     if leg.get('status')=='valid':
                         costs.append({'run':run,'mb':leg['used_mb'],'successes':leg['successful_pairs']})
-    from tools.yokl_delivery_gate import chatgpt_recovery
+    from tools.yokl_delivery_gate import chatgpt_recovery, reviewed_chatgpt_followup
     recovered=chatgpt_recovery(ROOT)
-    accepted=select_records(rows+([recovered] if recovered else []))
+    reviewed=reviewed_chatgpt_followup(ROOT)
+    accepted=select_records(rows+([recovered] if recovered else [])+reviewed)
     if set(accepted)!=ALLOWED and not args.allow_partial:
         raise RuntimeError(f'Only {len(accepted)}/15 accepted; refusing complete export')
     keys={k['id']:k['keywordText'] for k in json.loads((ROOT/'ranking_yokl_20260909/catalog/kw_admin.json').read_text())}
@@ -107,6 +108,7 @@ def main():
 <table><thead><tr><th>Keyword</th><th>ChatGPT</th><th>Gemini</th><th>Copilot</th></tr></thead><tbody>{''.join(cells)}</tbody></table>
 <p>These are the rankings stated by each AI platform, not an independent verification of business facts. The fractions are preserved as returned. Exact observation times (UTC) and responses are in <a href="rankings.csv">rankings.csv</a>. Direct readiness tests are excluded. {"The first ChatGPT result required local screenshot recovery from the same paid answer, with no new generation; the raw failed attempt is preserved." if recovered else ""}</p>
 <h2>Evomi usage for these runs</h2><table><tr><th>Run</th><th>MB used</th><th>Automatic successes</th></tr>{cost_rows}<tr><th>Total, including the interrupted run</th><td>{total:.2f}</td><td>{sum(c['successes'] for c in costs)}</td></tr></table>
+<p>{len(reviewed)} additional saved capture(s) were accepted after visual and OCR review despite an automatic framing rejection; no paid rerun was needed. Evidence status is recorded per row in the CSV.</p>
 <p>Failed attempts still cost bandwidth. The total includes the initial interrupted run; it is not just the cheaper cache-enabled passes. Warm-cache test results do not establish fleet-wide savings. Evomi is account-wide, with delayed deductions.</p>
 <small>Local report only. No backend upload or historical-date replacement was performed. Raw attempts are preserved in attempts.json.</small></html>'''
     (out/'index.html').write_text(document)

@@ -1,0 +1,31 @@
+[
+  {
+    "keyword_id": 5223,
+    "platform": "chatgpt",
+    "rank": [1, 6],
+    "status": "visual_review_of_saved_capture",
+    "screenshot": "/Users/seolocalph/projects/aeo-appium/audit_results/2026-09-09/ChatGPT/kw5223_chatgpt_1788969568.png",
+    "screenshot_sha256": "e7c0d9bda9dfe76289b283fa8f2ec3ac8c830f190b9c534831d7ef6eeae4a71c",
+    "visual_review_passed": true,
+    "ocr_verified": true,
+    "prompt_visible": false,
+    "full_ranked_list_and_summary_visible": true,
+    "new_paid_attempts": 0,
+    "note": "Raw ocr_no_answer is preserved. Root reviewed the original saved native screenshot, not a reconstructed image. Map decoration is partly above viewport; complete numbered list, rank and summary are readable. Automatic crop rejection was0.0084CSS-pixel float drift."
+  },
+  {
+    "keyword_id": 5224,
+    "platform": "chatgpt",
+    "rank": [1, 3],
+    "status": "visual_review_of_saved_capture",
+    "screenshot": "/Users/seolocalph/projects/aeo-appium/audit_results/2026-09-10/ChatGPT/kw5224_chatgpt_1788969749_reframe_source_reframe_1788969749233744000.png",
+    "screenshot_sha256": "12abf2c62379b238b160b8b379ef58d0f2ffbb85b7efc1c1a78fa430409f26ba",
+    "visual_review_passed": true,
+    "ocr_verified": true,
+    "prompt_visible": false,
+    "full_ranked_list_and_summary_visible": true,
+    "new_paid_attempts": 0,
+    "identity_sources": ["https://yokltours.com/", "https://yokltours.com/contact-us/", "https://yokltours.com/food-tours/"],
+    "note": "Capture proof passed automatically; general name consistency gate rejected Yokl Food Tours versus stored Yokl, Inc. Root verified the listed business and the full screenshot. Official Yokl Tours site describes Hershey food tours and publishes Hello@shopyokl.com, linking to the catalog domain. No global alias matcher or backend metadata changed."
+  }
+]

@@ -2,6 +2,26 @@
 
 ## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
 
+- UPDATE Sep10 00:06: ChatGPTfour ALL4attempts finished.2automatic successes
+  (5222=2/2,5225=1/8),2explicitreviewacceptances(5223=1/6,5224=1/3). Root viewed
+  everyPNG. With first5221recovered1/8, ALL5ChatGPT nowusable; no paidretries.
+  TotalYOKL11/15usable; remaining4Copilot5222–5225 only. Four-runmeter settling,
+  provisional3.383635MB. Wait *_metered/report complete + *_direct/report restored79
+  before launching Copilotone. Do not rerun any ChatGPT based on raw failed rows:
+  explicitreview/recovery receipts are authoritative for delivery, rawCSV preserved.
+
+- UPDATE Sep10around00:05: ChatGPTfour stillactive,last5225inflight. Raw5222success
+  2/2;5223ocr_no_answer1/6;5224ocr_no_answer1/3. Root viewed5223originalnativePNG:
+  fulltop3/rank/summary,noprompt,exactOCRpasses; accepted savedcapture WITHOUT
+  newimage/job. Reject was0.0084CSS-pixel geometry drift; code nowallows<=1/16CSSpx
+  only, stillrejects1px/textchange; not loaded into alreadyrunningfourworker.
+- 5224browserclip fullypassedcapture/OCR; nameconsistency falsely rejects listed
+  "Yokl Food Tours" versus"Yokl, Inc.". Root verified officialyokltours.com food
+  tours/contact pages linkingHello@shopyokl.com and reviewedcomplete1/3shot.
+  Reviewed captures in *_metered/reviewed_captures.json withSHA256, rawCSV unchanged.
+  Export merges explicitreviewrecords; no globalmatcher/DBalias changed.10usable
+  of15sofar:5Gemini,4ChatGPT(includesrecovery+2reviewacceptances),1Copilot.
+
 - UPDATE23:50:37: firstChatGPT meter COMPLETE,29882.103466->29880.609667,
   1.493799MB. Raw0automatic/1row; oneusable1/8afterdocumentedfree recovery.
   Wrappercomplete restored79/accessibilitytrue/noVPN. FirstLaunchAgent disabled.
