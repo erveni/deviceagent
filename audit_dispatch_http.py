@@ -1618,6 +1618,11 @@ def dispatch_audit_job(
                 health=json.load(reply)
             if health.get('versionCode')!=85 or health.get('accessibility') is not True:
                 raise RuntimeError('Copilot cache trial requires test85 with accessibility')
+            # Dispose the previous embedded Copilot heap before browser-cookie reset.
+            # Force-stop removes process state, not the on-disk resource cache.
+            stopped=_adb(serial,'shell','am','force-stop','com.microsoft.emmx',timeout=10)
+            if stopped.returncode:
+                raise RuntimeError('Copilot cache trial could not stop old Edge process')
             body['copilotCacheTrial']=True
         if platform.lower() == "copilot" and not copilot_cache_trial and os.environ.get("COPILOT_PM_CLEAR", "1") == "1":
             for cmd in (("pm", "clear", "com.microsoft.emmx"), ("am", "force-stop", "com.microsoft.emmx")):

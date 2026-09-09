@@ -2,6 +2,20 @@
 
 ## Sep10 — Copilot bandwidth fix requested; ONE cache trial active
 
+- UPDATE01:33: v2 meter COMPLETE0.478956MB/0success,79rollback/accessibility/noVPN
+  verified. ACTIVE NOW v3 wrapper/meter (copilot_cache_one_20260910_v3_*), one5225,
+  same85/cache settings + pre-reset Edge process force-stop, no data wipe.
+  Await actual answer/screenshot and settled meter. No successful savings yet.
+
+- UPDATE01:29: v2 cache reset34s/open8s/fresh conversation2s allPASSED; submitted
+  once, failed after6s with Network issues. Root saved/viewed failed_screen.png;
+  no answer, not a success. Provisional0.127097MB; meter still settling, wrapper
+  will restore79 afterward. SocksDroid stopped manually once Gost/job finished.
+- v3 PREPARED NOT STARTED: same85/cache reset, host additionally force-stops old
+  Edge process BEFORE native reset so old embedded Copilot heap cannot survive.
+  This is a hypothesis test, not an established cause. Reuses v2 finalbaseline
+  only after settledcomplete/79rollback. New v3 wrapper/meter output names.
+
 - UPDATE01:18: first wrapper stopped BEFORE any proxy job: reused baseline was
   older than15min. Original79 restored/accessibilitytrue/noVPN, no paid attempt.
   ACTIVE fresh-baseline rerun outputs copilot_cache_one_20260910_v2_wrapper and
