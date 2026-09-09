@@ -1,5 +1,34 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## Sep10 00:56 — YOKL COMPLETE: 15/15 accepted; no ranking running
+
+This completion supersedes all ACTIVE/PREPARED YOKL notes below.
+
+- Five keywords each on ChatGPT, Gemini and Copilot. All15 actual screenshots
+  visually checked.12 automatic successes plus3 explicitly reviewed/recovered
+  ChatGPT captures; original failed CSV rows remain unchanged. Do not rerun them.
+- Final Copilot5225 retry succeeded1/8, settled12.727877MB. Previous three-job
+  batch44.021083MB included failed5225; both costs preserved, no hidden retries.
+- Final local report: /Users/seolocalph/Desktop/Rankings/Yokl_initial_2026-09-10/index.html
+  Alongside rankings.csv,15PNGs,attempts.json,bandwidth.json. Verified15unique
+  accepted rows,15images and every HTML link. No backend upload/backdating.
+- Full measured YOKL total210.080601MB, including old interrupted mixed run
+  109.547768MB. Follow-up work100.532833MB delivered14missing results.
+  Gemini5=21.698169MB (4.339634MB/result); ChatGPT5=4.916596MB
+  (0.983319MB/delivered result, includes review/recovery, not5automatic).
+  New Copilot4=73.918068MB including2failed attempts (18.479517MB/result).
+  Earlier successful Copilot5221 cost cannot be isolated from mixed run.
+  Warm-cache one-phone samples do NOT establish fleet-wide/cold-cache savings;
+  Copilot cache policy unchanged and remains the heavier workflow.
+- Device104: original79/accessibilitytrue/idle; SocksDroid force-stopped;
+  exact tun0 interface absent. Cleared Edge notification USER_FIXED only;
+  normal denied USER_SET retained. No Edge data clearing after final capture.
+- Completed test LaunchAgents disabled, including finalretry0910. Dailyfull
+  confirmed not running; stale chain still held. Do not resume either implicitly.
+- All new source/tools in device-agent on feat/top3-deepdive-ranking-geo-fix.
+  Legacy runtime screenshot sources remain in aeo-appium, final copies on Desktop.
+  No commercial toolkit skills applied (trial client-use restriction).
+
 ## Sep10 00:44 — YOKL final Copilot capture failed; one bounded retry prepared
 
 - UPDATE00:47: three-job meter COMPLETE44.021083MB/2automatic successes.
