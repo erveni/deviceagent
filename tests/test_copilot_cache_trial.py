@@ -21,6 +21,8 @@ class CopilotCacheTrialTests(unittest.TestCase):
         self.assertIn('if (!selectAllTimeRange()) return false',source)
         self.assertIn('cache trial reset refused; no full-wipe fallback',source)
         self.assertIn('if (!matches) return false',source)
+        self.assertIn('s.findNode(text = "Personalize your web experience"',source)
+        self.assertIn('s.findNode(text = "Not now", timeoutMs = 1500) ?: return false',source)
 
     def test_host_and_supervisor_keep_experiment_one_phone_one_job(self):
         host=(ROOT/'audit_dispatch_http.py').read_text()

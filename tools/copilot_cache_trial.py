@@ -1,5 +1,6 @@
 """One isolated Edge-cache measurement on104, with original APK restoration."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -12,9 +13,9 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
     os.chdir(ROOT)
-    out=ROOT/'copilot_cache_one_20260910_v3_wrapper'
+    out=ROOT/'copilot_cache_one_20260910_v4_wrapper'
     out.mkdir(exist_ok=False)
-    meter=ROOT/'copilot_cache_one_20260910_v3_metered'
+    meter=ROOT/'copilot_cache_one_20260910_v4_metered'
     if meter.exists():raise RuntimeError('Measurement already exists')
     original=ROOT/'direct_ui_20260908_apk/device104-original-v79.apk'
     candidate=ROOT/'app/build/outputs/apk/debug/app-debug.apk'
@@ -31,7 +32,8 @@ def main():
         with lock.open('x') as stream:stream.write(f'{os.getpid()} copilot-cache-trial\n')
     def owned():return lock.exists() and lock.read_text().split()[0]==str(os.getpid())
     acquire()
-    report={'status':'starting','measurement_only':True,'device':'device-104'}
+    report={'status':'starting','measurement_only':True,'device':'device-104',
+            'candidate_sha256':hashlib.sha256(candidate.read_bytes()).hexdigest()}
     changed=False
     port=int(adb('forward','tcp:0','tcp:8765').strip())
     def request(path):
@@ -64,7 +66,7 @@ def main():
         env.update(COST_DRIVER='reframe_single',COST_YOKL_COPILOT='1',COST_COPILOT_CACHE='1',
                    COST_COPILOT_ZIP_FIRST='1',COST_COPILOT_NOTIFICATION_DENY='1',COST_PHASE_TELEMETRY='1',
                    RANK_CATALOG_DIR=str(ROOT/'ranking_yokl_20260909/catalog'))
-        env['COST_SETTLED_BASELINE_REPORT']=str(ROOT/'copilot_cache_one_20260910_v2_metered/report.json')
+        env['COST_SETTLED_BASELINE_REPORT']=str(ROOT/'copilot_cache_one_20260910_v3_metered/report.json')
         print('Starting ONE cache measurement; not a YOKL report replacement',flush=True)
         completed=subprocess.run(['bash',str(ROOT/'tools/run_ranking_cost_pair.sh'),
             str(ROOT/'tools/yokl_copilot_final_retry_0910.json'),str(meter)],env=env)

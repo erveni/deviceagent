@@ -2,6 +2,19 @@
 
 ## Sep10 — Copilot bandwidth fix requested; ONE cache trial active
 
+- UPDATE01:41: v3 COMPLETE0.330991MB/0success (resetfailed,no submit),79rollback
+  verified. ACTIVE v4 copilot_cache_one_20260910_v4_wrapper/metered, one5225,
+  processrestart+personalizationNotnow+strictcache reset/freshchat. No success yet.
+
+- UPDATE01:37: v3 failed reset_edge16s BEFORE submit. Root inspected live XML and
+  screenshot: actual blocker is "Personalize your web experience" popup, NOT old
+  Copilot panel. Root declined exactNotnow OFFPROXY and verified menu reachable.
+  Native85 now handles this exactpopup onlyin cachetrial; rebuilt/tested.
+- v3 meter settling (~0.331MB); original wrapper will restore79. v4 PREPARED
+  NOTSTARTED, updated popupguard + prior processrestart; onejob/30MB. Reuse v3
+  finalbaseline after settlement/rollback. New output copilot_cache_one_20260910_v4_*.
+  Newwrapper records candidateAPK SHA256 as source85 has test revisions.
+
 - UPDATE01:33: v2 meter COMPLETE0.478956MB/0success,79rollback/accessibility/noVPN
   verified. ACTIVE NOW v3 wrapper/meter (copilot_cache_one_20260910_v3_*), one5225,
   same85/cache settings + pre-reset Edge process force-stop, no data wipe.

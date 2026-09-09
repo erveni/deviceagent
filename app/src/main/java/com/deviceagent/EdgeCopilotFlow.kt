@@ -98,6 +98,15 @@ class EdgeCopilotFlow(
     fun reset(preserveCacheTrial: Boolean = false): Boolean {
         s.log("── RESET EDGE ──")
         launch()
+        if (preserveCacheTrial) {
+            val personalize = s.findNode(text = "Personalize your web experience", timeoutMs = 1200)
+            if (personalize != null) {
+                personalize.recycle()
+                val deny = s.findNode(text = "Not now", timeoutMs = 1500) ?: return false
+                s.clickNode(deny); deny.recycle(); Thread.sleep(1200)
+                s.log("[edge] cache trial: declined personalization popup")
+            }
+        }
         leaveInPrivate()
         if (clearBrowsingData(preserveCacheTrial)) {
             // The clear leaves us deep in Settings; get back to the browser so the
