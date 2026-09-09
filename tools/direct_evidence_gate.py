@@ -23,13 +23,22 @@ def production_ocr_namespace():
     return ns
 
 
-def validate_direct_answer(serial, keyword, result, out):
+def validate_direct_answer(serial, keyword, result, out, platform='gemini'):
     from tools.gemini_same_answer_reframe import reframe_same_answer
     text = result.get('response_text', '')
+    if platform == 'chatgpt':
+        # ChatGPT's native accessibility capture includes the page and prompt;
+        # its requested answer also has a summary AFTER the rank marker.
+        # Isolate the explicit assistant boundary, then independently verify
+        # the same rank in the actual assistant DOM and prompt-free screenshot.
+        boundary = '\nChatGPT said:\n'
+        if text.count(boundary) != 1:
+            return {'ok': False, 'reason': 'ambiguous_chatgpt_answer_boundary'}
+        text = text.split(boundary, 1)[1]
     markers = list(re.finditer(r'\[RANK:\s*(\d+)\s*/\s*(\d+)\]', text, re.I))
     valid = (result.get('status') in ('success', 'completed') and not result.get('error')
-             and len(markers) == 1 and not text[markers[0].end():].strip()
-             and not re.search(r'You said|Gemini said', text, re.I)
+             and len(markers) == 1 and (platform == 'chatgpt' or not text[markers[0].end():].strip())
+             and not re.search(r'You said|Gemini said|ChatGPT said', text, re.I)
              and all(re.search(rf'(?m)^\s*{n}[.)]\s*\S', text) for n in (1, 2, 3)))
     if not valid:
         return {'ok': False, 'reason': 'incomplete_or_prompt_contaminated_native_answer'}
@@ -38,6 +47,6 @@ def validate_direct_answer(serial, keyword, result, out):
         return {'ok': False, 'reason': 'invalid_native_rank'}
     ns = production_ocr_namespace()
     evidence = reframe_same_answer(serial, keyword, rank, out / 'validated_rank.png',
-        prompt_free=True, ocr_validator=lambda path: ns['_screenshot_has_expected_rank'](path, rank))
+        prompt_free=True, platform=platform, ocr_validator=lambda path: ns['_screenshot_has_expected_rank'](path, rank))
     (out / 'validated_frame.json').write_text(json.dumps(evidence, indent=2))
     return evidence

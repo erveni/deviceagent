@@ -17,7 +17,7 @@ class YoklPriorityTests(unittest.TestCase):
         block=s[s.index('        env = os.environ.copy()'):s.index("        (legdir / 'settings.json')")]
         ns=dict(os=SimpleNamespace(environ={}),fixed=Path('/five'),legdir=Path('/out'),
                 job_count=15,city_first='0',pilot=False,single=False,rerun_four=False,
-                one_phone=True,driver='yokl_priority',name='candidate')
+                one_phone=True,driver='yokl_priority',name='candidate',chatgpt_cache=False,copilot_yokl=False)
         exec(textwrap.dedent(block),ns)
         e=ns['env']
         for k,v in {'PLATFORMS':'chatgpt,gemini,copilot','MAX_JOBS':'15','WORKERS_CAP':'1',

@@ -25,6 +25,7 @@ def main():
     p.add_argument('--single-manifest', help='One explicit keyword for the combined cache evidence test')
     p.add_argument('--yokl-cache-followup', action='store_true', help='Four remaining Gemini keywords after the successful metered YOKL cache proof')
     p.add_argument('--pilot-manifest', help='Ten distinct Gemini keyword IDs; requires cache trial and UTC deadline')
+    p.add_argument('--chatgpt-cache', action='store_true', help='Device104/v84 YOKL ChatGPT direct then one metered job')
     args=p.parse_args()
     if args.yokl_priority and (args.cache_trial or args.cache_evidence or args.pilot_manifest or args.rerun_manifest or not args.metered_output):
         p.error('YOKL priority requires metered output and forbids other trial modes')
@@ -32,6 +33,12 @@ def main():
         p.error('--cache-evidence requires --cache-trial and forbids multi-job modes')
     manifest=ROOT/'tools/ranking_one_reframe_0908.json'
     planned_jobs=1
+    if args.chatgpt_cache:
+        if any((args.cache_trial,args.cache_evidence,args.yokl_priority,args.yokl_cache_followup,args.single_manifest,args.rerun_manifest,args.pilot_manifest)):
+            p.error('ChatGPT cache is a separate one-job mode')
+        manifest=ROOT/'tools/yokl_one_cache_0909.json'
+        if json.loads(manifest.read_text()) != [5221]:
+            p.error('ChatGPT test requires YOKL keyword5221')
     if args.yokl_cache_followup:
         if not args.cache_trial or not args.cache_evidence or args.single_manifest or args.yokl_priority or args.rerun_manifest or args.pilot_manifest or not args.metered_output:
             p.error('YOKL cache follow-up requires combined cache mode only')
@@ -136,30 +143,36 @@ def main():
               'bizUrl':'https://maps.app.goo.gl/uvmmKU3ezTV1k9hP6','city':'Eugene','state':'OR',
               'searchAddress':'1310 Coburg Rd suite 10, Eugene, OR','keyword':'mobile app development',
               'genTimeoutSec':90,'async':True}
-        if args.yokl_priority:
+        if args.yokl_priority or args.chatgpt_cache:
             body.update(bizName='Yokl, Inc.',bizUrl='https://www.shopyokl.com/',city='Hershey',state='PA',
                         searchAddress='129 Cedar Avenue, Hershey, PA',keyword='food tours in Hershey PA')
+        if args.chatgpt_cache:
+            body['platform']='chatgpt'
         if args.request_json:
             body=json.loads(Path(args.request_json).read_text())
-            if body.get('type') != 'audit' or body.get('platform') != 'gemini' or body.get('geminiCachePrepared'):
+            if body.get('type') != 'audit' or body.get('platform') != ('chatgpt' if args.chatgpt_cache else 'gemini') or body.get('geminiCachePrepared') or body.get('chatgptCachePrepared'):
                 raise RuntimeError('Request must be a normal Gemini audit without cache overrides')
             body['async']=True
             body['genTimeoutSec']=min(int(body.get('genTimeoutSec',90)),150)
-        if args.cache_trial:
+        if args.cache_trial or args.chatgpt_cache:
             from tools.cache_evidence_policy import cache_health_allowed
-            if not cache_health_allowed(report['candidate_health'], args.cache_evidence):
+            health=report['candidate_health']
+            allowed=(type(health.get('versionCode')) is int and health['versionCode']==84 and health.get('accessibility') is True) if args.chatgpt_cache else cache_health_allowed(health,args.cache_evidence)
+            if not allowed:
                 raise RuntimeError('Cache experiment requires matching accessible APK (82 legacy / 83 evidence)')
-            from tools.gemini_cache_reset import prepare_gemini_cache
+            from tools.gemini_cache_reset import prepare_gemini_cache, prepare_chatgpt_cache
             # Installing/rebinding the agent brings its UI forward. Chrome's
             # Android debugger exposes no page targets while it is backgrounded.
             # Bring the existing browser task forward; do not navigate a URL.
             adb('shell', 'am', 'start', '-n', 'com.android.chrome/com.google.android.apps.chrome.Main')
             time.sleep(1)
             flags = {'RANK_GEMINI_CACHE_TRIAL': '1', 'RANK_SINGLE_ATTEMPT': '1'}
+            if args.chatgpt_cache:
+                flags={'RANK_CHATGPT_CACHE_TRIAL':'1','RANK_SINGLE_ATTEMPT':'1'}
             previous = {key: os.environ.get(key) for key in flags}
             try:
                 os.environ.update(flags)
-                prepared = prepare_gemini_cache(serial)
+                prepared = prepare_chatgpt_cache(serial) if args.chatgpt_cache else prepare_gemini_cache(serial)
             finally:
                 for key, value in previous.items():
                     if value is None:
@@ -169,7 +182,7 @@ def main():
             (out/'cache_prepared.json').write_text(json.dumps(prepared, indent=2))
             if not prepared.get('ok'):
                 raise RuntimeError('Direct cache preparation failed')
-            body['geminiCachePrepared'] = True
+            body['chatgptCachePrepared' if args.chatgpt_cache else 'geminiCachePrepared'] = True
         (out/'request.json').write_text(json.dumps(body,indent=2))
         started=time.monotonic();ack=request('session',body);report['jobs']=1
         result=ack
@@ -180,14 +193,14 @@ def main():
                 if not result.get('running'):break
             else:raise RuntimeError('Owned direct audit exceeded 300 seconds')
         (out/'response.json').write_text(json.dumps(result,indent=2))
-        pr=(result.get('platforms') or {}).get('gemini',{})
+        pr=(result.get('platforms') or {}).get(body['platform'],{})
         if pr.get('screenshot_b64'):(out/'app.png').write_bytes(base64.b64decode(pr['screenshot_b64']))
         (out/'last_screen.png').write_bytes(adb('exec-out','screencap','-p'))
         report.update(status='complete',elapsed_s=round(time.monotonic()-started,2),
                       result_status=pr.get('status'),error=pr.get('error'),steps=result.get('step_log'))
-        if args.cache_evidence or args.yokl_priority:
+        if args.cache_evidence or args.yokl_priority or args.chatgpt_cache:
             from tools.direct_evidence_gate import validate_direct_answer
-            evidence = validate_direct_answer(serial, body['keyword'], pr, out)
+            evidence = validate_direct_answer(serial, body['keyword'], pr, out, platform=body['platform'])
             report['direct_evidence'] = evidence
             if not evidence.get('ok'):
                 raise RuntimeError('Direct answer/capture evidence failed; refusing paid job')
@@ -200,6 +213,9 @@ def main():
                 raise RuntimeError('Lost direct-test fleet lock')
             lock.unlink()
             env=os.environ.copy();env['COST_DRIVER']='cache_pilot' if args.pilot_manifest else 'reframe_single'
+            if args.chatgpt_cache:
+                env.update(COST_CHATGPT_CACHE='1', COST_PHASE_TELEMETRY='1',
+                           RANK_CATALOG_DIR=str(ROOT/'ranking_yokl_20260909/catalog'))
             if args.rerun_manifest:
                 env.update(COST_DRIVER='rerun_four', COST_PROMPT_FREE='1', COST_PHASE_TELEMETRY='1')
             if args.cache_trial:

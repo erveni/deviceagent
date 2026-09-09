@@ -29,12 +29,22 @@ manifest = Path(sys.argv[1]).resolve()
 out = Path(sys.argv[2]).resolve()
 keywords = json.loads(manifest.read_text())
 single = os.environ.get('COST_DRIVER') == 'reframe_single'
+chatgpt_cache = os.environ.get('COST_CHATGPT_CACHE') == '1'
+copilot_yokl = os.environ.get('COST_YOKL_COPILOT') == '1'
+if copilot_yokl and (not single or chatgpt_cache or not isinstance(keywords,list)
+        or not 1 <= len(keywords) <= 4 or any(k not in (5222,5223,5224,5225) for k in keywords)
+        or os.environ.get('COST_CACHE_TRIAL') == '1' or os.environ.get('COST_CACHE_EVIDENCE') == '1'):
+    raise SystemExit('Copilot delivery is restricted to YOKL missing keywords5222–5225, no cache trial')
+if chatgpt_cache and (not single or keywords != [5221] or os.environ.get('COST_CACHE_TRIAL') == '1' or os.environ.get('COST_CACHE_EVIDENCE') == '1'):
+    raise SystemExit('ChatGPT cache requires one YOKL5221 job and no Gemini flags')
 pilot = os.environ.get('COST_DRIVER') == 'cache_pilot'
 rerun_four = os.environ.get('COST_DRIVER') == 'rerun_four'
 yokl_priority = os.environ.get('COST_DRIVER') == 'yokl_priority'
 yokl_followup = os.environ.get('COST_DRIVER') == 'yokl_cache_followup'
 one_phone = single or pilot or rerun_four or yokl_priority or yokl_followup
 job_count = 4 if rerun_four else (1 if single else 10)
+if copilot_yokl:
+    job_count = len(keywords)
 if yokl_followup:
     job_count = 4
     if keywords != [5222,5223,5224,5225] or os.environ.get('COST_CACHE_EVIDENCE')!='1' or os.environ.get('COST_CACHE_TRIAL')!='1':
@@ -55,6 +65,14 @@ catalog = {k['id']: k for k in json.loads((catalog_dir/'kw_admin.json').read_tex
 if any(k not in catalog for k in keywords):
     raise SystemExit('Manifest keyword missing from runner catalog')
 expected_pairs = {(str(catalog[k]['businessId'] * 10000 + k), 'gemini') for k in keywords}
+if chatgpt_cache:
+    if any(catalog[k]['businessId'] != 363 or catalog[k]['clientId'] != 329 for k in keywords):
+        raise SystemExit('ChatGPT cache YOKL business/client mismatch')
+    expected_pairs = {(str(363 * 10000 + k), 'chatgpt') for k in keywords}
+if copilot_yokl:
+    if any(catalog[k]['businessId'] != 363 or catalog[k]['clientId'] != 329 for k in keywords):
+        raise SystemExit('Copilot YOKL business/client mismatch')
+    expected_pairs = {(str(363 * 10000 + k), 'copilot') for k in keywords}
 if yokl_followup and any(catalog[k]['businessId'] != 363 or catalog[k]['clientId'] != 329 for k in keywords):
     raise SystemExit('YOKL cache follow-up business/client mismatch')
 if yokl_priority:
@@ -66,7 +84,7 @@ if len(expected_pairs) != job_count:
 fixed = out / 'keywords.json'
 fixed.write_text(json.dumps(keywords) + '\n')
 date = '2026-09-02'
-if rerun_four or yokl_priority or os.environ.get('COST_CACHE_EVIDENCE') == '1':
+if rerun_four or yokl_priority or chatgpt_cache or copilot_yokl or os.environ.get('COST_CACHE_EVIDENCE') == '1':
     # New captures are dated today, never presented as observations from August.
     date = datetime.date.today().isoformat()
 shared_log = Path('/private/tmp/ranking_auto_' + date + '.log')
@@ -79,6 +97,8 @@ if rerun_four:
 if yokl_priority:
     budget_mb, leg_timeout = 750, 75 * 60
 if yokl_followup:
+    budget_mb, leg_timeout = 100, 25 * 60
+if copilot_yokl:
     budget_mb, leg_timeout = 100, 25 * 60
 hard_deadline = None
 if pilot:
@@ -401,12 +421,19 @@ try:
                    RANK_WARMUP_S='60',
                    RANK_SINGLE_ATTEMPT='0', RANK_GEMINI_SAME_ANSWER_REFRAME='0',
                    RANK_GEMINI_CACHE_TRIAL='0',
+                   RANK_CHATGPT_CACHE_TRIAL='0',
                    RANK_GEMINI_CACHE_EVIDENCE='0', RANK_GEMINI_PROMPT_FREE='0',
                    OCR_VALIDATE_SCREENSHOT='1', GEMINI_CDP='0', RANK_PHASE_TRACE='1',
                    GOST_COST_LEDGER=str(legdir / 'gost.jsonl'), COPILOT_MAX_PARALLEL='4')
         if one_phone:
             env.update(WORKERS_CAP='1', RANK_SINGLE_ATTEMPT='1', RANK_GEMINI_SAME_ANSWER_REFRAME='1',
                        DEVICE_EXCLUDE=','.join(f'device-{n}' for n in range(101,126) if n != 104))
+        if chatgpt_cache:
+            env.update(PLATFORMS='chatgpt', RANK_CHATGPT_CACHE_TRIAL='1')
+            report['chatgpt_cache_trial'] = True
+        if copilot_yokl:
+            env.update(PLATFORMS='copilot', COPILOT_PM_CLEAR='1')
+            report['copilot_yokl_delivery'] = True
         if pilot or os.environ.get('COST_PHASE_TELEMETRY') == '1':
             env['GOST_PHASE_LEDGER'] = str(legdir / 'gost_phases.jsonl')
         if pilot or driver == 'yokl_cache_followup':
@@ -443,6 +470,7 @@ try:
                                  'RANK_WARMUP_S',
                                  'RANK_SINGLE_ATTEMPT', 'RANK_GEMINI_SAME_ANSWER_REFRAME',
                                  'RANK_GEMINI_CACHE_TRIAL', 'RANK_GEMINI_CACHE_EVIDENCE',
+                                 'RANK_CHATGPT_CACHE_TRIAL', 'PLATFORMS',
                                  'RANK_GEMINI_PROMPT_FREE',
                                  'RANK_GEMINI_RANK_TEXT_ONLY']}, indent=2))
         if env.get('RANK_GEMINI_CACHE_TRIAL') == '1':

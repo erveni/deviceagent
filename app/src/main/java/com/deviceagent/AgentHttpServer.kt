@@ -19,8 +19,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         const val PORT = 8765
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
-        const val APP_VERSION_NAME = "0.9.66-gemini-audit-evidence"
-        const val APP_VERSION_CODE = 83
+        const val APP_VERSION_NAME = "0.9.67-chatgpt-cache-trial"
+        const val APP_VERSION_CODE = 84
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -228,7 +228,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             keyword: String,
             platformsFilter: String? = null,
             searchAddress: String = "",
-            geminiCachePrepared: Boolean = false
+            geminiCachePrepared: Boolean = false,
+            chatgptCachePrepared: Boolean = false
         ) {
             result.type = "audit"
 
@@ -337,7 +338,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         // Explicit host-prepared experiment only. The host closes old
                         // tabs, clears cookies/origin state and verifies a fresh blank
                         // page while retaining HTTP assets. Default and daily unchanged.
-                        if (geminiCachePrepared && platformsFilter == "gemini" && platform == "gemini") {
+                        if ((geminiCachePrepared && platformsFilter == "gemini" && platform == "gemini") ||
+                            (chatgptCachePrepared && platformsFilter == "chatgpt" && platform == "chatgpt")) {
                             step("reset_chrome_host_cache_prepared") { true }
                         } else {
                             if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
@@ -749,6 +751,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     json.optString("platform", "").let { if (it.isBlank()) null else it },
                     json.optString("searchAddress", "").let { if (it == "null") "" else it },
                     json.optBoolean("geminiCachePrepared", false),
+                    json.optBoolean("chatgptCachePrepared", false),
                 )
             }
             else -> {
@@ -888,7 +891,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val platformFilter = json.optString("platform", "").let { if (it.isBlank()) null else it }
         val searchAddress = json.optString("searchAddress", "").let { if (it == "null") "" else it }
         executeAuditSession(result, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress,
-            json.optBoolean("geminiCachePrepared", false))
+            json.optBoolean("geminiCachePrepared", false), json.optBoolean("chatgptCachePrepared", false))
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -1012,9 +1015,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         keyword: String,
         platformFilter: String? = null,
         searchAddress: String = "",
-        geminiCachePrepared: Boolean = false
+        geminiCachePrepared: Boolean = false,
+        chatgptCachePrepared: Boolean = false
     ) {
-        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress, geminiCachePrepared)
+        executeAuditSessionStatic(result, flowEngine, bizName, bizUrl, city, state, keyword, platformFilter, searchAddress, geminiCachePrepared, chatgptCachePrepared)
     }
 
     private fun handleMqttConfig(writer: OutputStreamWriter, body: String) {

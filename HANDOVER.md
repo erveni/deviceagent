@@ -1,5 +1,70 @@
 # Session Handover — 2026-09-07 10:45 PST
 
+## 2026-09-09 late — YOKL ChatGPT and Copilot now authorized; first ChatGPT test active
+
+- User requests all missing ChatGPT/Copilot YOKL results. Preserve5Gemini and
+  kw5221Copilot already accepted. Daily/fullchain remain held. Toolkit skills not
+  used (client-use trial restriction); independent work continues.
+- ACTIVE com.deviceagent.yoklchatgptone0909: direct_audit_smoke.py --chatgpt-cache,
+  output yokl_chatgpt_one_20260909_direct, paid yokl_chatgpt_one_20260909_metered,
+  log yokl_chatgpt_one_20260909.log. Direct readiness then exactly1paid5221ChatGPT,
+  device104/v84, cacheON, singleattempt,100MBguard,10GBreserve, original79rollback.
+  DO NOT relaunch or duplicate. Direct/paid completion and actual screenshot still
+  require review; no measured ChatGPT savings yet. Source84 is test-only.
+- First direct attempt rejected stale hardcoded health83 despite APK84 (0requests);
+  corrected native health constants and added version-parity test. Second direct
+  generated real ChatGPT answer1/3 but strictGemini-style proof refused native
+  fullpage/prompt text and clipped screenshot. It restored79; no proxy used.
+- Debugged the SAME retained direct answer, not new generations: actual new
+  logged-out DOM uses data-assistant-markdown, not data-message-author-role.
+  ChatGPT native answer boundary is explicit "ChatGPT said:"; summary follows
+  rank by prompt design. Separate platform gate isolates it then independently
+  checks exact rank in assistant DOM and screenshot. Gemini gate unchanged.
+- Modern ChatGPT requires wheel positioning (scrollTop ignored); preserve exact
+  textContent through temporary layout zoom. captureBeyondViewport=True moved
+  page during capture; ChatGPT now usesFalse with pre/post geometry verification.
+  Same-answer proof succeeded0newprompts/0reloads/0navigations, real browserclip
+  .55zoom; root viewed fulltop3/rank/no-prompt at
+  yokl_chatgpt_direct_20260909_v2/validated_rank.png. Map remains part of answer,
+  no DOM deletion. Earlier wrapper report remains failure; separate frame JSON
+  records free retained-answer recovery. Fresh automatic proof now running.
+- Copilot one-job LaunchAgent/plist PREPARED ONLY, not started:
+  com.deviceagent.yoklcopilotone0909, fixed5222, COST_YOKL_COPILOT=1, catalogYOKL,
+  one104, original79, normalEdgepmclearON/cap4, no cache savings claim. Supervisor
+  permits only missing5222–5225 (1–4ids),100MBguard/25min. Must wait until current
+  ChatGPT wrapper + settled meter + rollback finish before starting another meter.
+- Build84 passed;26cache/guard tests and2YOKL tests passed,24synthetic capture
+  checks passed. More screenshots and actual meter numbers required before
+  continuing remaining4ChatGPT/remaining3Copilot. No backend report upload yet.
+
+## 2026-09-09 — Gemini follow-up complete; ChatGPT extension in preparation
+
+- Gemini follow-up settled: 4/4 successes, 18.679272 MB, 4.669818 MB/success.
+  Together with the first cache test: 5/5, 21.698169 MB, 4.339634 MB/success.
+  Root viewed all four screenshots. Keyword5223's rank marker is dim near the
+  composer edge but its explicit position4 sentence and full top3 are visible.
+  Direct wrapper completed, restored79/accessibilitytrue/noVPN; daily not running.
+  Six of15 YOKL pairs now accepted (5Gemini plus earlier5221Copilot); do not rerun.
+- User now authorizes same cache approach for ChatGPT and Gemini. Gemini done;
+  remaining ChatGPT should start with ONE metered5221 after a direct evidence pass.
+  Copilot/daily/full stale queue held. No ChatGPT paid trial launched yet.
+- Uncommitted WIP adds explicit RANK_CHATGPT_CACHE_TRIAL/device104-only path,
+  native chatgptCachePrepared audit-only/defaultfalse, source APK84 built locally
+  (NOT installed yet), original79 rollback unchanged. Gemini legacy82/evidence83
+  gates remain exact: existing Gemini wrappers will reject84, do not relaunch them.
+  Direct wrapper --chatgpt-cache uses fixedYOKL5221; optional --metered-output
+  allows one paid ChatGPT job only. Must inspect direct response and screenshot
+  before paid use. Remaining four ChatGPT continuation NOT implemented yet.
+- Build passed; helper18 tests, combined9 tests, newChatGPT5 tests passed; compile,
+  bash syntax and diffcheck passed. Native device regression/real ChatGPT DOM
+  selector and meter evidence remain pending. No ChatGPT savings claim yet.
+- User asked about shared PDTK003/004 skills. Both LICENSE-TRIAL.md read in full:
+  internal evaluation through2027-08-27; section4.7 excludes client/paid delivery
+  without commercial license. Inventoried filenames and selected metadata only;
+  NO toolkit skill applied to current ChatGPT/YOKL implementation. Need commercial
+  permission before applying those trial skills to client delivery. Independent
+  implementation can continue; no toolkit files copied or installed.
+
 ## 2026-09-09 22:30 — VERIFIED cache+v83 Gemini:3.018897MB/success; four-keyword follow-up
 
 - yokl_cache_20260909_metered/report.json COMPLETE:1paidkw5221/Gemini accepted4/4,

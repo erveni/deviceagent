@@ -11,8 +11,8 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 83
-        versionName = "0.9.66-gemini-audit-evidence"
+        versionCode = 84
+        versionName = "0.9.67-chatgpt-cache-trial"
     }
 
     buildTypes {

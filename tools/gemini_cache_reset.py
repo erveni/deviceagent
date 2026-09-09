@@ -12,6 +12,7 @@ https://chromedevtools.github.io/devtools-protocol/tot/Target/
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 import os
 import re
 import subprocess
@@ -23,6 +24,16 @@ ORIGIN = 'https://gemini.google.com'
 CLEAR_ORIGINS = (ORIGIN, 'https://www.google.com')
 STORAGE_TYPES = 'cookies,file_systems,indexeddb,local_storage,websql,service_workers,cache_storage,storage_buckets'
 AUTH_COOKIE_NAMES = {'SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID'}
+_CHATGPT_POLICY = ContextVar('chatgpt_cache_policy', default=False)
+
+
+def _origins():
+    return CLEAR_ORIGINS + (('https://chatgpt.com',) if _CHATGPT_POLICY.get() else ())
+
+
+def _authenticated(cookie):
+    name = cookie.get('name', '')
+    return name in AUTH_COOKIE_NAMES or bool(re.search(r'(?:session-token|access.token|refresh.token)', name, re.I))
 
 
 class ResetRefused(RuntimeError):
@@ -47,7 +58,8 @@ def _allowed_url(url):
             and parsed.port in (None, 443) and not parsed.username and not parsed.password
             and parsed.path in ('', '/') and not parsed.query and not parsed.fragment):
         return True  # Known Chrome first-run homepage, never search/accounts.
-    return (parsed.scheme == 'https' and parsed.hostname == 'gemini.google.com'
+    hosts = ('gemini.google.com', 'chatgpt.com') if _CHATGPT_POLICY.get() else ('gemini.google.com',)
+    return (parsed.scheme == 'https' and parsed.hostname in hosts
             and parsed.port in (None, 443) and not parsed.username and not parsed.password)
 
 
@@ -86,7 +98,7 @@ def _reset_clients(browser, page_factory):
     cookies = _call(browser, 'Storage.getCookies').get('cookies')
     if not isinstance(cookies, list):
         raise ResetRefused('missing_cookie_evidence')
-    if any(cookie.get('name') in AUTH_COOKIE_NAMES for cookie in cookies):
+    if any(_authenticated(cookie) for cookie in cookies):
         raise ResetRefused('authenticated_profile')
     fresh = _call(browser, 'Target.createTarget', {'url': 'about:blank'}).get('targetId')
     if not fresh or fresh in {page['targetId'] for page in old_pages}:
@@ -103,7 +115,7 @@ def _reset_clients(browser, page_factory):
     try:
         _call(page, 'Network.clearBrowserCookies')
         stage = 'clear_origin_storage'
-        for origin in CLEAR_ORIGINS:
+        for origin in _origins():
             _call(page, 'Storage.clearDataForOrigin', {'origin': origin, 'storageTypes': STORAGE_TYPES})
         # Never invoke Network.clearBrowserCache or setCacheDisabled(true).
         stage = 'enable_http_cache'
@@ -112,9 +124,9 @@ def _reset_clients(browser, page_factory):
         verification = _verify_stable_identity(browser, page, fresh)
         # The new unrelated blank browsing context has no old sessionStorage or
         # conversation JS heap. The caller's native flow navigates this context.
-        return {'ok': True, 'reason': 'gemini_identity_reset', 'closed_pages': len(old_pages),
-                'fresh_target_id': fresh, 'cookies_remaining': 0, 'origin': ORIGIN,
-                'origins_cleared': list(CLEAR_ORIGINS),
+        return {'ok': True, 'reason': 'chatgpt_identity_reset' if _CHATGPT_POLICY.get() else 'gemini_identity_reset', 'closed_pages': len(old_pages),
+                'fresh_target_id': fresh, 'cookies_remaining': 0, 'origin': 'https://chatgpt.com' if _CHATGPT_POLICY.get() else ORIGIN,
+                'origins_cleared': list(_origins()),
                 'storage_types_cleared': STORAGE_TYPES.split(','),
                 **verification,
                 'http_cache_clear_requested': False,
@@ -187,10 +199,10 @@ def _verify_stable_identity(browser, page, fresh):
         remaining = checked(browser, 'Storage.getCookies').get('cookies')
         if not isinstance(remaining, list):
             raise ResetRefused('missing_cookie_evidence', 'verify_cookies')
-        if any(cookie.get('name') in AUTH_COOKIE_NAMES for cookie in remaining):
+        if any(_authenticated(cookie) for cookie in remaining):
             raise ResetRefused('authenticated_profile_reappeared', 'verify_cookies')
         dirty_origins = []
-        for origin in CLEAR_ORIGINS:
+        for origin in _origins():
             breakdown = checked(page, 'Storage.getUsageAndQuota', {'origin': origin}).get('usageBreakdown')
             if not isinstance(breakdown, list) or any(not isinstance(item, dict)
                     or type(item.get('usage')) not in (int, float) or item['usage'] < 0
@@ -237,7 +249,8 @@ def reset_gemini_preserving_http_cache(serial: str, *, authorized_test_phone: bo
     Clearing browser cookies is profile-wide; HTTP-cache reuse still needs actual
     measurement (cache partitioning/revalidation can limit savings).
     """
-    if not authorized_test_phone or os.environ.get('RANK_GEMINI_CACHE_TRIAL') != '1':
+    flag = 'RANK_CHATGPT_CACHE_TRIAL' if _CHATGPT_POLICY.get() else 'RANK_GEMINI_CACHE_TRIAL'
+    if not authorized_test_phone or os.environ.get(flag) != '1':
         return {'ok': False, 'reason': 'test_only_disabled'}
     from gemini_cdp_capture import CDP
     ports = []
@@ -337,3 +350,20 @@ def prepare_gemini_cache(serial: str) -> dict:
             or os.environ.get('RANK_GEMINI_CACHE_TRIAL') != '1'):
         return {'ok': False, 'reason': 'trial_scope_not_enabled'}
     return reset_gemini_preserving_http_cache(serial, authorized_test_phone=True)
+
+
+def prepare_chatgpt_cache(serial: str) -> dict:
+    """Same reset protocol, explicit device104 ChatGPT trial only.
+
+    The disposable test profile may retain its preceding Gemini answer. Permit
+    those two exact origins, never unrelated tabs, and clear both origin stores.
+    Context-local policy avoids changing simultaneous/default Gemini callers.
+    """
+    if ('149145555W002883' not in serial or os.environ.get('RANK_SINGLE_ATTEMPT') != '1'
+            or os.environ.get('RANK_CHATGPT_CACHE_TRIAL') != '1'):
+        return {'ok': False, 'reason': 'trial_scope_not_enabled'}
+    token = _CHATGPT_POLICY.set(True)
+    try:
+        return reset_gemini_preserving_http_cache(serial, authorized_test_phone=True)
+    finally:
+        _CHATGPT_POLICY.reset(token)

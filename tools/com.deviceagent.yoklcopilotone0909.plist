@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.deviceagent.yoklcopilotone0909</string>
+<key>ProgramArguments</key><array>
+<string>/bin/bash</string><string>/Users/seolocalph/projects/device-agent/tools/run_ranking_cost_pair.sh</string>
+<string>/Users/seolocalph/projects/device-agent/tools/yokl_copilot_one_0909.json</string>
+<string>/Users/seolocalph/projects/device-agent/yokl_copilot_one_20260909_metered</string>
+</array>
+<key>WorkingDirectory</key><string>/Users/seolocalph/projects/device-agent</string>
+<key>EnvironmentVariables</key><dict>
+<key>PATH</key><string>/Users/seolocalph/.nvm/versions/node/v24.14.0/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+<key>COST_DRIVER</key><string>reframe_single</string>
+<key>COST_YOKL_COPILOT</key><string>1</string>
+<key>COST_PHASE_TELEMETRY</key><string>1</string>
+<key>RANK_CATALOG_DIR</key><string>/Users/seolocalph/projects/device-agent/ranking_yokl_20260909/catalog</string>
+</dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><false/>
+<key>StandardOutPath</key><string>/Users/seolocalph/projects/device-agent/yokl_copilot_one_20260909.log</string>
+<key>StandardErrorPath</key><string>/Users/seolocalph/projects/device-agent/yokl_copilot_one_20260909.log</string>
+</dict></plist>

@@ -17,7 +17,7 @@ class CachePilotSupervisorTests(unittest.TestCase):
         namespace = {'os': SimpleNamespace(environ={}), 'fixed': Path('/mock/ten.json'),
                      'legdir': Path('/mock/candidate'), 'job_count': 10, 'city_first': '1',
                      'pilot': True, 'single': False, 'rerun_four': False, 'one_phone': True, 'driver': 'cache_pilot',
-                     'name': 'candidate'}
+                     'name': 'candidate', 'chatgpt_cache': False, 'copilot_yokl': False}
         exec(compile(textwrap.dedent(block), '<settings-only>', 'exec'), namespace)
         env = namespace['env']
         self.assertEqual(env['MAX_JOBS'], '10')

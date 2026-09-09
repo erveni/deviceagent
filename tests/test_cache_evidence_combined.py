@@ -29,7 +29,7 @@ class CombinedCacheTests(unittest.TestCase):
         ns = dict(os=SimpleNamespace(environ={'COST_CACHE_TRIAL':'1','COST_CACHE_EVIDENCE':'1'}),
                   fixed=Path('/mock/one.json'), legdir=Path('/mock/candidate'), job_count=1,
                   city_first='1', pilot=False, single=True, rerun_four=False, one_phone=True,
-                  driver='reframe_single', name='candidate')
+                  driver='reframe_single', name='candidate', chatgpt_cache=False,copilot_yokl=False)
         exec(textwrap.dedent(block), ns)
         env = ns['env']
         for key in ('RANK_GEMINI_CACHE_TRIAL','RANK_GEMINI_CACHE_EVIDENCE','RANK_GEMINI_PROMPT_FREE',

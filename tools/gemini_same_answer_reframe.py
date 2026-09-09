@@ -105,8 +105,19 @@ _SELECTOR_JS = r"""(function(expectedKeyword, expectedRank, scroll, expectedText
 })"""
 
 
-def _expression(keyword: str, rank: tuple[int, int], *, scroll=False, text=None, action=None, prompt_free=False) -> str:
-    return _SELECTOR_JS + '(' + ','.join(json.dumps(v) for v in
+def _expression(keyword: str, rank: tuple[int, int], *, scroll=False, text=None, action=None, prompt_free=False, platform='gemini') -> str:
+    if platform not in ('gemini', 'chatgpt'):
+        raise ValueError('Unsupported answer platform')
+    selector = _SELECTOR_JS
+    if platform == 'chatgpt':
+        selector = selector.replace('gemini.google.com', 'chatgpt.com').replace(
+            "const answers = [...document.querySelectorAll('model-response message-content')].filter(displayed);",
+            "const modern = [...document.querySelectorAll('[data-assistant-markdown]')].filter(displayed); "
+            "const answers = modern.length ? modern : [...document.querySelectorAll('[data-message-author-role=\"assistant\"]')].filter(displayed);").replace(
+            'user-query', '[data-message-author-role="user"]').replace(
+            'text = answer.innerText', 'text = answer.textContent').replace(
+            'const safeTop = 160;', 'const safeTop = 100;')
+    return selector + '(' + ','.join(json.dumps(v) for v in
                                        (keyword, rank, scroll, text, action, prompt_free)) + ')'
 
 
@@ -156,7 +167,7 @@ def _evaluate(client, expression):
 def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple[int, int],
                        outputpath: str | Path, *,
                        ocr_validator: Callable[[str], bool] | None = None,
-                       prompt_free: bool = False) -> dict:
+                       prompt_free: bool = False, platform: str = 'gemini') -> dict:
     """Return evidence. Success requires the full answer in a safe band and OCR.
 
     Only attaches to an already-visible, unambiguous Gemini answer. All discovered
@@ -179,7 +190,10 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
         return result | {'reason': 'caller_ocr_validator_required'}
     output = Path(outputpath).resolve()
     from functools import partial
-    expression = partial(_expression, prompt_free=prompt_free)
+    if platform not in ('gemini', 'chatgpt'):
+        return result | {'reason': 'unsupported_platform'}
+    hostname = 'chatgpt.com' if platform == 'chatgpt' else 'gemini.google.com'
+    expression = partial(_expression, prompt_free=prompt_free, platform=platform)
     if output.exists() or not output.parent.is_dir():
         return result | {'reason': 'output_must_be_new_file_in_existing_directory'}
     # Import only the websocket client class, never the old module's fixed forward.
@@ -216,7 +230,7 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
                 return result | {'reason': 'invalid_target_list'}
             for tab in tabs:
                 url = urllib.parse.urlparse(tab.get('url', ''))
-                if tab.get('type') != 'page' or url.scheme != 'https' or url.hostname != 'gemini.google.com':
+                if tab.get('type') != 'page' or url.scheme != 'https' or url.hostname != hostname:
                     continue
                 target = tab.get('id')
                 if not target:
@@ -238,12 +252,34 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
             return result | {'reason': 'no_unique_visible_matching_answer',
                              'matching_targets': len(candidates), 'rejections': rejected}
         client, before = candidates[0]
+        def chatgpt_wheel_align(snapshot):
+            # This ChatGPT scroller ignores scrollTop but honors wheel input.
+            # Every movement is derived from the guarded answer rectangle.
+            if platform != 'chatgpt':
+                return snapshot
+            for _ in range(5):
+                if not snapshot.get('ok'):
+                    break
+                rect, band = snapshot['answer_rect'], snapshot['safe_band']
+                if rect['bottom']-rect['top'] > band['bottom']-band['top']:
+                    break
+                delta = rect['top']-(band['top']+2)
+                if abs(delta) < .5:
+                    break
+                reply = client.call('Input.dispatchMouseEvent', {'type':'mouseWheel',
+                    'x':180,'y':380,'deltaX':0,'deltaY':delta})
+                if reply.get('error'):
+                    break
+                time.sleep(.15)
+                snapshot = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
+            return snapshot
         moved = _evaluate(client, expression(expected_keyword, expected_rank, scroll=True,
                                               text=before['text']))
         if not moved.get('ok'):
             return result | {'reason': moved.get('reason', 'reframe_failed')}
         time.sleep(0.5)
         framed = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
+        framed = chatgpt_wheel_align(framed)
         if not framed.get('ok'):
             return result | {'reason': 'rank_not_visible_or_answer_changed'}
         if not framed.get('full_answer_in_view') and not (prompt_free and framed.get('answer_fits')):
@@ -272,8 +308,10 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
                 _evaluate(client, expression(expected_keyword, expected_rank, scroll=True, text=before['text']))
                 time.sleep(0.5)
                 framed = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
+                framed = chatgpt_wheel_align(framed)
                 if (framed.get('ok') and framed.get('rank_in_view')
-                        and framed.get('full_answer_in_view')):
+                        and (framed.get('full_answer_in_view') or
+                             (platform == 'chatgpt' and prompt_free and framed.get('answer_fits')))):
                     break
         # A short answer can fit while the page has no scroll range to hide the
         # prompt. Capture only that rendered answer rectangle, never synthesize or
@@ -285,14 +323,15 @@ def reframe_same_answer(serial: str, expected_keyword: str, expected_rank: tuple
                 'frame_diagnostics': _frame_diagnostics(framed)}
         if cropped:
             capture = client.call('Page.captureScreenshot', {'format':'png',
-                'captureBeyondViewport':True, 'clip':answer_clip})
+                'captureBeyondViewport':platform != 'chatgpt', 'clip':answer_clip})
             screenshot = base64.b64decode(capture.get('result', {}).get('data', ''), validate=True)
         else:
             screenshot = adb('exec-out', 'screencap', '-p')
         after = _evaluate(client, expression(expected_keyword, expected_rank, text=before['text']))
         geometry_valid = (_safe_answer_clip(after) == answer_clip) if cropped else after.get('full_answer_in_view')
         if not after.get('ok') or not after.get('rank_in_view') or not geometry_valid:
-            return result | {'reason': 'answer_changed_during_screenshot'}
+            return result | {'reason': 'answer_changed_during_screenshot',
+                'before_frame': _frame_diagnostics(framed), 'after_frame': _frame_diagnostics(after)}
         if not screenshot.startswith(b'\x89PNG\r\n\x1a\n'):
             return result | {'reason': 'invalid_actual_screenshot'}
         with output.open('xb') as stream:

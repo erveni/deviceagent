@@ -1542,7 +1542,27 @@ def dispatch_audit_job(
         # device-owner clearApplicationUserData equivalent and always works over adb.
         # Best-effort: never fail a job over the clear itself.
         phase("browser_reset")
-        if os.environ.get("RANK_GEMINI_CACHE_TRIAL", "0") == "1":
+        if os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1":
+            if (device_label != "device-104" or platform.lower() != "chatgpt"
+                    or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None
+                    or os.environ.get("RANK_GEMINI_CACHE_TRIAL", "0") == "1"):
+                raise RuntimeError("ChatGPT cache trial restricted to single-attempt device104 audit")
+            with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/health", timeout=5) as health_response:
+                cache_health = json.load(health_response)
+            if type(cache_health.get('versionCode')) is not int or cache_health['versionCode'] != 84 or cache_health.get('accessibility') is not True:
+                raise RuntimeError("ChatGPT cache trial requires accessible v84")
+            from tools.gemini_cache_reset import prepare_chatgpt_cache
+            phase("cache_prepare_start")
+            _adb(serial, "shell", "am", "start", "-n", "com.android.chrome/com.google.android.apps.chrome.Main", timeout=10)
+            time.sleep(1)
+            cache_prepared = prepare_chatgpt_cache(serial)
+            if os.environ.get("GOST_PHASE_LEDGER"):
+                Path(os.environ["GOST_PHASE_LEDGER"]).with_name(f"cache_prepared_kw{int(keyword_id)}.json").write_text(json.dumps(cache_prepared, indent=2))
+            if not cache_prepared.get("ok"):
+                raise RuntimeError("ChatGPT cache preparation refused: " + str(cache_prepared.get("reason")))
+            body["chatgptCachePrepared"] = True
+            phase("cache_prepare_done")
+        elif os.environ.get("RANK_GEMINI_CACHE_TRIAL", "0") == "1":
             if (device_label != "device-104" or platform.lower() != "gemini"
                     or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None):
                 raise RuntimeError("cache trial restricted to one device-104 Gemini audit")
@@ -1715,6 +1735,24 @@ def dispatch_audit_job(
         _reframe_attempted = False
         _prompt_free = os.environ.get("RANK_GEMINI_PROMPT_FREE", "0") == "1" and platform.lower() == "gemini"
         _prompt_free_verified = False
+        if os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1" and platform.lower() == "chatgpt":
+            _prompt_free = True
+            if status == "success" and ss_b64:
+                _chat_text = (response.get("platforms") or {}).get("chatgpt", {}).get("response_text", "")
+                _chat_rank = _parse_rank_markers(_chat_text, "text")
+                if _chat_rank:
+                    from tools.gemini_same_answer_reframe import reframe_same_answer
+                    _source = _write_b64_screenshot(ss_b64, platform, int(keyword_id), artifact="reframe_source")
+                    if _source:
+                        _path = Path(_source).with_name(Path(_source).stem + f"_reframe_{time.time_ns()}.png")
+                        _expected = (int(_chat_rank[1]), int(_chat_rank[2]))
+                        _proof = reframe_same_answer(serial, _keyword_text(entry, int(keyword_id)), _expected, _path,
+                            platform='chatgpt', prompt_free=True,
+                            ocr_validator=lambda path: _screenshot_has_expected_rank(path, _expected))
+                        print(f"  [chatgpt-cache-evidence] ok={_proof.get('ok')} reason={_proof.get('reason')}", flush=True)
+                        if _proof.get('ok'):
+                            ss_local = _proof['screenshot']
+                            _prompt_free_verified = True
         if (os.environ.get("RANK_GEMINI_SAME_ANSWER_REFRAME", "0") == "1"
                 and platform.lower() == "gemini" and capture_prompt is None
                 and status == "success" and ss_b64):
