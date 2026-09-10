@@ -30,6 +30,9 @@ class RankingReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):check(broken)
         broken=released.copy();broken['RANK_COPILOT_WIFI_ROLLOUT_DEVICES']='device-125'
         with self.assertRaises(ValueError):check(broken)
+        broken=released.copy();broken['RANK_COPILOT_WIFI_ROLLOUT_DEVICES']='device-108'
+        with self.assertRaises(ValueError):check(broken)
+        broken['RANK_ALLOW_QUARANTINED_DEVICE_108']='1';check(broken)
 
     def test_second_phone_scope_cannot_expand_to_test_or_failed_phones(self):
         with patch.dict('os.environ',COPILOT_ROLLOUT_DEVICE='device-106'):

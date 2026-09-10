@@ -43,7 +43,8 @@ if USE_14DAY and _pp_file and os.path.exists(_pp_file):
     lastrank_pp = json.load(open(_pp_file))
 # OUT_NAME overrides the output filename stem (e.g. ranking_stale_<DATE>).
 _OUT_NAME = os.environ.get("OUT_NAME") or f"ranking_initial_{DATE}_consolidated.csv"
-SOURCES = sorted(glob.glob(os.path.join(HERE, f"rabbitmq_audit_results_{DATE}_ranking*.csv")))
+SOURCES = sorted(glob.glob(os.environ.get(
+    "RANKING_SOURCES_GLOB", os.path.join(HERE, f"rabbitmq_audit_results_{DATE}_ranking*.csv"))))
 OUT = os.path.join(HERE, _OUT_NAME)
 DESKTOP = os.path.expanduser(f"~/Desktop/Rankings/{_OUT_NAME}")
 os.makedirs(os.path.dirname(DESKTOP), exist_ok=True)

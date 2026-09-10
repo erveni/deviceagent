@@ -24,6 +24,8 @@ def device_allowed(label):
               if value.strip()}
     if not labels or any(not re.fullmatch(r'device-\d{3}', value) for value in labels):
         raise ValueError('Copilot Wi-Fi rollout requires an explicit device-label allow-list')
-    if labels & {'device-108', 'device-125'}:
-        raise ValueError('Quarantined/test phones cannot enter the Copilot Wi-Fi rollout')
+    if 'device-125' in labels:
+        raise ValueError('The protected test phone cannot enter the Copilot Wi-Fi rollout')
+    if 'device-108' in labels and os.environ.get('RANK_ALLOW_QUARANTINED_DEVICE_108')!='1':
+        raise ValueError('device-108 requires an explicit quarantine override')
     return label in labels

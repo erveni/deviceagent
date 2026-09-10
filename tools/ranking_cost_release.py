@@ -26,8 +26,10 @@ def check(env):
         if any(env.get(name) != '1' for name in required):
             raise ValueError('Released ranking requires the settled Copilot Wi-Fi path')
         labels={value.strip() for value in env.get('RANK_COPILOT_WIFI_ROLLOUT_DEVICES','').split(',') if value.strip()}
-        if not labels or labels & {'device-108','device-125'}:
+        if not labels or 'device-125' in labels:
             raise ValueError('Released ranking requires a safe explicit rollout allow-list')
+        if 'device-108' in labels and env.get('RANK_ALLOW_QUARANTINED_DEVICE_108') != '1':
+            raise ValueError('device-108 requires an explicit quarantine override')
         return
     raise ValueError('Ranking cost rollout is not released yet. Refusing the old expensive '
                      'path. Complete measured rollout/device readiness before resuming the queue.')
