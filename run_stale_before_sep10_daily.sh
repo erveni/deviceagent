@@ -14,8 +14,8 @@ KW_DATE_MAP="$PWD/stale_${DATE}_last_rank_by_keyword.json"
 PP_DATE_MAP="$PWD/stale_${DATE}_last_rank_by_platform.json"
 CATALOG_DIR="$PWD/_snapshots_2026-09-02"
 KW_IDS="$CATALOG_DIR/ranking_kw_ids_${DATE}.json"
-ROLLOUT_DEVICES=device-104,device-106
-EXCLUDES=device-102,device-103,device-105,device-107,device-108,device-109,device-110,device-111,device-112,device-113,device-114,device-115,device-116,device-117,device-118,device-119,device-120,device-121,device-122,device-123,device-124,device-125
+ROLLOUT_DEVICES=device-104,device-106,device-110,device-116,device-117,device-118,device-119,device-120,device-121,device-122,device-123
+EXCLUDES=device-102,device-103,device-105,device-107,device-108,device-109,device-111,device-112,device-113,device-114,device-115,device-124,device-125
 
 say(){ echo "[stale-before-daily $(date '+%F %T')] $*" | tee -a "$LOG"; }
 balance(){ python3 evomi_balance.py 2>/dev/null | tr -d '\r'; }
@@ -50,7 +50,7 @@ if [ -z "$whole" ] || [ "$whole" -le "$FLOOR_MB" ]; then
 fi
 
 say "START balance=${current} MB floor=${FLOOR_MB} MB devices=${ROLLOUT_DEVICES}"
-PROXY_PROVIDER=evomi SKIP_BASE=1 WORKERS_CAP=2 \
+PROXY_PROVIDER=evomi SKIP_BASE=1 WORKERS_CAP=6 \
   RANK_CATALOG_DIR="$CATALOG_DIR" KEYWORD_IDS_FILE="$KW_IDS" \
   DEVICE_EXCLUDE="$EXCLUDES" PLATFORMS=chatgpt,gemini,copilot \
   AEO_SKIP_PREFLIGHT=1 EVOMI_TIER_CACHE_TTL_S=300 \

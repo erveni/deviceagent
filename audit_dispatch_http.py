@@ -836,6 +836,12 @@ _RANK_WARMUP_S = _ranking_warmup_seconds()
 _RANK_SINGLE_ATTEMPT = os.environ.get("RANK_SINGLE_ATTEMPT", "0") == "1"
 
 
+def _use_offline_copilot(platform: str) -> bool:
+    """The Wi-Fi bootstrap is a Copilot transport optimization only."""
+    return (os.environ.get('RANK_COPILOT_OFFLINE_BOOTSTRAP','0') == '1'
+            and platform.lower() == 'copilot')
+
+
 # Poll the phone instead of holding one HTTP request open for the whole job.
 # A ranking job runs 130-350s, and a request held that long across an adb forward is the
 # single biggest failure cause measured on this fleet: every platform lost a job to
@@ -1358,9 +1364,9 @@ def dispatch_audit_job(
     offline_edge_proof = None
     offline_edge_consumed = False
     from tools.copilot_bootstrap_scope import device_allowed as bootstrap_device_allowed
-    if os.environ.get('RANK_COPILOT_OFFLINE_BOOTSTRAP','0')=='1':
+    if _use_offline_copilot(platform):
         _wifi_rollout = os.environ.get('RANK_COPILOT_WIFI_ROLLOUT','0') == '1'
-        if (not bootstrap_device_allowed(device_label) or platform.lower()!='copilot'
+        if (not bootstrap_device_allowed(device_label)
                 or (not _wifi_rollout and not _RANK_SINGLE_ATTEMPT) or capture_prompt is not None):
             POOL.release(device_idx)
             raise RuntimeError('Inline offline bootstrap outside the explicit Copilot scope')

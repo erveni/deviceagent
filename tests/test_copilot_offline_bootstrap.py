@@ -5,9 +5,16 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 from tools.copilot_offline_bootstrap import prepare,settle_wifi
+from audit_dispatch_http import _use_offline_copilot
 
 
 class OfflineBootstrapTests(unittest.TestCase):
+    def test_bootstrap_flag_never_applies_to_chatgpt_or_gemini(self):
+        with patch.dict('os.environ',{'RANK_COPILOT_OFFLINE_BOOTSTRAP':'1'}):
+            self.assertTrue(_use_offline_copilot('Copilot'))
+            self.assertFalse(_use_offline_copilot('ChatGPT'))
+            self.assertFalse(_use_offline_copilot('Gemini'))
+
     def test_wifi_settlement_waits_for_late_bulk_download(self):
         clock=[0]
         def sleep(n):clock[0]+=n
