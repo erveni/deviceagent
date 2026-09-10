@@ -1,10 +1,22 @@
 import unittest
+from pathlib import Path
 
 from tools.build_stale_date_maps import build
 from tools.verify_stale_consolidation import expected_date,verify
 
 
 class StaleConsolidationDateTests(unittest.TestCase):
+    def test_supervisor_never_depends_on_tmp_catalogs(self):
+        source=(Path(__file__).resolve().parents[1]/'run_stale_before_sep10_daily.sh').read_text()
+        self.assertIn('RANK_CATALOG_DIR="$CATALOG_DIR"',source)
+        self.assertIn('KEYWORD_IDS_FILE="$KW_IDS"',source)
+        self.assertNotIn('/tmp/rr_admin.json',source)
+        self.assertNotIn('/tmp/kw_admin.json',source)
+        self.assertNotIn('/tmp/ranking_kw_ids_',source)
+        consolidator=(Path(__file__).resolve().parents[1]/'consolidate_ranking.py').read_text()
+        self.assertIn('RANK_CATALOG_DIR',consolidator)
+        self.assertNotIn('open("/tmp/kw_admin.json")',consolidator)
+
     def test_maps_exclude_run_day_and_keep_platform_specific_prior(self):
         rows=[{'keywordId':7,'platform':'ChatGPT','date':'2026-08-18'},
               {'keywordId':7,'platform':'Gemini','date':'2026-08-19'},

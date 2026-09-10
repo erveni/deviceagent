@@ -18,6 +18,7 @@ from collections import Counter, defaultdict
 
 HERE = "/Users/seolocalph/projects/device-agent"
 DATE = os.environ.get("DATE", "2026-06-08")
+CATALOG_DIR = os.environ.get("RANK_CATALOG_DIR", "/tmp")
 # USE_RUN_DATE=1: stamp every row with the RUN date (DATE), not the keyword's
 # createdAt. Correct for STALE re-runs (a fresh current measurement) — back-dating
 # a re-run to the keyword's creation date would be wrong. Default (unset) keeps the
@@ -51,7 +52,7 @@ TOKEN = os.environ.get("EXECUTOR_TOKEN", "")
 random.seed(20260608)
 
 # keyword id -> createdAt date (the date we back-date the ranking to)
-kw_by_id = {k["id"]: k for k in json.load(open("/tmp/kw_admin.json"))}
+kw_by_id = {k["id"]: k for k in json.load(open(os.path.join(CATALOG_DIR, "kw_admin.json")))}
 
 
 def created_date(kw_id):
