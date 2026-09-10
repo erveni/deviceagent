@@ -1227,3 +1227,15 @@ FIRST. Stale ranking 2026-09-02 is at 1384/3492, paused by LaunchAgent
 com.deviceagent.chain0906 at the 4 GB floor; resume with
 `launchctl kickstart gui/$(id -u)/com.deviceagent.chain0906` after top-up.
 ```
+# 2026-09-10 22:00 update — stale before September10 daily
+
+- September10 daily is launchctl-disabled per user order; it has not run.
+- Durable `com.deviceagent.stalebeforesep10` is running the preserved September2
+  stale set with SKIP_BASE. Start count:1990 unfinished pairs, balance20786.63MB.
+- It is limited to v88-verified devices104/106, two workers, measured Copilot
+  off-proxy Wi-Fi preparation, Evomi, and a9000MB reserve floor. It stops rather
+  than starting daily if ranking is incomplete.
+- Fixed the live ranking HTTP-forward mismatch (19000+index vs DevicePool's
+  8765+index), locked-phone Edge reset timeout, transient health-read handling and
+  street-number-as-ZIP legacy catalog bug. Twenty focused tests pass; APK v88 is
+  health-verified on11 phones, though this rollout deliberately uses only104/106.

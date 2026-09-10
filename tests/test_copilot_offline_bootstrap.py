@@ -62,5 +62,24 @@ class OfflineBootstrapTests(unittest.TestCase):
         self.assertIn('except Exception:',prep)
         self.assertIn('POOL.release(device_idx)',prep)
 
+    def test_rollout_requires_deployed_version_and_explicit_device(self):
+        def adb(serial,*args,**kwargs):
+            text=''
+            if args[:3]==('shell','ip','link'):text='1: lo: UP'
+            if args[:4]==('shell','settings','get','global'):text='null'
+            if args[:4]==('shell','dumpsys','window','policy'):text='showing=false'
+            if args[:3]==('shell','pm','clear'):text='Success'
+            return SimpleNamespace(returncode=0,stdout=text)
+        replies=[io.BytesIO(json.dumps(r).encode()) for r in
+                 ({'versionCode':88,'accessibility':True},{'running':False})]
+        env={'RANK_COPILOT_WIFI_ROLLOUT':'1','RANK_COPILOT_WIFI_ROLLOUT_DEVICES':'device-110'}
+        with patch.dict('os.environ',env,clear=False), \
+             patch('tools.copilot_offline_bootstrap.urllib.request.urlopen',side_effect=replies), \
+             patch('tools.copilot_offline_bootstrap.time.sleep'):
+            result=prepare('adb-device110',19001,{'platform':'copilot'},adb,
+                           Mock(return_value={'step_log':['[copilot] reset_edge OK']}),
+                           device_label='device-110')
+        self.assertEqual(result['versionCode'],88)
+
 
 if __name__=='__main__':unittest.main()

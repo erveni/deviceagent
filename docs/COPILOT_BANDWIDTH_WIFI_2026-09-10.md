@@ -1,5 +1,21 @@
 # Copilot bandwidth: fresh-profile downloads and Wi-Fi preparation
 
+## Controlled stale rollout —22:00 Manila
+
+Version88 promotes the already measured preparation behind three fail-closed
+production controls and an explicit phone allow-list. The first rollout is limited
+to devices104/106 with two workers; devices108/125 remain prohibited. A new durable
+supervisor reserves9000MB and keeps the September10 daily LaunchAgent disabled until
+the stale set is complete and reviewed.
+
+The rollout canary exposed and fixed two production-only prerequisites before the
+queue started: ranking calculated HTTP ports as19000+index while DevicePool actually
+created8765+index, and a locked phone made the Edge first-run reset time out. Ranking
+now uses the pool's real forward contract, wakes/unlocks and verifies keyguard state
+before offline reset, retries only read-only health probes, and prefers the terminal
+postal ZIP over a legacy catalog field that had parsed the street number as ZIP.
+Regression tests cover the port, ZIP and release gates.
+
 ## Second-phone checkpoint —05:09 Manila
 
 Device106, same keyword5225, fresh Edge Wi-Fi settlement:

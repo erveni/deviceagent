@@ -7,9 +7,9 @@
 set -u
 cd /Users/seolocalph/projects/device-agent
 
-# User requested that the NEXT ranking run use the verified low-cost path.
-# Until rollout is released, fail before secrets/proxies/device mutations rather
-# than silently running the expensive legacy path. Metered harnesses are bounded.
+# User requested that the next ranking run use the verified low-cost path.
+# The release checker requires all three Wi-Fi-bootstrap controls plus an explicit
+# device allow-list; otherwise it fails before secrets/proxies/device mutations.
 python3 tools/ranking_cost_release.py || exit $?
 
 DATE="${1:?usage: run_ranking_auto.sh <DATE> [scope]}"

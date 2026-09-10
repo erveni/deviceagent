@@ -7,7 +7,7 @@ import os
 import re
 import time
 import urllib.request
-from tools.copilot_bootstrap_scope import selected_device
+from tools.copilot_bootstrap_scope import device_allowed,selected_device
 
 
 def settle_wifi(serial,adb,*,minimum_s=150,quiet_s=30,deadline_s=300,
@@ -44,22 +44,50 @@ def settle_wifi(serial,adb,*,minimum_s=150,quiet_s=30,deadline_s=300,
     raise ValueError('Fresh Edge WiFi downloads did not settle; refusing paid job')
 
 
-def prepare(serial,port,body,adb,post):
-    if selected_device()[1] not in serial or body.get('platform')!='copilot':
+def prepare(serial,port,body,adb,post,device_label=None):
+    rollout=os.environ.get('RANK_COPILOT_WIFI_ROLLOUT')=='1'
+    label=device_label or selected_device()[0]
+    serial_ok=device_allowed(label) if rollout else selected_device()[1] in serial
+    if not serial_ok or body.get('platform')!='copilot':
         raise ValueError('Offline bootstrap outside selected Copilot measurement scope')
     adb(serial,'forward',f'tcp:{port}','tcp:8765',timeout=10)
     try:
-        with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=5) as r:health=json.load(r)
-        with urllib.request.urlopen(f'http://127.0.0.1:{port}/result',timeout=5) as r:old=json.load(r)
-        expected_version=87 if os.environ.get('COPILOT_NETWORK_GUARD_TRIAL')=='1' else 86
-        if health.get('versionCode')!=expected_version or health.get('accessibility') is not True or old.get('running'):
-            raise ValueError(f'Idle v{expected_version}/accessibility required')
+        def read_json(path):
+            last=None
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(f'http://127.0.0.1:{port}/{path}',timeout=5) as reply:
+                        return json.load(reply)
+                except Exception as error:
+                    last=error
+                    if attempt<2:time.sleep(1)
+            raise last
+        health=read_json('health')
+        old=read_json('result')
+        expected_version=(int(os.environ.get('RANK_COPILOT_MIN_VERSION','88')) if rollout
+                          else (87 if os.environ.get('COPILOT_NETWORK_GUARD_TRIAL')=='1' else 86))
+        version_ok=(health.get('versionCode',0)>=expected_version if rollout
+                    else health.get('versionCode')==expected_version)
+        if not version_ok or health.get('accessibility') is not True or old.get('running'):
+            raise ValueError(f'Idle v{expected_version}+/accessibility required' if rollout
+                             else f'Idle v{expected_version}/accessibility required')
         # Check ownership/idleness BEFORE touching the existing VPN.
         adb(serial,'shell','am','force-stop','net.typeblog.socks',timeout=10)
         links=adb(serial,'shell','ip','link',timeout=10)
         proxy=adb(serial,'shell','settings','get','global','http_proxy',timeout=10)
         if links.returncode or proxy.returncode or re.search(r'^\d+: tun0(?:[@:])',links.stdout,re.M) or proxy.stdout.strip() not in ('null',':0',''):
             raise ValueError('Phone is not verified off-proxy')
+        if rollout:
+            # A locked phone leaves Edge's first-run activity invisible and makes
+            # reset_edge consume its full timeout.  The old chain happened to
+            # inherit unlocked phones from the daily; production ranking cannot.
+            for key in ('KEYCODE_WAKEUP','KEYCODE_MENU'):
+                adb(serial,'shell','input','keyevent',key,timeout=10)
+            adb(serial,'shell','input','swipe','360','1300','360','300','500',timeout=10)
+            time.sleep(2)
+            policy=adb(serial,'shell','dumpsys','window','policy',timeout=10)
+            if policy.returncode or not re.search(r'\bshowing=false\b',policy.stdout,re.I):
+                raise ValueError('Phone keyguard is still showing; refusing Edge reset')
         cleared=adb(serial,'shell','pm','clear','com.microsoft.emmx',timeout=60)
         if cleared.returncode or cleared.stdout.strip()!='Success':raise ValueError('Full Edge clear failed')
         launched=adb(serial,'shell','am','start','-n','com.microsoft.emmx/com.microsoft.ruby.Main',timeout=10)

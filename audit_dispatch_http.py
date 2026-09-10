@@ -717,12 +717,26 @@ def _release_gost_port(p: int) -> None:
 
 
 def _http_port_for_serial(serial: str) -> int:
-    """Deterministic per-serial local port. Use the DEVICES index (0-9) for known
-    phones — guarantees uniqueness. Hash fallback for any serial not in DEVICES."""
+    """Return the local port created by ``DevicePool.setup_forwards``.
+
+    This must stay identical to device_dispatch.py.  The former 19000-based
+    calculation pointed ranking at nonexistent/stale forwards while the pool
+    actually created 8765+index, producing immediate RemoteDisconnected errors.
+    """
     for i, entry in enumerate(DEVICES):
         if entry[1] == serial:
-            return 19000 + i
-    return 19000 + int(hashlib.md5(serial.encode()).hexdigest(), 16) % 100
+            return 8765 + i
+    raise ValueError('Cannot address a phone outside the configured device pool')
+
+
+def _assigned_proxy_zip(entry: dict) -> str:
+    """Prefer the terminal postal ZIP over legacy first-number parsing."""
+    address = entry.get('search_address') or entry.get('biz_address') or ''
+    match = re.search(r',\s*[A-Z]{2}\s+(\d{5})(?:-\d{4})?(?:\s*,\s*(?:USA?|United States))?\s*$',
+                      address, re.I)
+    if match:
+        return match.group(1)
+    return (entry.get('proxy') or {}).get('zip') or ''
 
 
 def _adb(serial: str, *args: str, timeout: float = 10) -> subprocess.CompletedProcess:
@@ -1345,16 +1359,18 @@ def dispatch_audit_job(
     offline_edge_consumed = False
     from tools.copilot_bootstrap_scope import device_allowed as bootstrap_device_allowed
     if os.environ.get('RANK_COPILOT_OFFLINE_BOOTSTRAP','0')=='1':
-        if not bootstrap_device_allowed(device_label) or platform.lower()!='copilot' or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+        _wifi_rollout = os.environ.get('RANK_COPILOT_WIFI_ROLLOUT','0') == '1'
+        if (not bootstrap_device_allowed(device_label) or platform.lower()!='copilot'
+                or (not _wifi_rollout and not _RANK_SINGLE_ATTEMPT) or capture_prompt is not None):
             POOL.release(device_idx)
-            raise RuntimeError('Inline offline bootstrap restricted to one104 Copilot audit')
+            raise RuntimeError('Inline offline bootstrap outside the explicit Copilot scope')
         from tools.copilot_offline_bootstrap import prepare
         phase('offline_edge_prepare_start')
         try:
             offline_edge_proof=prepare(serial,_http_port_for_serial(serial),
                 dict(platform='copilot',bizName=entry['biz_name'],bizUrl=entry.get('biz_url',''),
                      city=entry.get('city',''),state=entry.get('state',''),keyword=_keyword_text(entry,int(keyword_id))),
-                _adb,_post_audit)
+                _adb,_post_audit,device_label=device_label)
             if os.environ.get('GOST_PHASE_LEDGER'):
                 Path(os.environ['GOST_PHASE_LEDGER']).with_name(f'offline_edge_kw{int(keyword_id)}.json').write_text(json.dumps(offline_edge_proof,indent=2))
         except Exception:
@@ -1372,7 +1388,7 @@ def dispatch_audit_job(
     # zip (city/state-only campaigns have no zip of their own). Defaulting to
     # "10001" here made _resolve_zip treat it as a valid NYC zip and skip the
     # state mapping → every zipless campaign got audited from New York. (2026-06-12)
-    assigned_zip = (entry.get("proxy") or {}).get("zip") or ""
+    assigned_zip = _assigned_proxy_zip(entry)
     state_code = entry.get("state", "")
     # Canadian businesses (province code, not US state) must target country-ca —
     # US zip resolution would map them to a NYC fallback IP and the rank would be

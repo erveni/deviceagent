@@ -18,6 +18,19 @@ class RankingReleaseTests(unittest.TestCase):
                 check(dict(RANK_COST_MEASUREMENT='1', RANK_RETRY_ROUNDS='0',
                            GOST_COST_LEDGER='/tmp/test-ledger', MAX_JOBS=maximum))
 
+    def test_production_release_requires_complete_wifi_controls_and_allowlist(self):
+        released=dict(RANK_COST_ROLLOUT='copilot-wifi-v1',
+            RANK_COPILOT_OFFLINE_BOOTSTRAP='1',RANK_COPILOT_WIFI_SETTLE='1',
+            RANK_COPILOT_WIFI_ROLLOUT='1',
+            RANK_COPILOT_WIFI_ROLLOUT_DEVICES='device-104,device-106')
+        check(released)
+        for missing in ('RANK_COPILOT_OFFLINE_BOOTSTRAP','RANK_COPILOT_WIFI_SETTLE',
+                        'RANK_COPILOT_WIFI_ROLLOUT','RANK_COPILOT_WIFI_ROLLOUT_DEVICES'):
+            broken=released.copy();broken.pop(missing)
+            with self.assertRaises(ValueError):check(broken)
+        broken=released.copy();broken['RANK_COPILOT_WIFI_ROLLOUT_DEVICES']='device-125'
+        with self.assertRaises(ValueError):check(broken)
+
     def test_second_phone_scope_cannot_expand_to_test_or_failed_phones(self):
         with patch.dict('os.environ',COPILOT_ROLLOUT_DEVICE='device-106'):
             self.assertEqual(selected_device()[1],'149145555W006477')

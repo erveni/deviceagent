@@ -20,6 +20,15 @@ def check(env):
         if not 1 <= jobs <= 20:
             raise ValueError('Measured ranking requires MAX_JOBS between 1 and 20')
         return
+    if env.get('RANK_COST_ROLLOUT') == 'copilot-wifi-v1':
+        required = ('RANK_COPILOT_OFFLINE_BOOTSTRAP','RANK_COPILOT_WIFI_SETTLE',
+                    'RANK_COPILOT_WIFI_ROLLOUT')
+        if any(env.get(name) != '1' for name in required):
+            raise ValueError('Released ranking requires the settled Copilot Wi-Fi path')
+        labels={value.strip() for value in env.get('RANK_COPILOT_WIFI_ROLLOUT_DEVICES','').split(',') if value.strip()}
+        if not labels or labels & {'device-108','device-125'}:
+            raise ValueError('Released ranking requires a safe explicit rollout allow-list')
+        return
     raise ValueError('Ranking cost rollout is not released yet. Refusing the old expensive '
                      'path. Complete measured rollout/device readiness before resuming the queue.')
 
