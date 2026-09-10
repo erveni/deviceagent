@@ -16,6 +16,10 @@ before offline reset, retries only read-only health probes, and prefers the term
 postal ZIP over a legacy catalog field that had parsed the street number as ZIP.
 Regression tests cover the port, ZIP and release gates.
 
+Stale production also retains `RANK_SINGLE_ATTEMPT=1`: an OCR failure returns to
+the outer reconciler, which starts a fresh offline preparation, instead of trying
+to reuse the one-use preparation proof for an expensive in-job recapture.
+
 ## Second-phone checkpoint —05:09 Manila
 
 Device106, same keyword5225, fresh Edge Wi-Fi settlement:

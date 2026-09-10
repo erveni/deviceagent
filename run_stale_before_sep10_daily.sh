@@ -10,6 +10,8 @@ DATE=2026-09-02
 FLOOR_MB="${FLOOR_MB:-9000}"
 LOG="$PWD/stale_before_sep10_daily.log"
 MARK="$PWD/.stale_${DATE}_complete"
+KW_DATE_MAP="$PWD/stale_${DATE}_last_rank_by_keyword.json"
+PP_DATE_MAP="$PWD/stale_${DATE}_last_rank_by_platform.json"
 ROLLOUT_DEVICES=device-104,device-106
 EXCLUDES=device-102,device-103,device-105,device-107,device-108,device-109,device-110,device-111,device-112,device-113,device-114,device-115,device-116,device-117,device-118,device-119,device-120,device-121,device-122,device-123,device-124,device-125
 
@@ -27,6 +29,14 @@ launchctl disable "gui/$(id -u)/com.deviceagent.dailyfull" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)/com.deviceagent.dailyfull" 2>/dev/null || true
 [ -f "$MARK" ] && { say "stale already complete; September 10 daily remains held for review"; exit 0; }
 
+# Freeze dates from records strictly before the historical run label. These files
+# survive /tmp cleanup and must never be rebuilt from same-day results.
+if [ ! -s "$KW_DATE_MAP" ] || [ ! -s "$PP_DATE_MAP" ]; then
+  python3 tools/build_stale_date_maps.py "$DATE" /tmp/rr_admin.json "$KW_DATE_MAP" "$PP_DATE_MAP" >>"$LOG" 2>&1 || {
+    say "FATAL: could not freeze stale-date maps"; exit 1;
+  }
+fi
+
 current=$(balance); whole=${current%.*}
 if [ -z "$whole" ] || [ "$whole" -le "$FLOOR_MB" ]; then
   say "PAUSED before launch: balance=${current:-unknown} MB floor=${FLOOR_MB} MB"
@@ -40,7 +50,7 @@ PROXY_PROVIDER=evomi SKIP_BASE=1 WORKERS_CAP=2 \
   RANK_COST_ROLLOUT=copilot-wifi-v1 \
   RANK_COPILOT_OFFLINE_BOOTSTRAP=1 RANK_COPILOT_WIFI_SETTLE=1 \
   RANK_COPILOT_WIFI_ROLLOUT=1 RANK_COPILOT_WIFI_ROLLOUT_DEVICES="$ROLLOUT_DEVICES" \
-  RANK_COPILOT_MIN_VERSION=88 \
+  RANK_COPILOT_MIN_VERSION=88 RANK_SINGLE_ATTEMPT=1 \
   ./run_ranking_auto.sh "$DATE" stale >>"$LOG" 2>&1 &
 runner=$!
 
@@ -64,9 +74,15 @@ remaining=$(DATE="$DATE" KEYWORD_IDS_FILE="/tmp/ranking_kw_ids_${DATE}.json" \
   RETRY_KEEP_NORANK=1 DRY_RUN=1 PLATFORMS=chatgpt,gemini,copilot WORKERS=1 \
   python3 run_ranking.py 2>>"$LOG" | sed -n 's/.*would run \([0-9]*\) ranking.*/\1/p')
 if [ "$remaining" = "0" ]; then
+  say "ranking converged; consolidating by each platform's prior date +14"
+  DATE="$DATE" USE_14DAY=1 LASTRANK_FILE="$KW_DATE_MAP" LASTRANK_PP_FILE="$PP_DATE_MAP" \
+    OUT_NAME="ranking_stale_${DATE}_consolidated.csv" PLATFORMS=chatgpt,gemini,copilot \
+    python3 consolidate_ranking.py >>"$LOG" 2>&1 || { say "FATAL: consolidation failed"; exit 1; }
+  python3 tools/verify_stale_consolidation.py "$DATE" \
+    "$PWD/ranking_stale_${DATE}_consolidated.csv" "$KW_DATE_MAP" "$PP_DATE_MAP" /tmp/kw_admin.json \
+    >>"$LOG" 2>&1 || { say "FATAL: stale-date verification failed"; exit 1; }
   touch "$MARK"
-  say "STALE COMPLETE; September 10 daily is now eligible but remains held for review"
+  say "STALE COMPLETE + DATES VERIFIED; September 10 daily is eligible but remains held for review"
 else
   say "STOPPED rc=${rc} remaining=${remaining:-unknown}; September 10 daily remains disabled"
 fi
-
