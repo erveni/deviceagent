@@ -93,9 +93,9 @@ _relays_by_cfg = {}              # gost cfg path -> [relay Popen, ...]
 _relays_lock = threading.Lock()
 
 DEVICES = [
-    # NOTE: device-101 (samsung SM-A075F, R83L112EVWK) is reserved for Copilot/Edge
-    # automation development — kept out of the fleet so daily/ranking runs never grab it.
-    # ("device-101", "adb-R83L112EVWK-PydBnX (2)._adb-tls-connect._tcp"),
+    # device-101 rejoined production for the explicitly approved all-phone stale
+    # run after the v88 health gate. device-125 remains the protected test handset.
+    ("device-101", "adb-R83L112EVWK-PydBnX (2)._adb-tls-connect._tcp"),
     ("device-102", "adb-10HFBBFEBZ000RA-dvvJ3y (2)._adb-tls-connect._tcp"),
     ("device-103", "adb-149145555W001028-XsQtPA (2)._adb-tls-connect._tcp"),
     ("device-104", "adb-149145555W002883-aGtZ5h (2)._adb-tls-connect._tcp"),

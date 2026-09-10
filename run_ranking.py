@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, "/Users/seolocalph/projects/device-agent")
 from audit_dispatch_http import build_audit_dispatch_job, dispatch_audit_job
 from run_with_proxy import DEVICES
+from ranking_job_order import mixed_platform_order
 
 import datetime as _dt
 ANCHOR_DATE = os.environ.get("DATE", "2026-06-08")
@@ -434,6 +435,13 @@ if os.environ.get("EXCLUDE_SUCCESS"):
     job_specs = [(k, b, p, t) for (k, b, p, t) in job_specs
                  if (str(b["id"] * 10000 + k["id"]), p) not in _done]
     print(f"[retry] EXCLUDE_SUCCESS (terminal={sorted(_terminal)}): {_b} -> {len(job_specs)} (skipped {_b - len(job_specs)})")
+
+# Mix all requested platforms in every wave instead of inheriting catalog order.
+# The seed makes retries reproducible while keyword order within each platform is
+# randomized. A bounded MAX_JOBS sample therefore cannot become Copilot-only.
+if os.environ.get('RANK_SHUFFLE_JOBS','1') == '1':
+    job_specs=mixed_platform_order(job_specs,f'{ANCHOR_DATE}|{SOURCE_TAG}|platform-mix-v1')
+    print('[order] deterministic platform-balanced shuffle enabled',flush=True)
 
 # Applies after the terminal-result filter, making a meter-backed experiment
 # genuinely bounded. Normal ranking remains unlimited when MAX_JOBS is unset.
