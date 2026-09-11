@@ -20,7 +20,7 @@ run. So resolve each DEVICES entry to its CURRENTLY-ONLINE serial by hardware
 core (the token after "adb-", stable across flaps) before probing — matching
 run_with_proxy.py's _hw_core so probe and the runner agree on what is up.
 """
-import subprocess, sys, urllib.request
+import os,subprocess,sys,time,urllib.request
 from device_dispatch import DEVICES
 
 
@@ -62,20 +62,30 @@ def probe(ser, port):
                         capture_output=True, text=True).stdout.strip()
     if st != "device":
         return False
-    try:
-        return urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=4).status == 200
-    except urllib.error.HTTPError as e:
-        return e.code == 200
-    except Exception:
-        return False
+    for attempt in range(3):
+        try:
+            return urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=4).status == 200
+        except urllib.error.HTTPError as e:
+            if e.code == 200:return True
+        except Exception:
+            pass
+        if attempt<2:time.sleep(0.5)
+    return False
 
 
 online_by_core = _online_by_core()
+excluded={value.strip() for value in os.environ.get('DEVICE_EXCLUDE','').split(',') if value.strip()}
+excluded.add('device-125')
+trust_adb_online=os.environ.get('RANK_TRUST_ADB_ONLINE')=='1'
 down, good = [], 0
 for i, (label, ser) in enumerate(DEVICES):
+    if label in excluded:
+        down.append(label)
+        print(f"  {label}: EXCLUDED",file=sys.stderr)
+        continue
     # probe the phone's LIVE serial (resolved by hw-core), not the stale DEVICES one
     live = online_by_core.get(_hw_core(ser), ser)
-    if probe(live, 8765 + i):
+    if (trust_adb_online and _hw_core(ser) in online_by_core) or probe(live, 8765 + i):
         good += 1
     else:
         down.append(label)
