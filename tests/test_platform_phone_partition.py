@@ -12,6 +12,8 @@ class PlatformPhonePartitionTests(unittest.TestCase):
         self.assertIn("RANK_COPILOT_WIFI_ROLLOUT_DEVICES",audit)
         self.assertIn('allowed_labels=allowed_labels',audit)
         self.assertIn("RANK_CACHE_MIN_VERSION", audit)
+        supervisor=(root/'run_stale_before_sep10_daily.sh').read_text()
+        self.assertIn('RANK_CACHE_LOW_COST_DEVICES="$ROLLOUT_DEVICES"',supervisor)
 
 
 if __name__=='__main__':unittest.main()

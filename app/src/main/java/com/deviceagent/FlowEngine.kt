@@ -561,21 +561,40 @@ class FlowEngine(private val s: AgentAccessibilityService) {
 
     fun submitGeminiAudit(): Boolean {
         if (geminiAuditPrompt.isBlank()) return false
-        repeat(2) { attempt ->
+        repeat(3) attempts@ { attempt ->
+            // Some fresh logged-out profiles expose a site microphone permission
+            // dialog after the prompt is entered. Never grant it: dismiss the
+            // exact denial action, then continue to the identified Send button.
+            val denyMic = s.findNode(text = "Never allow", timeoutMs = 250)
+                ?: s.findNode(contentDesc = "Never allow", timeoutMs = 250)
+            if (denyMic != null) {
+                s.clickNode(denyMic)
+                denyMic.recycle()
+                Thread.sleep(400)
+            }
             // Gemini renders a hidden zero-size EditText alongside the visible
             // composer.  A generic first-input lookup can select that empty node
             // and falsely reject a fully entered prompt.
             val field = findGeminiAuditPromptField()
             val verified = field != null
             field?.recycle()
-            if (!verified) return false
-            val node = findSendNode() ?: return false
+            if (!verified) {
+                Thread.sleep(500)
+                return@attempts
+            }
+            val node = findSendNode()
+            if (node == null) {
+                Thread.sleep(500)
+                return@attempts
+            }
             val labels = listOf(node.text?.toString(), node.contentDescription?.toString()).filterNotNull()
             val bounds = android.graphics.Rect(); node.getBoundsInScreen(bounds)
             val identified = labels.any { it.trim().lowercase() in setOf("send", "send message", "send prompt", "submit") }
             if (!identified || !node.isEnabled || bounds.width() <= 0 || bounds.height() <= 0 ||
                 bounds.centerY() < s.screenHeight() / 2 || bounds.bottom > s.screenHeight()) {
-                node.recycle(); return false
+                node.recycle()
+                Thread.sleep(500)
+                return@attempts
             }
             if (attempt == 0) s.clickNode(node)
             else s.gestureTap(bounds.centerX().toFloat(), bounds.centerY().toFloat())

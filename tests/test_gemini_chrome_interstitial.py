@@ -43,6 +43,16 @@ class GeminiChromeInterstitialTests(unittest.TestCase):
         server = (root / 'app/src/main/java/com/deviceagent/AgentHttpServer.kt').read_text()
         self.assertIn('flowEngine.lastGenerationFailure ?: "generation timeout"', server)
 
+    def test_gemini_submit_retries_and_denies_microphone(self):
+        source = (Path(__file__).resolve().parents[1] /
+                  'app/src/main/java/com/deviceagent/FlowEngine.kt').read_text()
+        submit = source[source.index('fun submitGeminiAudit'):
+                        source.index('fun waitForGeminiAudit')]
+        self.assertIn('repeat(3) attempts@', submit)
+        self.assertIn('"Never allow"', submit)
+        self.assertIn('return@attempts', submit)
+        self.assertNotIn('findSendNode() ?: return false', submit)
+
 
 if __name__ == '__main__':
     unittest.main()
