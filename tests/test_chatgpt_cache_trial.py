@@ -14,6 +14,11 @@ from tools.direct_evidence_gate import validate_direct_answer
 
 
 class ChatGPTCacheTests(unittest.TestCase):
+    def test_android_native_newtab_is_the_only_allowed_native_page(self):
+        self.assertTrue(reset._allowed_url('chrome-native://newtab/'))
+        self.assertTrue(reset._allowed_url('chrome-native://newtab'))
+        self.assertFalse(reset._allowed_url('chrome-native://history/'))
+
     def test_compositor_rounding_is_not_real_scrolling(self):
         before=dict(x=0,y=102.13449,width=300,height=527.42859,scale=1)
         self.assertTrue(_same_clip_with_subpixel_rounding(before,dict(before,y=102.14286)))

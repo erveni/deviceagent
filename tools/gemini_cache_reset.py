@@ -53,7 +53,12 @@ def _call(client, method, params=None):
 
 
 def _allowed_url(url):
-    if url in ('about:blank', 'chrome://newtab/', 'chrome://newtab'):
+    # Recent Android Chrome exposes its ordinary New Tab page through CDP as
+    # chrome-native://newtab/ after a completed native flow.  It is the same
+    # neutral browser-owned surface as chrome://newtab/, not an unrelated web
+    # origin.  Reject every other chrome-native URL exactly as before.
+    if url in ('about:blank', 'chrome://newtab/', 'chrome://newtab',
+               'chrome-native://newtab/', 'chrome-native://newtab'):
         return True
     parsed = urllib.parse.urlsplit(url)
     if (parsed.scheme == 'https' and parsed.hostname == 'www.google.com'

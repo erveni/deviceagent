@@ -536,11 +536,37 @@ class FlowEngine(private val s: AgentAccessibilityService) {
     }
 
     /** No fixed-position fallback: an unidentified button may be the microphone. */
+    private fun findGeminiAuditPromptField(): android.view.accessibility.AccessibilityNodeInfo? {
+        val root = s.rootInActiveWindow ?: return null
+        fun visit(node: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
+            val bounds = android.graphics.Rect()
+            node.getBoundsInScreen(bounds)
+            if (node.className?.toString() == "android.widget.EditText" &&
+                bounds.width() > 0 && bounds.height() > 0 &&
+                GeminiAuditEvidence.promptMatches(node.text?.toString() ?: "", geminiAuditPrompt)) {
+                return android.view.accessibility.AccessibilityNodeInfo.obtain(node)
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                val found = visit(child)
+                child.recycle()
+                if (found != null) return found
+            }
+            return null
+        }
+        val found = visit(root)
+        root.recycle()
+        return found
+    }
+
     fun submitGeminiAudit(): Boolean {
         if (geminiAuditPrompt.isBlank()) return false
         repeat(2) { attempt ->
-            val field = s.findInputField(timeoutMs = 800)
-            val verified = GeminiAuditEvidence.promptMatches(field?.text?.toString() ?: "", geminiAuditPrompt)
+            // Gemini renders a hidden zero-size EditText alongside the visible
+            // composer.  A generic first-input lookup can select that empty node
+            // and falsely reject a fully entered prompt.
+            val field = findGeminiAuditPromptField()
+            val verified = field != null
             field?.recycle()
             if (!verified) return false
             val node = findSendNode() ?: return false
@@ -1613,7 +1639,13 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         if (platform.lowercase() == "perplexity") Thread.sleep(2500)
 
         val popups = when (platform.lowercase()) {
-            "gemini" -> listOf("No thanks", "Try it", "Close banner")
+            "gemini" -> listOf(
+                // Cache-preserving Chrome identity reset can expose Chrome's
+                // signed-out profile chooser on the next navigation.  Dismiss
+                // it before looking for Gemini's composer.
+                "Stay signed out", "Use without an account", "Not now",
+                "No thanks", "Try it", "Close banner"
+            )
             "chatgpt" -> listOf(
                 "Reject non-essential", "Reject all", "Close", "Stay logged out",
                 "Not now", "Maybe later", "Skip", "Stay signed out",

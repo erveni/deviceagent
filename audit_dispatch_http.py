@@ -589,6 +589,13 @@ def _name_candidates(biz: str, aka: str = ""):
     dash_seg = _norm_name(biz.split(" - ")[0]) if " - " in biz else ""
     if dash_seg and dash_seg not in {c for c, _ in out}:
         out.append((dash_seg, True))
+    # A vertical bar commonly separates the public business name from a search
+    # descriptor ("Brazil Bronze Tanning Salon NYC | Spray Tan NYC").  Results
+    # correctly show only the public name.  Treat that explicit left-hand name
+    # as a strict candidate so it cannot match a longer competitor name.
+    pipe_seg = _norm_name(biz.split("|", 1)[0]) if "|" in biz else ""
+    if pipe_seg and pipe_seg not in {c for c, _ in out}:
+        out.append((pipe_seg, True))
     out += [(_norm_name(a), False) for a in (aka or "").split(",")]
     return [(c, strict) for c, strict in out if len(c) >= 3]
 
@@ -609,7 +616,16 @@ def _name_matches(cand: str, listed: str, strict: bool = False) -> bool:
     if not strict and cand in listed:
         return True
     ct, lt = _toks(cand), _toks(listed)
-    return bool(ct) and ct == lt
+    if not ct:
+        return False
+    if ct == lt:
+        return True
+    # Campaign names sometimes append one location token without punctuation
+    # ("Today's Dentistry Nampa"), while the ranked listing uses the public
+    # name ("Today's Dentistry").  Require at least two distinctive listed
+    # tokens and exactly one extra campaign token; never apply this relaxation
+    # to already-derived strict candidates.
+    return not strict and len(lt) >= 2 and lt < ct and len(ct - lt) == 1
 
 
 def _rank_inconsistent(response_text: str, biz: str, platform: str, aka: str = "") -> bool:
@@ -745,6 +761,33 @@ def _adb(serial: str, *args: str, timeout: float = 10) -> subprocess.CompletedPr
     """Run an adb command, quoting the serial properly."""
     cmd = ["adb", "-s", serial] + list(args)
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def _dismiss_chrome_fre_off_proxy(serial: str) -> None:
+    """Dismiss only Chrome-owned first-run buttons before CDP preparation.
+
+    A stopped Chrome can reopen in FirstRunActivity, which intentionally has no
+    reachable DevTools page.  Use exact resource IDs and refuse to continue if
+    the first-run activity remains; this runs before Gost and submits no prompt.
+    """
+    from tools.chrome_low_cost_bootstrap import center_for_resource
+    for _ in range(6):
+        _adb(serial, 'shell', 'uiautomator', 'dump', '/sdcard/rank_chrome_fre.xml', timeout=20)
+        xml = _adb(serial, 'shell', 'cat', '/sdcard/rank_chrome_fre.xml', timeout=10).stdout
+        target = None
+        for resource in ('com.android.chrome:id/signin_fre_dismiss_button',
+                         'com.android.chrome:id/negative_button', 'android:id/button1'):
+            target = center_for_resource(xml, resource)
+            if target:
+                _adb(serial, 'shell', 'input', 'tap', str(target[0]), str(target[1]))
+                time.sleep(1)
+                break
+        if not target:
+            break
+    activity = _adb(serial, 'shell', 'dumpsys', 'activity', 'activities', timeout=10).stdout
+    top = next((line for line in activity.splitlines() if 'topResumedActivity' in line), '')
+    if 'FirstRunActivity' in top:
+        raise RuntimeError('Chrome first-run UI did not complete off-proxy')
 
 
 def _wait_tunnel(serial: str, max_attempts: int | None = None) -> bool:
@@ -1420,6 +1463,14 @@ def dispatch_audit_job(
             raise RuntimeError('Cache-preserving ranking requires accessible v88+')
         from tools.gemini_cache_reset import prepare_chatgpt_cache,prepare_gemini_cache
         phase('offline_cache_prepare_start')
+        # A previous native flow can leave DeviceAgent in the foreground and
+        # Chrome fully stopped.  CDP identity reset requires one live Chrome
+        # profile, so start its ordinary activity while still off-proxy.  This
+        # does not navigate to an AI service or submit a prompt.
+        _adb(serial, 'shell', 'am', 'start', '-n',
+             'com.android.chrome/com.google.android.apps.chrome.Main', timeout=10)
+        time.sleep(1)
+        _dismiss_chrome_fre_off_proxy(serial)
         offline_cache_proof=(prepare_chatgpt_cache(serial,authorized_production=True)
                              if platform.lower()=='chatgpt'
                              else prepare_gemini_cache(serial,authorized_production=True))

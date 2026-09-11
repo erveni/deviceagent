@@ -20,7 +20,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
         const val APP_VERSION_NAME = "0.9.71-copilot-wifi-rollout"
-        const val APP_VERSION_CODE = 88
+        const val APP_VERSION_CODE = 90
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
