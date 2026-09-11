@@ -20,7 +20,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
         const val APP_VERSION_NAME = "0.9.71-copilot-wifi-rollout"
-        const val APP_VERSION_CODE = 90
+        const val APP_VERSION_CODE = 91
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -385,7 +385,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         Thread.sleep(if (platform == "gemini") 400 else 2000)
                         if (!step("wait_generation") { if (platform == "gemini") flowEngine.waitForGeminiAudit(genTimeoutSec) else flowEngine.waitForGeneration(timeoutSec = genTimeoutSec) }) {
                             capture("")
-                            pr.status = "error"; pr.error = "generation timeout"; continue
+                            pr.status = "error"; pr.error = flowEngine.lastGenerationFailure ?: "generation timeout"; continue
                         }
                     }
 

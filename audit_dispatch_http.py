@@ -1458,9 +1458,13 @@ def dispatch_audit_job(
                 break
             except Exception:
                 if attempt<2:time.sleep(1)
-        if not health or type(health.get('versionCode')) is not int or health['versionCode']<88 or health.get('accessibility') is not True:
+        cache_min_version = int(os.environ.get('RANK_CACHE_MIN_VERSION', '91'))
+        if (not health or type(health.get('versionCode')) is not int
+                or health['versionCode'] < cache_min_version
+                or health.get('accessibility') is not True):
             POOL.release(device_idx)
-            raise RuntimeError('Cache-preserving ranking requires accessible v88+')
+            raise RuntimeError(
+                f'Cache-preserving ranking requires accessible v{cache_min_version}+')
         from tools.gemini_cache_reset import prepare_chatgpt_cache,prepare_gemini_cache
         phase('offline_cache_prepare_start')
         # A previous native flow can leave DeviceAgent in the foreground and

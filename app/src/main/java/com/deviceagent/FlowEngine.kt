@@ -1703,8 +1703,12 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
     }
 
+    var lastGenerationFailure: String? = null
+        private set
+
     fun waitForGeneration(timeoutSec: Int = 240): Boolean {
         s.log("── WAIT FOR GENERATION ──")
+        lastGenerationFailure = null
         val start = System.currentTimeMillis()
         val timeout = timeoutSec * 1000L
         // New logged-out Gemini (3.5) produces an answer then RESETS to the welcome
@@ -1717,6 +1721,18 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         var sawStreaming = false
         while (System.currentTimeMillis() - start < timeout) {
             Thread.sleep(2000)
+            // ChatGPT can accept the prompt and then reject anonymous generation
+            // for a particular residential exit. Detect the rendered wall early
+            // so the host can classify it and obtain a fresh exit on the next
+            // bounded attempt instead of paying/waiting for the full timeout.
+            val signupWall = s.findNode(text = "Sign in is required to continue", timeoutMs = 250)
+                ?: s.findNode(text = "Sign in to continue", timeoutMs = 250)
+            if (signupWall != null) {
+                signupWall.recycle()
+                lastGenerationFailure = "signup_wall"
+                s.log("Anonymous generation blocked by sign-in wall")
+                return false
+            }
             val stopBtn = s.findNode(contentDesc = "Stop streaming", timeoutMs = 500)
                 ?: s.findNode(contentDesc = "Stop generating", timeoutMs = 500)
                 ?: s.findNode(contentDesc = "Stop response", timeoutMs = 500)
@@ -1739,6 +1755,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                 return true
             }
         }
+        lastGenerationFailure = "generation timeout"
         s.log("Timeout waiting for generation")
         return false
     }

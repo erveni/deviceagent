@@ -33,6 +33,16 @@ class GeminiChromeInterstitialTests(unittest.TestCase):
                         source.index('fun waitForGeminiAudit')]
         self.assertIn('findGeminiAuditPromptField()', submit)
 
+    def test_chatgpt_signup_wall_is_reported_without_full_timeout(self):
+        root = Path(__file__).resolve().parents[1]
+        flow = (root / 'app/src/main/java/com/deviceagent/FlowEngine.kt').read_text()
+        wait = flow[flow.index('fun waitForGeneration'):
+                    flow.index('// ── response text capture')]
+        self.assertIn('Sign in is required to continue', wait)
+        self.assertIn('lastGenerationFailure = "signup_wall"', wait)
+        server = (root / 'app/src/main/java/com/deviceagent/AgentHttpServer.kt').read_text()
+        self.assertIn('flowEngine.lastGenerationFailure ?: "generation timeout"', server)
+
 
 if __name__ == '__main__':
     unittest.main()
