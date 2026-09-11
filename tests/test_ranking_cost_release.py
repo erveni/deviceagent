@@ -22,7 +22,7 @@ class RankingReleaseTests(unittest.TestCase):
         released=dict(RANK_COST_ROLLOUT='copilot-wifi-v1',
             RANK_COPILOT_OFFLINE_BOOTSTRAP='1',RANK_COPILOT_WIFI_SETTLE='1',
             RANK_COPILOT_WIFI_ROLLOUT='1',
-            RANK_COPILOT_WIFI_ROLLOUT_DEVICES='device-104,device-106')
+            RANK_COPILOT_WIFI_ROLLOUT_DEVICES='device-104,device-106',PLATFORMS='copilot')
         check(released)
         for missing in ('RANK_COPILOT_OFFLINE_BOOTSTRAP','RANK_COPILOT_WIFI_SETTLE',
                         'RANK_COPILOT_WIFI_ROLLOUT','RANK_COPILOT_WIFI_ROLLOUT_DEVICES'):
@@ -33,6 +33,15 @@ class RankingReleaseTests(unittest.TestCase):
         broken=released.copy();broken['RANK_COPILOT_WIFI_ROLLOUT_DEVICES']='device-108'
         with self.assertRaises(ValueError):check(broken)
         broken['RANK_ALLOW_QUARANTINED_DEVICE_108']='1';check(broken)
+
+    def test_unreleased_chatgpt_and_gemini_are_blocked(self):
+        base=dict(RANK_COST_ROLLOUT='copilot-wifi-v1',
+            RANK_COPILOT_OFFLINE_BOOTSTRAP='1',RANK_COPILOT_WIFI_SETTLE='1',
+            RANK_COPILOT_WIFI_ROLLOUT='1',RANK_COPILOT_WIFI_ROLLOUT_DEVICES='device-104')
+        for platform in ('chatgpt','gemini','chatgpt,gemini,copilot'):
+            with self.assertRaises(ValueError):check({**base,'PLATFORMS':platform})
+        check({**base,'PLATFORMS':'chatgpt,gemini,copilot',
+               'RANK_CHATGPT_LOW_COST_RELEASED':'1','RANK_GEMINI_LOW_COST_RELEASED':'1'})
 
     def test_second_phone_scope_cannot_expand_to_test_or_failed_phones(self):
         with patch.dict('os.environ',COPILOT_ROLLOUT_DEVICE='device-106'):

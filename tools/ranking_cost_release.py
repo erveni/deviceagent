@@ -30,6 +30,11 @@ def check(env):
             raise ValueError('Released ranking requires a safe explicit rollout allow-list')
         if 'device-108' in labels and env.get('RANK_ALLOW_QUARANTINED_DEVICE_108') != '1':
             raise ValueError('device-108 requires an explicit quarantine override')
+        platforms={value.strip().lower() for value in env.get('PLATFORMS','chatgpt,gemini,copilot').split(',') if value.strip()}
+        if 'chatgpt' in platforms and env.get('RANK_CHATGPT_LOW_COST_RELEASED')!='1':
+            raise ValueError('ChatGPT ranking is blocked until its low-cost path is released')
+        if 'gemini' in platforms and env.get('RANK_GEMINI_LOW_COST_RELEASED')!='1':
+            raise ValueError('Gemini ranking is blocked until its low-cost path is released')
         return
     raise ValueError('Ranking cost rollout is not released yet. Refusing the old expensive '
                      'path. Complete measured rollout/device readiness before resuming the queue.')
