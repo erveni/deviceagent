@@ -87,7 +87,9 @@ export AEO_TUNNEL_ATTEMPTS="${AEO_TUNNEL_ATTEMPTS:-15}"
 
 offline_recover(){
   [ "${RANK_OFFLINE_OCR_RECOVERY:-0}" = "1" ] || return 0
-  local tag="$1" out="${CSV%.csv}_offline_recovered_${tag}_$$.csv"
+  local tag out
+  tag="$1"
+  out="${CSV%.csv}_offline_recovered_${tag}_$$.csv"
   echo "[rank ${DATE}] offline OCR recovery before reconciliation (${tag})" | tee -a "$LOG"
   python3 tools/recover_saved_ocr.py "$CSV_GLOB" "$out" >>"$LOG" 2>&1 || {
     echo "[rank ${DATE}] FATAL: offline OCR recovery failed" | tee -a "$LOG"
