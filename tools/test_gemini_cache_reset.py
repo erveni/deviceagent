@@ -268,7 +268,7 @@ class ResetTests(unittest.TestCase):
         page = FakePage(browser)
         cdp = Mock(side_effect=[browser, page])
         opener = Mock()
-        opener.open.side_effect = [OSError('unreachable'),
+        opener.open.side_effect = [
             io.StringIO(json.dumps({'webSocketDebuggerUrl': 'ws://localhost/devtools/browser/b'})),
             io.StringIO(json.dumps([{'id': '1', 'type': 'page', 'url': 'about:blank',
                                     'webSocketDebuggerUrl': 'ws://localhost/devtools/page/fresh'}]))]
@@ -278,12 +278,22 @@ class ResetTests(unittest.TestCase):
              patch.object(reset.urllib.request, 'build_opener', return_value=opener), \
              patch.object(reset.subprocess, 'check_output', side_effect=[
                  b'000 @chrome_devtools_remote\n000 @chrome_devtools_remote_777\n',
-                 b'45677\n', b'45678\n', b'', b'']) as adb:
+                 b'45678\n', b'']) as adb:
             self.assertTrue(reset.prepare_gemini_cache(serial)['ok'])
         commands = [call.args[0] for call in adb.call_args_list]
-        self.assertEqual(commands[-2][-1], 'tcp:45677')
+        self.assertNotIn('localabstract:chrome_devtools_remote', [part for cmd in commands for part in cmd])
         self.assertEqual(commands[-1][-1], 'tcp:45678')
         self.assertEqual(cdp.call_args_list[0].args[0], 'ws://127.0.0.1:45678/devtools/browser/b')
+
+    def test_multiple_pid_sockets_fail_closed_before_forward(self):
+        serial = 'adb-149145555W002883-hash (2)._adb-tls-connect._tcp'
+        with patch.dict(os.environ, {'RANK_SINGLE_ATTEMPT': '1', 'RANK_GEMINI_CACHE_TRIAL': '1'}), \
+             patch.object(reset.subprocess, 'check_output', return_value=(
+                 b'000 @chrome_devtools_remote_777\n000 @chrome_devtools_remote_888\n')) as adb:
+            result = reset.prepare_gemini_cache(serial)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['reason'], 'multiple_pid_chrome_debug_sockets')
+        self.assertEqual(adb.call_count, 1)
 
 
 if __name__ == '__main__':

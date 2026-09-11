@@ -790,6 +790,53 @@ def _dismiss_chrome_fre_off_proxy(serial: str) -> None:
         raise RuntimeError('Chrome first-run UI did not complete off-proxy')
 
 
+def _ensure_cache_agent_ready(serial: str, http_port: int, min_version: int) -> dict:
+    """Restore DeviceAgent readiness before cache preparation, still off-proxy."""
+    def read_health() -> dict | None:
+        try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{http_port}/health', timeout=3) as reply:
+                value = json.load(reply)
+            return value if isinstance(value, dict) else None
+        except Exception:
+            return None
+
+    def acceptable(value: dict | None) -> bool:
+        return bool(value and type(value.get('versionCode')) is int
+                    and value['versionCode'] >= min_version
+                    and value.get('accessibility') is True)
+
+    # Chrome can make Android reclaim the background app process while the
+    # accessibility setting itself remains enabled. Start the dedicated agent
+    # and give its HTTP/accessibility services a bounded chance to bind.
+    _adb(serial, 'shell', 'am', 'start', '-n', 'com.deviceagent/.MainActivity', timeout=10)
+    last = None
+    for _ in range(5):
+        last = read_health()
+        if acceptable(last):
+            return last
+        time.sleep(1)
+
+    # One bounded recovery. Starting the activity after force-stop clears the
+    # package's stopped state; no browser, proxy, or prompt work occurs here.
+    # On the Infinix fleet, force-stop clears the enabled service entry. Stop
+    # first, then restore the setting, then launch; reversing this order leaves
+    # MainActivity visible but /health without an accessibility service.
+    _adb(serial, 'shell', 'am', 'force-stop', 'com.deviceagent', timeout=10)
+    _adb(serial, 'shell', 'settings', 'put', 'secure', 'enabled_accessibility_services',
+         'com.deviceagent/.AgentAccessibilityService', timeout=10)
+    _adb(serial, 'shell', 'settings', 'put', 'secure', 'accessibility_enabled', '1', timeout=10)
+    _adb(serial, 'shell', 'am', 'start', '-n', 'com.deviceagent/.MainActivity', timeout=10)
+    for _ in range(8):
+        last = read_health()
+        if acceptable(last):
+            return last
+        time.sleep(1)
+    version = last.get('versionCode') if last else 'unreachable'
+    accessibility = last.get('accessibility') if last else 'unknown'
+    raise RuntimeError(
+        f'Cache DeviceAgent readiness failed: version={version} accessibility={accessibility}')
+
+
 def _wait_tunnel(serial: str, max_attempts: int | None = None) -> bool:
     """Poll for tun0 UP AND real internet through it. tun0-up alone is NOT enough:
     a dead Decodo exit gives a tunnel with no DNS (DNS_PROBE_FINISHED_NO_INTERNET
@@ -879,6 +926,9 @@ def _ranking_warmup_seconds() -> float:
 
 _RANK_WARMUP_S = _ranking_warmup_seconds()
 _RANK_SINGLE_ATTEMPT = os.environ.get("RANK_SINGLE_ATTEMPT", "0") == "1"
+_CACHE_PREP_MAX_PARALLEL = max(
+    1, min(8, int(os.environ.get('RANK_CACHE_PREP_MAX_PARALLEL', '4'))))
+_CACHE_PREP_SLOTS = threading.BoundedSemaphore(_CACHE_PREP_MAX_PARALLEL)
 
 
 def _use_offline_copilot(platform: str) -> bool:
@@ -1373,6 +1423,15 @@ def dispatch_audit_job(
         return row
 
     device_label, serial = DEVICES[device_idx]
+    # DevicePool installs fixed per-phone forwards once. A former per-job cleanup
+    # removed this mapping while the pool still considered setup complete, so the
+    # next job on that phone could not reach /health. Reassert it on acquisition
+    # and keep it for the lifetime of the runner.
+    http_port = _http_port_for_serial(serial)
+    forward = _adb(serial, 'forward', f'tcp:{http_port}', 'tcp:8765', timeout=5)
+    if forward.returncode:
+        POOL.release(device_idx)
+        raise RuntimeError(f'{device_label} could not install DeviceAgent forward')
     phase_started = time.monotonic()
     gost = None
     network_trace = None
@@ -1449,40 +1508,35 @@ def dispatch_audit_job(
         if not cache_device_allowed(device_label) or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
             POOL.release(device_idx)
             raise RuntimeError('Cache-preserving preparation outside explicit production scope')
-        http_port=_http_port_for_serial(serial)
-        health=None
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(f'http://127.0.0.1:{http_port}/health',timeout=5) as reply:
-                    health=json.load(reply)
-                break
-            except Exception:
-                if attempt<2:time.sleep(1)
-        cache_min_version = int(os.environ.get('RANK_CACHE_MIN_VERSION', '91'))
-        if (not health or type(health.get('versionCode')) is not int
-                or health['versionCode'] < cache_min_version
-                or health.get('accessibility') is not True):
+        cache_min_version = int(os.environ.get('RANK_CACHE_MIN_VERSION', '92'))
+        _CACHE_PREP_SLOTS.acquire()
+        try:
+            health = _ensure_cache_agent_ready(serial, http_port, cache_min_version)
+            from tools.gemini_cache_reset import prepare_chatgpt_cache,prepare_gemini_cache
+            phase('offline_cache_prepare_start')
+            # A previous native flow can leave DeviceAgent in the foreground and
+            # Chrome fully stopped. Start its ordinary activity while off-proxy.
+            _adb(serial, 'shell', 'am', 'start', '-n',
+                 'com.android.chrome/com.google.android.apps.chrome.Main', timeout=10)
+            time.sleep(1)
+            _dismiss_chrome_fre_off_proxy(serial)
+            prepare_cache = (prepare_chatgpt_cache if platform.lower() == 'chatgpt'
+                             else prepare_gemini_cache)
+            offline_cache_proof = prepare_cache(serial, authorized_production=True)
+            reason = str(offline_cache_proof.get('reason', 'unknown'))
+            if (not offline_cache_proof.get('ok')
+                    and reason.startswith('target_teardown_check_failed:')):
+                time.sleep(1)
+                offline_cache_proof = prepare_cache(serial, authorized_production=True)
+            if not offline_cache_proof.get('ok'):
+                raise RuntimeError('Offline cache preparation failed before paid tunnel: '
+                                   + str(offline_cache_proof.get('reason', 'unknown')))
+            phase('offline_cache_prepare_done')
+        except Exception as error:
             POOL.release(device_idx)
-            raise RuntimeError(
-                f'Cache-preserving ranking requires accessible v{cache_min_version}+')
-        from tools.gemini_cache_reset import prepare_chatgpt_cache,prepare_gemini_cache
-        phase('offline_cache_prepare_start')
-        # A previous native flow can leave DeviceAgent in the foreground and
-        # Chrome fully stopped.  CDP identity reset requires one live Chrome
-        # profile, so start its ordinary activity while still off-proxy.  This
-        # does not navigate to an AI service or submit a prompt.
-        _adb(serial, 'shell', 'am', 'start', '-n',
-             'com.android.chrome/com.google.android.apps.chrome.Main', timeout=10)
-        time.sleep(1)
-        _dismiss_chrome_fre_off_proxy(serial)
-        offline_cache_proof=(prepare_chatgpt_cache(serial,authorized_production=True)
-                             if platform.lower()=='chatgpt'
-                             else prepare_gemini_cache(serial,authorized_production=True))
-        if not offline_cache_proof.get('ok'):
-            POOL.release(device_idx)
-            raise RuntimeError('Offline cache preparation failed before paid tunnel: '
-                               +str(offline_cache_proof.get('reason','unknown')))
-        phase('offline_cache_prepare_done')
+            raise RuntimeError(f'{device_label} cache preparation failed: {error}') from error
+        finally:
+            _CACHE_PREP_SLOTS.release()
 
     # Start gost
     seq = next(_gost_seq)
@@ -1577,9 +1631,7 @@ def dispatch_audit_job(
         relay_proc = _relay_start(phone_port, gost_port)
         time.sleep(1)
 
-    http_port = _http_port_for_serial(serial)
     started = datetime.now(timezone.utc)
-    forward_set = False
 
     def _setup_and_post() -> dict:
         """Bring socksdroid + GPS + forwarding online then POST the audit.
@@ -1867,7 +1919,6 @@ def dispatch_audit_job(
         return result
 
     try:
-        forward_set = True  # _setup_and_post installs the forward
         response = _setup_and_post()
 
         # Retry once with a fresh Decodo session if the proxy IP is the suspect.
@@ -2281,11 +2332,6 @@ def dispatch_audit_job(
             append_row(csv_path, row)
         return row
     finally:
-        if forward_set:
-            try:
-                _adb(serial, "forward", "--remove", f"tcp:{http_port}", timeout=5)
-            except Exception:
-                pass
         phase("before_disconnect")
         if network_trace is not None:
             try:

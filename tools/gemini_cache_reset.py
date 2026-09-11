@@ -295,6 +295,19 @@ def reset_gemini_preserving_http_cache(serial: str, *, authorized_test_phone: bo
         names = sorted(set(re.findall(r'@((?:chrome_devtools_remote)(?:_\d+)?)\b', unix)))
         if not names:
             raise ResetRefused('no_chrome_debug_socket')
+        # Android Chrome commonly exposes the same live browser through both
+        # @chrome_devtools_remote and @chrome_devtools_remote_<main-pid> after a
+        # real navigation. Treat the unsuffixed endpoint as an alias when there
+        # is exactly one PID-owned endpoint. Multiple suffixed endpoints remain
+        # ambiguous and fail closed rather than guessing between processes.
+        suffixed = [name for name in names if re.fullmatch(r'chrome_devtools_remote_\d+', name)]
+        if len(suffixed) > 1:
+            raise ResetRefused('multiple_pid_chrome_debug_sockets', evidence={
+                'socket_count': len(names), 'pid_socket_count': len(suffixed)})
+        if len(suffixed) == 1:
+            names = suffixed
+        elif 'chrome_devtools_remote' in names:
+            names = ['chrome_devtools_remote']
         candidates = []
         for name in names:
             port = int(adb('forward', 'tcp:0', 'localabstract:' + name).strip())

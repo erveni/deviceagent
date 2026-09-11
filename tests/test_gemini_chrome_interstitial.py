@@ -53,6 +53,32 @@ class GeminiChromeInterstitialTests(unittest.TestCase):
         self.assertIn('return@attempts', submit)
         self.assertNotIn('findSendNode() ?: return false', submit)
 
+    def test_cache_dispatch_self_heals_agent_before_chrome(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'audit_dispatch_http.py').read_text()
+        helper = source[source.index('def _ensure_cache_agent_ready'):
+                        source.index('def _wait_tunnel')]
+        self.assertIn("'com.deviceagent/.MainActivity'", helper)
+        self.assertIn("'enabled_accessibility_services'", helper)
+        self.assertIn("'am', 'force-stop', 'com.deviceagent'", helper)
+        dispatch = source[source.index('if _cache_low_cost_enabled(platform):'):
+                          source.index('# Start gost', source.index('if _cache_low_cost_enabled(platform):'))]
+        self.assertLess(dispatch.index('_ensure_cache_agent_ready'),
+                        dispatch.index('_dismiss_chrome_fre_off_proxy'))
+        self.assertIn('_CACHE_PREP_SLOTS.acquire()', dispatch)
+        self.assertIn('_CACHE_PREP_SLOTS.release()', dispatch)
+        self.assertIn('POOL.release(device_idx)', dispatch)
+        self.assertIn("reason.startswith('target_teardown_check_failed:')", dispatch)
+
+    def test_per_phone_forward_persists_across_jobs(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'audit_dispatch_http.py').read_text()
+        acquired = source[source.index('device_label, serial = DEVICES[device_idx]'):
+                          source.index('phase_started = time.monotonic()')]
+        self.assertIn("'forward', f'tcp:{http_port}', 'tcp:8765'", acquired)
+        cleanup = source[source.index('finally:', source.index('def dispatch_audit_job')):]
+        self.assertNotIn('"forward", "--remove", f"tcp:{http_port}"', cleanup)
+
 
 if __name__ == '__main__':
     unittest.main()
