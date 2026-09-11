@@ -1317,7 +1317,12 @@ def dispatch_audit_job(
               else _screenshot_has_answer)
     )
     POOL.setup_forwards()
-    device_idx = POOL.acquire(timeout=acquire_timeout)
+    allowed_labels=None
+    if _cache_low_cost_enabled(platform):
+        allowed_labels={x.strip() for x in os.environ.get('RANK_CACHE_LOW_COST_DEVICES','').split(',') if x.strip()}
+    elif _use_offline_copilot(platform) and os.environ.get('RANK_COPILOT_WIFI_ROLLOUT')=='1':
+        allowed_labels={x.strip() for x in os.environ.get('RANK_COPILOT_WIFI_ROLLOUT_DEVICES','').split(',') if x.strip()}
+    device_idx = POOL.acquire(timeout=acquire_timeout,allowed_labels=allowed_labels)
     if device_idx is None:
         row = _err_row(job, platform, "device-?", "device_pool_timeout: no idle device")
         if csv_path:

@@ -129,7 +129,8 @@ class DevicePool:
                 run(f'adb -s "{ser}" forward tcp:{8765 + i} tcp:8765')
             self._forwarded = True
 
-    def acquire(self, timeout: float | None = None) -> int | None:
+    def acquire(self, timeout: float | None = None,
+                allowed_labels: set[str] | None = None) -> int | None:
         """Acquire an idle device index, but only from phones that are
         currently adb-reachable. An offline phone is skipped — its slot
         won't be handed out until adb sees it again."""
@@ -144,6 +145,8 @@ class DevicePool:
                 # instead of repeatedly hitting phones 0,1,2 while 3-9 idle.
                 for k in range(n):
                     i = (self._rr_offset + k) % n
+                    if allowed_labels is not None and DEVICES[i][0] not in allowed_labels:
+                        continue
                     if i in self._excluded:
                         continue
                     if not self._busy[i] and DEVICES[i][1] in online:

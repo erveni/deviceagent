@@ -78,8 +78,14 @@ def _pages(client, deadline=None):
     if not isinstance(targets, list):
         raise ResetRefused('missing_target_list')
     pages = [target for target in targets if target.get('type') == 'page']
-    if any(not _allowed_url(target.get('url', '')) for target in pages):
-        raise ResetRefused('unexpected_page_or_browser_context')
+    unexpected=[target.get('url','') for target in pages if not _allowed_url(target.get('url',''))]
+    if unexpected:
+        sanitized=[]
+        for url in unexpected:
+            parsed=urllib.parse.urlsplit(url)
+            sanitized.append({'scheme':parsed.scheme,'host':parsed.hostname or '',
+                              'path':parsed.path[:120]})
+        raise ResetRefused('unexpected_page_or_browser_context',evidence={'pages':sanitized})
     # Android supplies a nonempty context ID even for the ordinary profile.
     # getBrowserContexts lists created/nondefault contexts, not that default ID.
     contexts = query('Target.getBrowserContexts').get('browserContextIds')
