@@ -25,10 +25,12 @@ CLEAR_ORIGINS = (ORIGIN, 'https://www.google.com')
 STORAGE_TYPES = 'cookies,file_systems,indexeddb,local_storage,websql,service_workers,cache_storage,storage_buckets'
 AUTH_COOKIE_NAMES = {'SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID'}
 _CHATGPT_POLICY = ContextVar('chatgpt_cache_policy', default=False)
+_MIXED_PRODUCTION_POLICY = ContextVar('mixed_production_cache_policy', default=False)
 
 
 def _origins():
-    return CLEAR_ORIGINS + (('https://chatgpt.com',) if _CHATGPT_POLICY.get() else ())
+    return CLEAR_ORIGINS + (('https://chatgpt.com',)
+                            if _CHATGPT_POLICY.get() or _MIXED_PRODUCTION_POLICY.get() else ())
 
 
 def _authenticated(cookie):
@@ -58,7 +60,8 @@ def _allowed_url(url):
             and parsed.port in (None, 443) and not parsed.username and not parsed.password
             and parsed.path in ('', '/') and not parsed.query and not parsed.fragment):
         return True  # Known Chrome first-run homepage, never search/accounts.
-    hosts = ('gemini.google.com', 'chatgpt.com') if _CHATGPT_POLICY.get() else ('gemini.google.com',)
+    hosts = (('gemini.google.com', 'chatgpt.com')
+             if _CHATGPT_POLICY.get() or _MIXED_PRODUCTION_POLICY.get() else ('gemini.google.com',))
     return (parsed.scheme == 'https' and parsed.hostname in hosts
             and parsed.port in (None, 443) and not parsed.username and not parsed.password)
 
@@ -241,7 +244,8 @@ def _verify_stable_identity(browser, page, fresh):
     raise ResetRefused(last_dirty, 'verify_stable_identity')
 
 
-def reset_gemini_preserving_http_cache(serial: str, *, authorized_test_phone: bool = False) -> dict:
+def reset_gemini_preserving_http_cache(serial: str, *, authorized_test_phone: bool = False,
+                                       authorized_production: bool = False) -> dict:
     """Return ok only after verified local identity reset; never navigate Gemini.
 
     Requires explicit test-profile authorization AND RANK_GEMINI_CACHE_TRIAL=1.
@@ -250,7 +254,10 @@ def reset_gemini_preserving_http_cache(serial: str, *, authorized_test_phone: bo
     measurement (cache partitioning/revalidation can limit savings).
     """
     flag = 'RANK_CHATGPT_CACHE_TRIAL' if _CHATGPT_POLICY.get() else 'RANK_GEMINI_CACHE_TRIAL'
-    if not authorized_test_phone or os.environ.get(flag) != '1':
+    release = ('RANK_CHATGPT_LOW_COST_RELEASED' if _CHATGPT_POLICY.get()
+               else 'RANK_GEMINI_LOW_COST_RELEASED')
+    if not ((authorized_test_phone and os.environ.get(flag) == '1')
+            or (authorized_production and os.environ.get(release) == '1')):
         return {'ok': False, 'reason': 'test_only_disabled'}
     from gemini_cdp_capture import CDP
     ports = []
@@ -295,7 +302,9 @@ def reset_gemini_preserving_http_cache(serial: str, *, authorized_test_phone: bo
             candidates.append((port, browser, pages))
         with_pages = [candidate for candidate in candidates if candidate[2]]
         if len(with_pages) != 1:
-            raise ResetRefused('ambiguous_or_empty_chrome_profile')
+            raise ResetRefused('ambiguous_or_empty_chrome_profile',evidence={
+                'socket_count':len(names),'reachable_candidates':len(candidates),
+                'page_counts':[len(candidate[2]) for candidate in candidates]})
         port, browser, _ = with_pages[0]
 
         def page_factory(target_id):
@@ -339,31 +348,43 @@ def reset_gemini_preserving_http_cache(serial: str, *, authorized_test_phone: bo
                 pass
 
 
-def prepare_gemini_cache(serial: str) -> dict:
+def prepare_gemini_cache(serial: str, *, authorized_production: bool = False) -> dict:
     """Dispatcher entry point; additionally restrict trial to device-104.
 
     Caller verifies exclusive phone ownership, Gemini, native v82 and single-
     attempt mode. A failed preparation MUST NOT set geminiCachePrepared=true.
     Rollback: disable RANK_GEMINI_CACHE_TRIAL; normal native full reset resumes.
     """
-    if ('149145555W002883' not in serial or os.environ.get('RANK_SINGLE_ATTEMPT') != '1'
-            or os.environ.get('RANK_GEMINI_CACHE_TRIAL') != '1'):
+    production=(authorized_production and os.environ.get('RANK_CACHE_LOW_COST_ROLLOUT')=='1'
+                and os.environ.get('RANK_GEMINI_LOW_COST_RELEASED')=='1')
+    if (os.environ.get('RANK_SINGLE_ATTEMPT') != '1'
+            or (not production and ('149145555W002883' not in serial
+                                    or os.environ.get('RANK_GEMINI_CACHE_TRIAL') != '1'))):
         return {'ok': False, 'reason': 'trial_scope_not_enabled'}
-    return reset_gemini_preserving_http_cache(serial, authorized_test_phone=True)
+    token=_MIXED_PRODUCTION_POLICY.set(production)
+    try:
+        return reset_gemini_preserving_http_cache(serial,authorized_test_phone=not production,
+                                                   authorized_production=production)
+    finally:
+        _MIXED_PRODUCTION_POLICY.reset(token)
 
 
-def prepare_chatgpt_cache(serial: str) -> dict:
+def prepare_chatgpt_cache(serial: str, *, authorized_production: bool = False) -> dict:
     """Same reset protocol, explicit device104 ChatGPT trial only.
 
     The disposable test profile may retain its preceding Gemini answer. Permit
     those two exact origins, never unrelated tabs, and clear both origin stores.
     Context-local policy avoids changing simultaneous/default Gemini callers.
     """
-    if ('149145555W002883' not in serial or os.environ.get('RANK_SINGLE_ATTEMPT') != '1'
-            or os.environ.get('RANK_CHATGPT_CACHE_TRIAL') != '1'):
+    production=(authorized_production and os.environ.get('RANK_CACHE_LOW_COST_ROLLOUT')=='1'
+                and os.environ.get('RANK_CHATGPT_LOW_COST_RELEASED')=='1')
+    if (os.environ.get('RANK_SINGLE_ATTEMPT') != '1'
+            or (not production and ('149145555W002883' not in serial
+                                    or os.environ.get('RANK_CHATGPT_CACHE_TRIAL') != '1'))):
         return {'ok': False, 'reason': 'trial_scope_not_enabled'}
     token = _CHATGPT_POLICY.set(True)
     try:
-        return reset_gemini_preserving_http_cache(serial, authorized_test_phone=True)
+        return reset_gemini_preserving_http_cache(serial,authorized_test_phone=not production,
+                                                   authorized_production=production)
     finally:
         _CHATGPT_POLICY.reset(token)

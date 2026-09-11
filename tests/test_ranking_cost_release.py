@@ -40,8 +40,13 @@ class RankingReleaseTests(unittest.TestCase):
             RANK_COPILOT_WIFI_ROLLOUT='1',RANK_COPILOT_WIFI_ROLLOUT_DEVICES='device-104')
         for platform in ('chatgpt','gemini','chatgpt,gemini,copilot'):
             with self.assertRaises(ValueError):check({**base,'PLATFORMS':platform})
-        check({**base,'PLATFORMS':'chatgpt,gemini,copilot',
-               'RANK_CHATGPT_LOW_COST_RELEASED':'1','RANK_GEMINI_LOW_COST_RELEASED':'1'})
+        released={**base,'PLATFORMS':'chatgpt,gemini,copilot',
+                  'RANK_CHATGPT_LOW_COST_RELEASED':'1','RANK_GEMINI_LOW_COST_RELEASED':'1',
+                  'RANK_CACHE_LOW_COST_ROLLOUT':'1','RANK_CACHE_LOW_COST_DEVICES':'device-104'}
+        check(released)
+        for missing in ('RANK_CACHE_LOW_COST_ROLLOUT','RANK_CACHE_LOW_COST_DEVICES'):
+            broken=released.copy();broken.pop(missing)
+            with self.assertRaises(ValueError):check(broken)
 
     def test_second_phone_scope_cannot_expand_to_test_or_failed_phones(self):
         with patch.dict('os.environ',COPILOT_ROLLOUT_DEVICE='device-106'):

@@ -844,6 +844,13 @@ def _use_offline_copilot(platform: str) -> bool:
             and platform.lower() == 'copilot')
 
 
+def _cache_low_cost_enabled(platform: str) -> bool:
+    name=platform.lower()
+    flag={'chatgpt':'RANK_CHATGPT_LOW_COST_RELEASED','gemini':'RANK_GEMINI_LOW_COST_RELEASED'}.get(name)
+    return bool(flag and os.environ.get('RANK_CACHE_LOW_COST_ROLLOUT')=='1'
+                and os.environ.get(flag)=='1')
+
+
 # Poll the phone instead of holding one HTTP request open for the whole job.
 # A ranking job runs 130-350s, and a request held that long across an adb forward is the
 # single biggest failure cause measured on this fleet: every platform lost a job to
@@ -1388,6 +1395,35 @@ def dispatch_audit_job(
             raise
         phase('offline_edge_prepare_done')
 
+    offline_cache_proof = None
+    if _cache_low_cost_enabled(platform):
+        from tools.cache_rollout_scope import device_allowed as cache_device_allowed
+        if not cache_device_allowed(device_label) or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+            POOL.release(device_idx)
+            raise RuntimeError('Cache-preserving preparation outside explicit production scope')
+        http_port=_http_port_for_serial(serial)
+        health=None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(f'http://127.0.0.1:{http_port}/health',timeout=5) as reply:
+                    health=json.load(reply)
+                break
+            except Exception:
+                if attempt<2:time.sleep(1)
+        if not health or type(health.get('versionCode')) is not int or health['versionCode']<88 or health.get('accessibility') is not True:
+            POOL.release(device_idx)
+            raise RuntimeError('Cache-preserving ranking requires accessible v88+')
+        from tools.gemini_cache_reset import prepare_chatgpt_cache,prepare_gemini_cache
+        phase('offline_cache_prepare_start')
+        offline_cache_proof=(prepare_chatgpt_cache(serial,authorized_production=True)
+                             if platform.lower()=='chatgpt'
+                             else prepare_gemini_cache(serial,authorized_production=True))
+        if not offline_cache_proof.get('ok'):
+            POOL.release(device_idx)
+            raise RuntimeError('Offline cache preparation failed before paid tunnel: '
+                               +str(offline_cache_proof.get('reason','unknown')))
+        phase('offline_cache_prepare_done')
+
     # Start gost
     seq = next(_gost_seq)
     gost_key = f"audit-{seq}"
@@ -1610,20 +1646,30 @@ def dispatch_audit_job(
         # device-owner clearApplicationUserData equivalent and always works over adb.
         # Best-effort: never fail a job over the clear itself.
         phase("browser_reset")
-        if os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1":
-            if (device_label != "device-104" or platform.lower() != "chatgpt"
-                    or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None
+        if offline_cache_proof:
+            body[f"{platform.lower()}CachePrepared"] = True
+            phase('cache_prepare_done')
+        elif os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1":
+            _production_cache=False
+            if (platform.lower() != "chatgpt" or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None
                     or os.environ.get("RANK_GEMINI_CACHE_TRIAL", "0") == "1"):
+                raise RuntimeError("ChatGPT cache trial restricted to single-attempt device104 audit")
+            if _production_cache:
+                from tools.cache_rollout_scope import device_allowed
+                if not device_allowed(device_label):raise RuntimeError('ChatGPT low-cost cache outside rollout allow-list')
+            elif device_label != 'device-104':
                 raise RuntimeError("ChatGPT cache trial restricted to single-attempt device104 audit")
             with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/health", timeout=5) as health_response:
                 cache_health = json.load(health_response)
-            if type(cache_health.get('versionCode')) is not int or cache_health['versionCode'] != 84 or cache_health.get('accessibility') is not True:
+            version_ok=(type(cache_health.get('versionCode')) is int and
+                        (cache_health['versionCode']>=88 if _production_cache else cache_health['versionCode']==84))
+            if not version_ok or cache_health.get('accessibility') is not True:
                 raise RuntimeError("ChatGPT cache trial requires accessible v84")
             from tools.gemini_cache_reset import prepare_chatgpt_cache
             phase("cache_prepare_start")
             _adb(serial, "shell", "am", "start", "-n", "com.android.chrome/com.google.android.apps.chrome.Main", timeout=10)
             time.sleep(1)
-            cache_prepared = prepare_chatgpt_cache(serial)
+            cache_prepared = prepare_chatgpt_cache(serial,authorized_production=_production_cache)
             if os.environ.get("GOST_PHASE_LEDGER"):
                 Path(os.environ["GOST_PHASE_LEDGER"]).with_name(f"cache_prepared_kw{int(keyword_id)}.json").write_text(json.dumps(cache_prepared, indent=2))
             if not cache_prepared.get("ok"):
@@ -1631,14 +1677,20 @@ def dispatch_audit_job(
             body["chatgptCachePrepared"] = True
             phase("cache_prepare_done")
         elif os.environ.get("RANK_GEMINI_CACHE_TRIAL", "0") == "1":
-            if (device_label != "device-104" or platform.lower() != "gemini"
-                    or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None):
+            _production_cache=False
+            if (platform.lower() != "gemini" or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None):
+                raise RuntimeError("cache trial restricted to one device-104 Gemini audit")
+            if _production_cache:
+                from tools.cache_rollout_scope import device_allowed
+                if not device_allowed(device_label):raise RuntimeError('Gemini low-cost cache outside rollout allow-list')
+            elif device_label != 'device-104':
                 raise RuntimeError("cache trial restricted to one device-104 Gemini audit")
             with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/health", timeout=5) as health_response:
                 cache_health = json.load(health_response)
             from tools.cache_evidence_policy import cache_health_allowed
             cache_evidence = os.environ.get("RANK_GEMINI_CACHE_EVIDENCE", "0") == "1"
-            if not cache_health_allowed(cache_health, cache_evidence):
+            if not (_production_cache and type(cache_health.get('versionCode')) is int
+                    and cache_health['versionCode']>=88 and cache_health.get('accessibility') is True) and not cache_health_allowed(cache_health, cache_evidence):
                 raise RuntimeError("cache trial requires verified matching test APK (82 legacy / 83 evidence)")
             if cache_evidence and os.environ.get("RANK_GEMINI_PROMPT_FREE", "0") != "1":
                 raise RuntimeError("combined cache evidence trial requires prompt-free proof")
@@ -1647,7 +1699,7 @@ def dispatch_audit_job(
             _adb(serial, "shell", "am", "start", "-n",
                  "com.android.chrome/com.google.android.apps.chrome.Main", timeout=10)
             time.sleep(1)
-            cache_prepared = prepare_gemini_cache(serial)
+            cache_prepared = prepare_gemini_cache(serial,authorized_production=_production_cache)
             cache_evidence_suffix = f"_kw{int(keyword_id)}" if os.environ.get("RANK_CACHE_PILOT") == "1" else ""
             if os.environ.get("GOST_PHASE_LEDGER"):
                 Path(os.environ["GOST_PHASE_LEDGER"]).with_name(f"cache_prepared{cache_evidence_suffix}.json").write_text(
@@ -1872,7 +1924,7 @@ def dispatch_audit_job(
         _reframe_attempted = False
         _prompt_free = os.environ.get("RANK_GEMINI_PROMPT_FREE", "0") == "1" and platform.lower() == "gemini"
         _prompt_free_verified = False
-        if os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1" and platform.lower() == "chatgpt":
+        if (os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1" or _cache_low_cost_enabled('chatgpt')) and platform.lower() == "chatgpt":
             _prompt_free = True
             if status == "success" and ss_b64:
                 _chat_text = (response.get("platforms") or {}).get("chatgpt", {}).get("response_text", "")
@@ -1923,7 +1975,7 @@ def dispatch_audit_job(
         # app screenshot if CDP fails.
         if (not ss_local and capture_prompt is None
                 and platform.lower() in ("chatgpt", "perplexity", "gemini")
-                and not (platform.lower() == "chatgpt" and os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1")
+                and not (platform.lower() == "chatgpt" and (os.environ.get("RANK_CHATGPT_CACHE_TRIAL", "0") == "1" or _cache_low_cost_enabled('chatgpt')))
                 and not (platform.lower() == "gemini"
                          and os.environ.get("RANK_GEMINI_APP_SCREENSHOT", "0") == "1")
                 and status in ("success", "no_rank")):

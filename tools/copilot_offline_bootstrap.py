@@ -18,12 +18,14 @@ def settle_wifi(serial,adb,*,minimum_s=150,quiet_s=30,deadline_s=300,
     opening the paid tunnel. No AI page is opened and no prompt is submitted.
     """
     def count():
-        reply=adb(serial,'shell','cat','/proc/net/dev',timeout=10)
-        for line in reply.stdout.splitlines():
-            if line.strip().startswith('wlan0:'):
-                fields=line.split(':',1)[1].split()
-                if reply.returncode==0 and len(fields)>=16:
-                    return int(fields[0])+int(fields[8])
+        for attempt in range(3):
+            reply=adb(serial,'shell','cat','/proc/net/dev',timeout=10)
+            for line in reply.stdout.splitlines():
+                if line.strip().startswith('wlan0:'):
+                    fields=line.split(':',1)[1].split()
+                    if reply.returncode==0 and len(fields)>=16:
+                        return int(fields[0])+int(fields[8])
+            if attempt<2:sleep(1)
         raise ValueError('WiFi byte counters unavailable')
     start=now();previous=count();initial=previous;quiet_since=start;samples=[]
     while now()-start<deadline_s:

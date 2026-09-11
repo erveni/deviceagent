@@ -35,6 +35,10 @@ def check(env):
             raise ValueError('ChatGPT ranking is blocked until its low-cost path is released')
         if 'gemini' in platforms and env.get('RANK_GEMINI_LOW_COST_RELEASED')!='1':
             raise ValueError('Gemini ranking is blocked until its low-cost path is released')
+        if platforms & {'chatgpt','gemini'}:
+            cache_labels={value.strip() for value in env.get('RANK_CACHE_LOW_COST_DEVICES','').split(',') if value.strip()}
+            if env.get('RANK_CACHE_LOW_COST_ROLLOUT')!='1' or not cache_labels or 'device-125' in cache_labels:
+                raise ValueError('ChatGPT/Gemini release requires an explicit safe cache-rollout allow-list')
         return
     raise ValueError('Ranking cost rollout is not released yet. Refusing the old expensive '
                      'path. Complete measured rollout/device readiness before resuming the queue.')
