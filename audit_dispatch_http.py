@@ -395,7 +395,7 @@ _OCR_WARNED = False
 # Answer markers a properly-rendered ranking screenshot must show. The prompt asks
 # for "[RANK: x/y]" + "Google Maps: yes/no" per business, so a real answer always
 # carries one of these; a blank page / prompt-only / login-wall does not.
-_ANSWER_RE = re.compile(r"rank:\s*\d+\s*/\s*\d+|\[rank|google maps|maps:\s*(yes|no)", re.I)
+_ANSWER_RE = re.compile(r"rank:\s*(?:[~≈]\s*)?\d+\s*/\s*\d+|\[rank|google maps|maps:\s*(yes|no)", re.I)
 _WALL_RE = re.compile(r"verify you are human|not a robot|captcha|just a moment|press & hold", re.I)
 
 
@@ -436,7 +436,7 @@ def _screenshot_has_answer(path: str, *, strict: bool = False) -> bool:
 # nothing through the a11y tree, so the phone reports completed with rank 0 and an
 # empty response_text while the screenshot shows a perfect "[RANK: X/Y]". The
 # pixels are then the only copy of the result.
-_OCR_RANK_RE = re.compile(r"\[?rank:\s*(\d+)\s*/\s*(\d+\+?)\]?", re.I)
+_OCR_RANK_RE = re.compile(r"\[?rank:\s*(?:[~≈]\s*)?(\d+)\s*/\s*(\d+\+?)\]?", re.I)
 # The audit prompt embeds the literal example "[RANK: 19/19]"; when the prompt
 # bubble is on screen OCR sees it too. The example is always introduced by "e.g."
 # immediately before the bracket, so only that short lookback is inspected — a
@@ -526,7 +526,7 @@ def _shows_list_and_rank(path: str) -> bool:
         return True
     if _WALL_RE.search(txt):
         return False
-    has_rank = bool(re.search(r"\[?rank:\s*\d+\s*/\s*\d+", txt, re.I))
+    has_rank = bool(re.search(r"\[?rank:\s*(?:[~≈]\s*)?\d+\s*/\s*\d+", txt, re.I))
     items = len(re.findall(r"(?m)(?:^|\s)[1-9]\d?[.)]\s+[A-Za-z]", txt))
     return has_rank and items >= 2
 
@@ -636,10 +636,12 @@ def _rank_inconsistent(response_text: str, biz: str, platform: str, aka: str = "
         return False
     mk = _LIST_MARK.get(platform.lower())
     ans = (response_text.split(mk, 1)[1] if (mk and mk in response_text) else response_text).lower()
-    m = re.search(r"\[rank:\s*(\d+)\s*/\s*(\d+)\]", ans)
+    m = re.search(r"\[rank:\s*(?:[~≈]\s*)?(\d+)\s*/\s*(\d+)\]", ans)
     if not m:
         return False
     x = int(m.group(1))
+    if x == 0:
+        return False  # explicit unranked marker cannot fabricate a top-three position
     cands = _name_candidates(biz, aka)
     if not cands:
         return False

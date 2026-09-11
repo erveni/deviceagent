@@ -85,6 +85,16 @@ export RANK_GEMINI_RANK_TEXT_ONLY="${RANK_GEMINI_RANK_TEXT_ONLY:-0}"
 export AEO_ROTATE_ON_INPUT_FAILED="${AEO_ROTATE_ON_INPUT_FAILED:-1}"
 export AEO_TUNNEL_ATTEMPTS="${AEO_TUNNEL_ATTEMPTS:-15}"
 
+offline_recover(){
+  [ "${RANK_OFFLINE_OCR_RECOVERY:-0}" = "1" ] || return 0
+  local tag="$1" out="${CSV%.csv}_offline_recovered_${tag}_$$.csv"
+  echo "[rank ${DATE}] offline OCR recovery before reconciliation (${tag})" | tee -a "$LOG"
+  python3 tools/recover_saved_ocr.py "$CSV_GLOB" "$out" >>"$LOG" 2>&1 || {
+    echo "[rank ${DATE}] FATAL: offline OCR recovery failed" | tee -a "$LOG"
+    return 2
+  }
+}
+
 # auto-detect live phones; ranking caps workers (router stability — the audit path
 # does many more proxy handshakes/job than the daily, so keep this modest, default 6).
 # probe_phones imports the runtime roster, whose informational output is not shell
@@ -120,6 +130,7 @@ else
   echo "[rank ${DATE}] base run…" | tee -a "$LOG"
   python3 -u run_ranking.py >>"$LOG" 2>&1
 fi
+offline_recover base || exit $?
 
 # 3) retry loop: only errors/ocr_no_answer re-run (success+no_rank terminal)
 prev=-1; stable=0; rem=0
@@ -143,5 +154,6 @@ for ((round=1; round<=RANK_RETRY_ROUNDS; round++)); do
   pkill -f "gost -C"; pkill -f sni_relay.py; sleep 1
   echo "[rank ${DATE} retry $round] re-running $rem errors…" | tee -a "$LOG"
   EXCLUDE_SUCCESS="$CSV_GLOB" RETRY_KEEP_NORANK=1 python3 -u run_ranking.py >>"$LOG" 2>&1
+  offline_recover "retry${round}" || exit $?
 done
 echo "[rank ${DATE}] $(date) FINISHED remaining=$rem  csv=$CSV" | tee -a "$LOG"
