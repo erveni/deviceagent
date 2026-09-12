@@ -7,7 +7,9 @@ export PATH="/Library/Frameworks/Python.framework/Versions/3.14/bin:/opt/homebre
 cd /Users/seolocalph/projects/device-agent || exit 1
 
 DATE=2026-09-02
-FLOOR_MB="${FLOOR_MB:-9000}"
+# User explicitly removed the reserved balance on 2026-09-12 so the historical
+# stale queue can finish. A caller may still restore a positive floor via env.
+FLOOR_MB="${FLOOR_MB:-0}"
 LOG="$PWD/stale_before_sep10_daily.log"
 MARK="$PWD/.stale_${DATE}_complete"
 KW_DATE_MAP="$PWD/stale_${DATE}_last_rank_by_keyword.json"
