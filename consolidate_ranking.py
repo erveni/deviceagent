@@ -142,6 +142,16 @@ if TOKEN:
     except Exception as e:
         print("client_name backfill skipped:", e)
 
+# Historical or locked clients can be absent from the live endpoint. Use the
+# frozen run snapshot for those IDs so partial stale exports remain reproducible.
+clients_snapshot = os.path.join(CATALOG_DIR, "clients_admin.json")
+if os.path.exists(clients_snapshot):
+    for c in json.load(open(clients_snapshot)):
+        client_name.setdefault(
+            str(c.get("id")),
+            c.get("businessName") or c.get("name") or c.get("clientName") or "",
+        )
+
 # 3. assign back-dated timestamps: spread within each keyword's createdAt day
 by_day = defaultdict(list)
 no_created = 0
@@ -180,7 +190,8 @@ for day, items in by_day.items():
         o["date"] = day
         o["screenshot"] = redate_screenshot((o.get("screenshot") or "").strip(), day)
         if not (o.get("client_name") or "").strip():
-            o["client_name"] = client_name.get(str(r.get("client_id")), "")
+            o["client_name"] = (client_name.get(str(r.get("client_id")), "")
+                                or (o.get("biz_name") or ""))
         rows_out.append(o)
 
 rows_out.sort(key=lambda r: r["timestamp"])
