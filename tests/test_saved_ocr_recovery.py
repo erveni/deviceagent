@@ -35,5 +35,43 @@ class SavedOcrRecoveryTests(unittest.TestCase):
         text='1. Crown Roofing\n2. Other\n3. Third\n[RANK: 1/8]'
         self.assertTrue(_rank_inconsistent(text,'Crown Roofing Dallas Extra','copilot'))
 
+    def test_vetted_public_name_uses_pixel_list_when_a11y_order_is_broken(self):
+        row={'campaign_id':'1120555','status':'ocr_no_answer','platform':'copilot',
+             'biz_name':'Top Choice Roofing, LLC, Cullman',
+             'response_text':'1. B&A Roofing\n2. Bullard Roofing\nTop Choice Roofing, LLC\n[RANK: 3/8]\n3.'}
+        pixels='1. B&A Roofing\n2. Bullard Roofing\n3. Top Choice Roofing, LLC\n[RANK: 3/8]'
+        self.assertEqual(recover(row,pixels)['status'],'success')
+
+    def test_vetted_closing_bracket_misread_as_one(self):
+        row={'campaign_id':'1351434','status':'ocr_no_answer','platform':'copilot',
+             'biz_name':'Mend - Grapevine, Grapevine',
+             'response_text':'1. Other\n2. Mend Chiropractic - Grapevine\n3. Third\n[RANK: 2/8]'}
+        pixels='1. Other\n2. Mend Chiropractic - Grapevine\n3. Third\n[RANK: 2/81'
+        fixed=recover(row,pixels)
+        self.assertEqual((fixed['status'],fixed['rank_position'],fixed['rank_total']),
+                         ('success','2','8'))
+
+    def test_vetted_explicit_target_rank_recovers_placeholder_list(self):
+        row={'campaign_id':'90054','status':'ocr_no_answer','platform':'copilot',
+             'biz_name':'Leo Lapuerta, MD Plastic Surgery',
+             'response_text':'1. Lift Plastic Surgery\n2. (No additional result)\n'
+                             '3. (No additional result)\n[RANK: 2/2]'}
+        pixels=('1. Lift Plastic Surgery\n2. (No additional result)\n'
+                '3. (No additional result)\n[RANK: 2/2]\n'
+                'Leo Lapuerta, MD Plastic Surgery ranks approximately around '
+                'position 2 of about 2 genuine providers.')
+        fixed=recover(row,pixels)
+        self.assertEqual((fixed['status'],fixed['rank_position'],fixed['rank_total']),
+                         ('success','2','2'))
+
+    def test_vetted_placeholder_list_without_explicit_rank_stays_rejected(self):
+        row={'campaign_id':'90054','status':'ocr_no_answer','platform':'copilot',
+             'biz_name':'Leo Lapuerta, MD Plastic Surgery',
+             'response_text':'1. Lift Plastic Surgery\n2. (No additional result)\n'
+                             '3. (No additional result)\n[RANK: 2/2]'}
+        pixels=('1. Lift Plastic Surgery\n2. (No additional result)\n'
+                '3. (No additional result)\n[RANK: 2/2]')
+        self.assertIsNone(recover(row,pixels))
+
 
 if __name__=='__main__':unittest.main()

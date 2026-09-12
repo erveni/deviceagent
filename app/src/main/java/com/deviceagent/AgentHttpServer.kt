@@ -20,7 +20,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // Kept in sync with app/build.gradle.kts. Reported by /health so the
         // Mac-side dispatcher can detect a fleet running mixed APK versions.
         const val APP_VERSION_NAME = "0.9.71-copilot-wifi-rollout"
-        const val APP_VERSION_CODE = 92
+        const val APP_VERSION_CODE = 93
         // Self-heal watchdog: if the Mac hasn't contacted this phone (any HTTP
         // request — adb-forward or direct WiFi) for SILENCE_MS, the wireless-debug
         // listener is presumed dead and gets re-cycled from the INSIDE. Needs no
@@ -57,6 +57,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             "the top 3, it MUST be the business named at position X in the list above; if {biz_name} " +
             "is NOT one of the names you listed, then X MUST be greater than 3. Never claim a top-3 " +
             "position for {biz_name} unless its name actually appears at that position. " +
+            "Never number placeholders such as '(no result)' or '(no additional results)'. If only N " +
+            "genuine competitors exist and {biz_name} is absent, list exactly those N real names and " +
+            "set [RANK: N+1/N+1]. If X is greater than 3, list three genuine named competitors. " +
             "VALIDATION before answering: X must NEVER be greater than Y. " +
             "THEN a 2-3 sentence summary of {biz_name}'s standing — always state a concrete " +
             "APPROXIMATE ranking position for this search in a neutral, positive, factual tone " +

@@ -11,7 +11,7 @@ android {
         applicationId = "com.deviceagent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 92
+        versionCode = 93
         versionName = "0.9.71-copilot-wifi-rollout"
     }
 
