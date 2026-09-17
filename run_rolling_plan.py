@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os, subprocess
+from pathlib import Path
 import queue
 import re
 import sys
@@ -40,6 +41,52 @@ def _parse_state(addr: str) -> str | None:
         return None
     m = _STATE_RE.search(addr)
     return m.group(1) if m else None
+
+
+VOICE_AGENT = Path(os.environ.get(
+    "VOICE_AGENT_PATH",
+    str(Path(__file__).resolve().parent.parent / "voice-search" / "agent" / "voice_agent.py"),
+))
+VOICE_OUTPUT_DIR = os.environ.get("VOICE_OUTPUT_DIR", "/tmp/device-agent-voice-results")
+
+
+def _run_voice_session(job: dict, device_id: str, serial: str, spec: dict, wave_index: int) -> dict:
+    """Run one voice job through the standalone voice-search executor.
+
+    The device pool lease remains held by the caller for the whole subprocess,
+    so typed and voice jobs cannot share a phone concurrently.
+    """
+    slot = job.get("daily_slot_id") or job.get("backfill_slot_id") or f"{job.get('date','')}-{job.get('campaign_id','')}-{job.get('keyword_id','')}"
+    request_id = re.sub(r"[^A-Za-z0-9_-]+", "-", f"daily-{slot}")[:80]
+    request = {
+        "version": 1, "request_id": request_id, "mode": "voice",
+        "platform": (job.get("platform") or "chatgpt").lower(),
+        "phrase": job.get("prompt", ""), "device_serial": serial,
+        "gost_port": int(spec.get("port", 0)),
+        "proxy": {"enabled": True, "target": PROXY_TARGET, "rounds": 1},
+        "voice": {"engine": job.get("voiceConfig", {}).get("engine", "say"),
+                  "realistic": bool(job.get("voiceConfig", {}).get("realistic", False))},
+        "location": {k: job.get(k) for k in ("biz_lat", "biz_lng", "biz_timezone") if job.get(k) not in (None, "")},
+        "expected_business": job.get("biz_name", ""),
+        "expected_domain": (job.get("gmb_url") or "").split("//")[-1].split("/")[0],
+    }
+    out = Path(VOICE_OUTPUT_DIR); out.mkdir(parents=True, exist_ok=True)
+    req_file = out / f"{request_id}.request.json"; req_file.write_text(json.dumps(request))
+    started = time.time()
+    try:
+        proc = subprocess.run(["python3", str(VOICE_AGENT), "run", "--request", str(req_file), "--output-dir", str(out)],
+                              capture_output=True, text=True, timeout=float(os.environ.get("VOICE_TIMEOUT_S", "300")))
+        bundle = json.loads(proc.stdout.strip().splitlines()[-1]) if proc.stdout.strip() else {"status": "error", "error": proc.stderr[-1000:]}
+    except Exception as exc:
+        bundle = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+    result = bundle.get("result") or {}
+    ok = bundle.get("status") == "success" and bundle.get("exact") is True and result.get("answer_state") in (None, "complete", "completed", "done") and not bundle.get("error")
+    row = _err_row(job, device_id, spec, wave_index, "voice_executor" if not ok else "", bundle.get("error", "") if not ok else "")
+    row.update(status="success" if ok else "error", duration_s=round(time.time() - started, 1),
+               failure_step="" if ok else "voice_executor", voice_engine_requested=request["voice"]["engine"],
+               voice_realistic_requested=request["voice"]["realistic"], recognized_prompt=bundle.get("recognized") or "",
+               recognition_exact=bundle.get("exact"), voice_trace=bundle.get("voice_trace") or {})
+    return row
 
 from device_dispatch import (
     DEVICES, BASE_GOST, PROXY_USER, TUNNEL_SETTLE_S, RETRY_TRIGGERS,
@@ -79,6 +126,7 @@ def normalize_plan_job(j: dict) -> dict:
         # Optional browser routing for the mixed-browser rollout. Legacy jobs
         # remain Chrome by default; Edge is opt-in per job.
         "browser": (j.get("browser") or "chrome").lower(),
+        "voiceConfig": j.get("voiceConfig") or j.get("voice_config") or {},
         "prompt": j.get("prompt", ""),
         "follow_up": j.get("follow_up", "") or "",
         "backlink_injected": bool(j.get("backlink_injected")),
@@ -132,9 +180,12 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
         if not wait_tunnel(serial):
             row = _err_row(job, device_id, spec, wave_index, "tunnel_failed", "tunnel failed")
         else:
-            row = _run_session(job, device_idx, device_id, serial, spec, wave_index)
+            if job.get("mode", "type") == "voice":
+                row = _run_voice_session(job, device_id, serial, spec, wave_index)
+            else:
+                row = _run_session(job, device_idx, device_id, serial, spec, wave_index)
             err = (row.get("error") or "").lower()
-            if ROLLING_RETRY and row.get("status") == "error" and any(t in err for t in RETRY_TRIGGERS):
+            if ROLLING_RETRY and job.get("mode", "type") != "voice" and row.get("status") == "error" and any(t in err for t in RETRY_TRIGGERS):
                 reason = next(t for t in RETRY_TRIGGERS if t in err).replace(" ", "_")
                 # Zip-aware retry (mirrors device_dispatch.py b758d1b): instead of
                 # repeating country-only US (which gave us the burned IP), target the
