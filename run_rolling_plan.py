@@ -76,6 +76,9 @@ def normalize_plan_job(j: dict) -> dict:
         "keyword_variant": j.get("keyword_variant") or j.get("keyword_text") or "",
         "variant_id": j.get("variant_id"),
         "platform": (j.get("platform") or "chatgpt").lower(),
+        # Optional browser routing for the mixed-browser rollout. Legacy jobs
+        # remain Chrome by default; Edge is opt-in per job.
+        "browser": (j.get("browser") or "chrome").lower(),
         "prompt": j.get("prompt", ""),
         "follow_up": j.get("follow_up", "") or "",
         "backlink_injected": bool(j.get("backlink_injected")),
@@ -210,7 +213,7 @@ def main() -> None:
     print("=" * 70, flush=True)
 
     budget = None
-    if any(j.get('daily_slot_id') for j in jobs):
+    if any(j.get('daily_slot_id') or j.get('backfill_slot_id') for j in jobs):
         from daily_budget import DailyBudget
         budget = DailyBudget()
         if not budget.admit():raise SystemExit(3)

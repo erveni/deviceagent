@@ -102,7 +102,7 @@ class DevicePool:
         # this guard in the pool (rather than only in one launch script) so a new
         # ranking/daily entry point cannot accidentally spend proxy traffic on it.
         _exc = os.environ.get("DEVICE_EXCLUDE", "")
-        _required_excludes = {"device-125"}
+        _required_excludes = set() if os.environ.get("ALLOW_DEVICE_125") == "1" else {"device-125"}
         if _exc.strip():
             toks = [t.strip() for t in _exc.split(",") if t.strip()]
         else:
@@ -323,6 +323,13 @@ def _run_session(
     spec: dict[str, Any],
     wave_index: int,
 ) -> dict[str, Any]:
+    # Wireless ADB/mDNS serials and local forwards can rotate between jobs.
+    # The pool-level setup is only a bootstrap; refresh this phone's forward
+    # immediately before every HTTP session so a stale socket cannot surface as
+    # an opaque `http fail` before DeviceAgent receives the request.
+    port = 8765 + device_idx
+    run(f'adb -s "{serial}" forward --remove tcp:{port}', 8)
+    run(f'adb -s "{serial}" forward tcp:{port} tcp:8765', 8)
     if COPILOT_PM_CLEAR and (job.get("platform") or "").lower() == "copilot":
         # The app resets Edge by driving Android's Settings UI. That logs
         # "clearData -> true" and sometimes does not take: device-113 sat on the
@@ -358,6 +365,7 @@ def _run_session(
     gen_timeout_sec = 90 if platform == "gemini" else 240
     http_post(port, "/session", {
         "platform": platform,
+        "browser": (job.get("browser") or "chrome").lower(),
         "prompt": prompt,
         "followUp": follow_up,
         "backlinkDomain": bk_domain,
@@ -478,8 +486,8 @@ def append_row(csv_path: str, row: dict[str, Any]) -> None:
         if not write_header:
             with open(dated_path, newline='') as existing:
                 fields = next(csv.reader(existing))
-            if row.get('daily_slot_id') and not set(DAILY_FIELDS).issubset(fields):
-                raise ValueError('Typed daily needs a new CSV path; refusing to corrupt a historical header')
+            if (row.get('daily_slot_id') or row.get('backfill_slot_id')) and not set(DAILY_FIELDS).issubset(fields):
+                raise ValueError('Identified daily needs a new CSV path; refusing to corrupt a historical header')
         with open(dated_path, "a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
             if write_header:

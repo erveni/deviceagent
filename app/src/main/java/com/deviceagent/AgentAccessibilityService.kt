@@ -196,7 +196,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun findEditTextRecursive(node: AccessibilityNodeInfo, hintText: String?): AccessibilityNodeInfo? {
         val isEdit = node.className?.toString()?.contains("EditText") == true
-        if (isEdit && node.isFocusable) {
+        if (isEdit && node.isFocusable && node.viewIdResourceName != "com.microsoft.emmx:id/url_bar") {
             if (hintText == null || node.text?.toString()?.contains(hintText, ignoreCase = true) == true) {
                 // Skip Chrome URL bar (at top of screen, y < 200)
                 val rect = android.graphics.Rect()
@@ -376,14 +376,15 @@ class AgentAccessibilityService : AccessibilityService() {
         return null
     }
 
-    // open URL in Chrome
-    fun navigateToUrl(url: String) {
+    // Open a URL in the requested browser. Chrome remains the default for all
+    // legacy jobs; Edge is opt-in for the mixed-browser Daily rollout.
+    fun navigateToUrl(url: String, browserPackage: String = "com.android.chrome") {
         val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
-            setPackage("com.android.chrome")
+            setPackage(browserPackage)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         startActivity(intent)
-        log("Navigating to $url")
+        log("Navigating to $url via $browserPackage")
     }
 
     // Open the system "App info" page for a package (used to clear its storage).

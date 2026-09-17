@@ -42,51 +42,27 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // process lifecycle). Used for /health uptime reporting.
         val PROCESS_START_MS = System.currentTimeMillis()
 
+        // Keep the anonymous mobile handoff below its composer limit.  The previous
+        // 1,000-character template was accepted into the editor but left the send
+        // control unusable on long prompts, producing a false generation timeout.
         private const val AUDIT_PROMPT_TEMPLATE = (
-            "Top 3 businesses for \"{keyword}\" in {location} — numbered 1-3, one short line " +
-            "each (name + a few words), only genuine results (do not pad; list fewer if " +
-            "fewer genuinely rank). " +
-            "IMMEDIATELY after the list, on its OWN line, output [RANK: X/Y] FIRST — before any " +
-            "summary paragraph. X is {biz_name}'s ({biz_url}) approximate position in the COMPLETE " +
-            "ranking for this query in this area — not just the 3 shown, however deep (usually dozens " +
-            "of genuine local results) — and Y is the approximate total number of businesses that " +
-            "genuinely rank in this area (usually well more than 3). Only if {biz_name} truly does " +
-            "not appear anywhere in the ranking, it is LAST — set X EQUAL to Y (e.g. [RANK: 19/19]); " +
-            "NEVER output 0, blank, or an X below Y for a non-ranking business. " +
-            "CONSISTENCY (critical): the numbered list and [RANK] MUST agree. If {biz_name} is in " +
-            "the top 3, it MUST be the business named at position X in the list above; if {biz_name} " +
-            "is NOT one of the names you listed, then X MUST be greater than 3. Never claim a top-3 " +
-            "position for {biz_name} unless its name actually appears at that position. " +
-            "Never number placeholders such as '(no result)' or '(no additional results)'. If only N " +
-            "genuine competitors exist and {biz_name} is absent, list exactly those N real names and " +
-            "set [RANK: N+1/N+1]. If X is greater than 3, list three genuine named competitors. " +
-            "VALIDATION before answering: X must NEVER be greater than Y. " +
-            "THEN a 2-3 sentence summary of {biz_name}'s standing — always state a concrete " +
-            "APPROXIMATE ranking position for this search in a neutral, positive, factual tone " +
-            "(e.g. \"{biz_name} ranks approximately around position X for this search\") and " +
-            "describe its visibility favorably. Even when {biz_name} does not yet rank, stay " +
-            "favorable and forward-looking — present it as an emerging presence building visibility " +
-            "(e.g. \"{biz_name} is an emerging presence, currently around position X of Y as it " +
-            "builds local visibility\"); NEVER write \"does not appear\", \"not visible\", or " +
-            "\"low visibility\". " +
-            "Respond in plain prose ONLY — do NOT render any map, place card, location widget, image, " +
-            "or embedded content; describe everything in words. Keep the entire response under 280 words."
+            "For \"{keyword}\" in {location}, list 3 genuine local businesses, numbered 1-3, " +
+            "one short line each. Then on the next line write exactly [RANK: X/Y] for " +
+            "{biz_name} ({biz_url}) in the complete local ranking (not only the three shown). " +
+            "If it is absent, put it last: X=Y; otherwise X is its approximate position and " +
+            "Y the approximate total. The list and rank must agree: if {biz_name} is not listed, " +
+            "X must be greater than 3; never use placeholders or X>Y. After the rank, give a " +
+            "brief positive factual summary with its approximate position. Plain text only; " +
+            "no map or widgets; under 180 words."
         )
 
         // Gemini's logged-out chat WIPES the answer ~3s after it renders, so a long
         // response (with a summary) gets deleted before we can capture the rank.
         // Give Gemini a short prompt — top 3 + [RANK] only, no summary — so it
         // finishes inside the capture window. ChatGPT/Perplexity keep the full one.
-        private const val GEMINI_AUDIT_PROMPT_TEMPLATE = (
-            "Top 3 businesses for \"{keyword}\" in {location}, numbered 1-3, one short line each. " +
-            "Then state {biz_name}'s ({biz_url}) APPROXIMATE ranking position in a neutral, factual " +
-            "tone (e.g. \"ranks approximately around position X\"); if it's not among the genuine top " +
-            "results, treat its position as just past the last genuine ranker. " +
-            "End with only this line: [RANK: X/Y]. If it genuinely ranks, X is its position and Y is " +
-            "the total that rank. If it does NOT rank, it is last and counted in the total, so X and Y " +
-            "MUST be EQUAL — set both to (the number that genuinely rank) + 1 (e.g. 3 rank -> 4th of 4 " +
-            "-> [RANK: 4/4]). VALIDATION: X must never exceed Y. No summary, text only."
-        )
+        // All platforms receive the same ranking instruction. Gemini may use a
+        // different capture path, but prompt semantics must remain comparable.
+        private val GEMINI_AUDIT_PROMPT_TEMPLATE = AUDIT_PROMPT_TEMPLATE
 
         fun buildAuditPrompt(bizName: String, bizUrl: String, city: String, state: String, keyword: String, platform: String = "", searchAddress: String = ""): String {
             val template = if (platform.lowercase() == "gemini") GEMINI_AUDIT_PROMPT_TEMPLATE else AUDIT_PROMPT_TEMPLATE
@@ -112,7 +88,8 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             followUp: String?,
             backlinkDomain: String?,
             stopAfter: String? = null,
-            useIme: Boolean = false
+            useIme: Boolean = false,
+            browser: String = "chrome"
         ) {
             fun step(name: String, block: () -> Boolean): Boolean {
                 result.steps.add("$name...")
@@ -158,11 +135,14 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 // DAILY uses a FULL Chrome clear so logged-out Gemini persists the
                 // conversation long enough to click the backlink. (Audit/ranking below
                 // keep the lighter clear — they only need the screenshot.)
-                if (!step("reset_chrome") { flowEngine.resetChrome(fullClear = true) }) {
+                if (!step("reset_browser") {
+                        if (browser.lowercase() == "edge") flowEngine.copilot.prepareBrowser()
+                        else flowEngine.resetChrome(fullClear = true)
+                    }) {
                     result.status = "error"; result.error = "reset_chrome failed"; return
                 }
                 Thread.sleep(500)
-                if (!step("navigate") { flowEngine.navigateTo(platform) }) {
+                if (!step("navigate") { flowEngine.navigateTo(platform, browser) }) {
                     result.status = "error"; result.error = "navigate failed"; return
                 }
                 Thread.sleep(if (platform == "chatgpt") 6000L else 3000L)
@@ -172,7 +152,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     result.status = "error"; result.error = "input failed"; return
                 }
                 Thread.sleep(300)
-                step("submit") { flowEngine.submit(platform) }
+                if (!step("submit") { flowEngine.submit(platform) }) {
+                    result.status = "error"; result.error = "submit failed"; return
+                }
                 // TEST MODE: stop right after submit so we can eyeball whether
                 // generation actually starts and STAYS (no back-nav to the paste state).
                 if (stopAfter == "submit") {
@@ -192,6 +174,16 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                     // success; the backlink is the bonus we now grab inside the window.
                     if (!backlinkDomain.isNullOrBlank()) {
                         result.backlinkClicked = step("backlink") { flowEngine.clickBacklink(backlinkDomain, platform) }
+                    }
+                    // Optional bounded visual scroll for evidence/debug runs. The
+                    // default remains off because logged-out Gemini can wipe its
+                    // answer a few seconds after rendering; callers that need a
+                    // visible viewport can opt in with GEMINI_DAILY_SCROLL=1.
+                    val geminiScroll = AgentAccessibilityService.instance
+                        ?.getSharedPreferences("device_agent", android.content.Context.MODE_PRIVATE)
+                        ?.getBoolean("gemini_daily_scroll", true) ?: true
+                    if (geminiScroll) {
+                        step("scroll") { flowEngine.scrollResponse(2) }
                     }
                     result.status = "completed"
                     return
@@ -851,6 +843,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         val backlinkDomain = json.optString("backlinkDomain", "").let { if (it.isBlank()) null else it }
         val stopAfter = json.optString("stopAfter", "").let { if (it.isBlank() || it == "null") null else it }
         val useIme = json.optBoolean("useIme", false)
+        val browser = json.optString("browser", "chrome").lowercase().let { if (it == "edge") "edge" else "chrome" }
 
         if (prompt.isBlank()) {
             respond(writer, 400, """{"error":"prompt is required"}""")
@@ -868,7 +861,7 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         )
         lastResult.set(result)
 
-        executeSession(result, platform, prompt, followUp, backlinkDomain, stopAfter, useIme)
+        executeSession(result, platform, prompt, followUp, backlinkDomain, stopAfter, useIme, browser)
 
         val response = JSONObject().apply {
             put("status", result.status)
@@ -1010,9 +1003,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         followUp: String?,
         backlinkDomain: String?,
         stopAfter: String? = null,
-        useIme: Boolean = false
+        useIme: Boolean = false,
+        browser: String = "chrome"
     ) {
-        executeSessionStatic(result, flowEngine, platform, prompt, followUp, backlinkDomain, stopAfter, useIme)
+        executeSessionStatic(result, flowEngine, platform, prompt, followUp, backlinkDomain, stopAfter, useIme, browser)
     }
 
     fun executeCaptureSession(

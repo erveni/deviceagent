@@ -16,8 +16,13 @@ if len(sys.argv) < 2:
     sys.exit(2)
 DATE = sys.argv[1]
 BALANCED = os.environ.get('DAILY_PLAN_PATH',f"daily_plan_{DATE}.json")
-RESULTS = sorted(set(glob.glob(f"daily_plan_{DATE}*results*.csv")))
+RESULTS_GLOB = os.environ.get(
+    'DAILY_RESULTS_GLOB', os.path.splitext(BALANCED)[0] + '*results*.csv'
+)
+RESULTS = sorted(set(glob.glob(RESULTS_GLOB)))
 OUT = os.environ.get('DAILY_REMAIN_PATH',f"daily_plan_{DATE}_REMAIN.json")
+bal = json.load(open(BALANCED))
+is_backfill = bal.get('daily_protocol') == 'daily-backfill-v1'
 
 
 def norm(v):
@@ -32,16 +37,23 @@ def key(platform, client_id, campaign_id, biz_name, keyword_text):
             norm(biz_name).lower(), norm(keyword_text).lower())
 
 
+def valid_mocked_location(row):
+    try:
+        lat, lng = float(row.get('mocked_latitude') or 0), float(row.get('mocked_longitude') or 0)
+    except (TypeError, ValueError):
+        return False
+    return lat != 0 and lng != 0
+
+
 rows = []
 for f in RESULTS:
     try:
         for r in csv.DictReader(open(f)):
-            if r.get("status") == "success":
+            if r.get("status") == "success" and (not is_backfill or valid_mocked_location(r)):
                 rows.append(r)
     except FileNotFoundError:
         pass
 
-bal = json.load(open(BALANCED))
 all_jobs = [j for w in bal["waves"] for j in w]
 delta = remaining_jobs(bal,rows)
 

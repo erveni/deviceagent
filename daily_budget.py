@@ -27,11 +27,24 @@ class DailyBudget:
                 raise ValueError('Daily ledger budget mismatch')
             self.before=first['balance_mb']
         else:
-            self.before=self.read()
-            if not math.isfinite(self.before):raise ValueError('Invalid initial meter balance')
+            self.before=self._read_meter()
             with self.path.open('x') as stream:
                 stream.write(json.dumps(dict(at=time.time(),phase='initial',balance_mb=self.before,
                     budget_mb=self.limit,floor_mb=self.floor))+'\n')
+
+    def _read_meter(self):
+        last_error = None
+        for attempt in range(3):
+            try:
+                value = self.read()
+                if not math.isfinite(value):
+                    raise ValueError('Invalid meter balance')
+                return value
+            except Exception as error:
+                last_error = error
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+        raise last_error
 
     def admit(self):
         with self.lock:
@@ -41,8 +54,7 @@ class DailyBudget:
                 print('DAILY SPEND GUARD: '+self.reason,flush=True);return False
             if time.monotonic()-self.last_at<20:return True
             try:
-                value=self.read()
-                if not math.isfinite(value):raise ValueError('Invalid meter balance')
+                value=self._read_meter()
                 used=self.before-value
                 with self.path.open('a') as stream:
                     stream.write(json.dumps(dict(at=time.time(),phase='admission',balance_mb=value,used_mb=used))+'\n')

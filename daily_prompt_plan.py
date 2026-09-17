@@ -5,8 +5,14 @@ from datetime import date
 PROMPT_TYPES = ('direct_service','best_provider','local_intent','problem_based',
                 'conversational','trust_based','comparison','brand_verification')
 PLATFORM_BASE = ('chatgpt','gemini','gemini','gemini','chatgpt','chatgpt','copilot','copilot')
+# Deterministic first mixed-mode policy.  The three conversational/local
+# prompt types are voice; the remaining five stay typed.  This is deliberately
+# not random so rebuilding a plan cannot change its mode assignment.
+VOICE_PROMPT_TYPES = frozenset(('local_intent','problem_based','conversational'))
+MODE_BY_PROMPT = {kind: ('voice' if kind in VOICE_PROMPT_TYPES else 'type') for kind in PROMPT_TYPES}
 EPOCH = date(2026,9,9)
-DAILY_FIELDS = ['business_id','keyword_id','daily_slot_id','prompt_type','prompt_cycle_day','is_discovery']
+DAILY_FIELDS = ['business_id','keyword_id','daily_slot_id','prompt_type','prompt_cycle_day','is_discovery',
+                'backfill_slot_id','backfill_prompt_type']
 
 
 def cycle_day(run_date):
@@ -17,6 +23,11 @@ def cycle_day(run_date):
 
 def platform_for(prompt_type,run_date):
     return PLATFORM_BASE[(PROMPT_TYPES.index(prompt_type)+cycle_day(run_date))%8]
+
+
+def mode_for(prompt_type):
+    if prompt_type not in MODE_BY_PROMPT: raise ValueError('Unknown prompt type')
+    return MODE_BY_PROMPT[prompt_type]
 
 
 def slot_id(run_date,campaign_id,business_id,prompt_type):
@@ -40,7 +51,7 @@ def campaign_slots(items,run_date):
         # Seven discovery slots rotate across the approved keyword set. The
         # brand slot is business-level but retains a keyword FK for existing API.
         item=ordered[(day*7+index)%len(ordered)] if index<7 else ordered[0]
-        result.append(dict(item=item,platform=platform_for(kind,run_date),prompt_type=kind,
+        result.append(dict(item=item,platform=platform_for(kind,run_date),mode=mode_for(kind),prompt_type=kind,
             daily_slot_id=slot_id(run_date,campaign,business,kind),prompt_cycle_day=day,
             is_discovery=kind!='brand_verification'))
     return result
@@ -56,6 +67,9 @@ def norm(value):
 
 
 def result_key(row):
+    if norm(row.get('backfill_slot_id')):
+        return ('backfill',norm(row['backfill_slot_id']),norm(row.get('client_id')),
+                norm(row.get('platform')).lower())
     if norm(row.get('daily_slot_id')):
         return ('daily',norm(row['daily_slot_id']),norm(row.get('client_id')),norm(row.get('platform')).lower())
     return ('legacy',norm(row.get('platform')).lower(),norm(row.get('client_id')),
@@ -126,6 +140,21 @@ def validate_typed_jobs(jobs,run_date,require_complete=True):
     for rows in groups.values() if require_complete else []:
         if len(rows)!=8 or {r['prompt_type'] for r in rows}!=set(PROMPT_TYPES):raise ValueError('Campaign must have all eight types')
         if Counter(norm(r['platform']).lower() for r in rows)!=Counter(chatgpt=3,gemini=3,copilot=2):raise ValueError('Wrong platform split')
+    return len(groups)
+
+
+def validate_mixed_modes(jobs, require_complete=True):
+    """Validate the eight-job mixed planner contract (5 type + 3 voice)."""
+    groups={}
+    for job in jobs:
+        kind=job.get('prompt_type')
+        if job.get('mode') not in ('type','voice') or mode_for(kind)!=job.get('mode'):
+            raise ValueError('Mode does not match prompt type')
+        groups.setdefault((job.get('campaign_id'),job.get('business_id')),[]).append(job)
+    if require_complete:
+        for rows in groups.values():
+            if len(rows)!=8 or Counter(r['mode'] for r in rows)!=Counter(type=5,voice=3):
+                raise ValueError('Campaign must have exactly 5 type and 3 voice jobs')
     return len(groups)
 
 

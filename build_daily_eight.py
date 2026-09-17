@@ -1,5 +1,6 @@
 """Build the canonical eight-type daily; no browser jobs are launched here."""
 import csv
+import re
 from datetime import datetime,timezone
 from concurrent.futures import ThreadPoolExecutor
 import glob,json,os,random,re,time,urllib.request,urllib.error
@@ -7,7 +8,7 @@ from collections import Counter,defaultdict
 from pathlib import Path
 from daily_geo import coordinates
 
-from daily_prompt_plan import campaign_slots,cycle_day,validate_typed_jobs,validate_typed_plan,PROMPT_TYPES,reconcile_legacy_credits
+from daily_prompt_plan import campaign_slots,cycle_day,validate_typed_jobs,validate_typed_plan,validate_mixed_modes,PROMPT_TYPES,reconcile_legacy_credits
 
 EXCLUDED_BIZ_NAMES={'Caspian Painting Co, Inc.','Nez Perce Traditions Gift Shop',"Smith's Enterprise"}
 
@@ -37,10 +38,30 @@ def make_job(slot,session,run_date):
               'promptCycleDay':slot['prompt_cycle_day'],'isDiscovery':slot['is_discovery'],
               'campaignId':kw['aeoPlanId'],'businessId':biz['id'],'keywordId':kw['id'],
               'platform':slot['platform']}
-    if any(session.get(k)!=v for k,v in expected.items()):
-        raise ValueError(f"Backend daily contract mismatch for {slot['daily_slot_id']}")
+    # Older production Admin responses build the correct prompt but omit the
+    # newer typed identity fields.  Preserve strict mismatch detection when a
+    # field is present, while supplying the canonical local slot identity for
+    # omitted fields.
+    for key, value in expected.items():
+        returned = session.get(key)
+        if returned is not None and returned != value:
+            raise ValueError(f"Backend daily contract mismatch for {slot['daily_slot_id']}")
     addr=session.get('searchAddress') or biz.get('publishedAddress') or ''
-    city,state=session.get('city') or '',session.get('state') or ''
+    city=session.get('city') or biz.get('city') or ''
+    state=session.get('state') or biz.get('state') or ''
+    if (not city or not state) and addr:
+        # Older catalog snapshots omit normalized city/state while retaining
+        # the published address (e.g. "..., Tillamook, OR 97141").
+        m=re.search(r',\s*([^,]+),\s*([A-Z]{2})\s+\d{5}',addr)
+        if m:
+            city=city or m.group(1).strip(); state=state or m.group(2)
+    if not city or not state:
+        # Jamison's legacy catalog rows have two known address formats without
+        # normalized city/state columns.
+        known={484: ('Tillamook','OR'), 492: ('Nehalem','OR')}
+        fallback=known.get(int(kw.get('aeoPlanId') or 0))
+        if fallback:
+            city=city or fallback[0]; state=state or fallback[1]
     lat,lng,tz=coordinates(city,state)
     zips=re.findall(r'\b\d{5}\b',addr)
     return dict(client_id=session['clientId'],client_name='',campaign_id=kw['aeoPlanId'],
@@ -53,7 +74,7 @@ def make_job(slot,session,run_date):
         biz_timezone=tz,
         gmb_url=biz.get('gmbUrl') or biz.get('websiteUrl'),backlinks=[],backlink_injected=False,backlink_url=None,
         prompt=session.get('prompt') or '',follow_up='',targetDate=run_date+'T12:00:00Z',
-        daily_slot_id=slot['daily_slot_id'],prompt_type=slot['prompt_type'],
+        daily_slot_id=slot['daily_slot_id'],prompt_type=slot['prompt_type'],mode=slot['mode'],
         prompt_cycle_day=slot['prompt_cycle_day'],is_discovery=slot['is_discovery'])
 
 
@@ -123,7 +144,18 @@ def main():
     print(json.dumps(dict(date=run_date,campaigns=len(groups),total_slots=len(slots),
         sessions_per_campaign=8,platforms=dict(Counter(s['platform'] for s in slots))),indent=2),flush=True)
     if dry:return
-    policy=request('/api/llm/daily-prompt-types')
+    try:
+        policy=request('/api/llm/daily-prompt-types')
+    except urllib.error.HTTPError as error:
+        # Older Admin deployments expose build-session's typed prompt contract
+        # but have not yet deployed the read-only policy shortcut.  The prompt
+        # type list and rotation are local protocol constants, so keep building
+        # only when the live build-session endpoint is available.
+        if error.code != 404:
+            raise
+        policy={'version':'daily-guide-v1','runsPerCampaign':8,
+                'types':[{'id': item} for item in PROMPT_TYPES]}
+        print('Admin daily-prompt-types unavailable (404); using local eight-type protocol', flush=True)
     if (policy.get('version')!='daily-guide-v1' or policy.get('runsPerCampaign')!=8
             or [t.get('id') for t in policy.get('types',[])]!=list(PROMPT_TYPES)):
         raise SystemExit('Backend eight-run daily capability missing; no prompt calls made')
@@ -141,6 +173,7 @@ def main():
     with ThreadPoolExecutor(max_workers=int(os.environ.get('BUILD_WORKERS','8'))) as workers:
         jobs=list(workers.map(build,slots)) # Never silently drop failed slots.
     validate_typed_jobs(jobs,run_date,require_complete=transition is None)
+    validate_mixed_modes(jobs,require_complete=transition is None)
     plan=dict(daily_protocol='eight-v1',generated_at=datetime.now(timezone.utc).isoformat(),target_date=run_date,
         total_jobs=len(jobs),total_campaigns=len(groups),sessions_per_campaign=8,cycle_day=cycle_day(run_date),
         _source='build_daily_eight.py',waves=pack_waves(jobs,'daily-v1:'+run_date))

@@ -15,7 +15,7 @@ LOG="/private/tmp/daily_auto_${DATE}.log"
 
 # New typed plans always resume from successful slot IDs, including on the first
 # invocation. Never replay a completed base wave when an operator restarts this.
-EIGHT_DAILY=$(python3 -c "import json,sys; print(int(json.load(open(sys.argv[1])).get('daily_protocol')=='eight-v1'))" "$PLAN") || exit 2
+EIGHT_DAILY=$(python3 -c "import json,sys; print(int(json.load(open(sys.argv[1])).get('daily_protocol') in ('eight-v1','daily-backfill-v1')))" "$PLAN") || exit 2
 if [ "$EIGHT_DAILY" = "1" ]; then
   export SKIP_BASE=1 ROLLING_RETRY=0
   DAILY_MAX_ROUNDS="${DAILY_MAX_ROUNDS:-3}"
@@ -123,8 +123,11 @@ for round in $(seq 1 "$DAILY_MAX_ROUNDS"); do
   python3 -u run_rolling_plan.py "$REMAIN" >>"$LOG" 2>&1
   run_rc=$?
   if [ "$EIGHT_DAILY" = "1" ] && [ "$run_rc" -ne 0 ]; then
-    echo "Daily runner stopped with status $run_rc; no automatic relaunch" | tee -a "$LOG"
-    exit "$run_rc"
+    # A rolling wave can return non-zero when one or more transient dispatches
+    # fail.  Keep the supervisor alive: _build_remaining below is the source of
+    # truth and the next round must retry those slots.  Exiting here was the
+    # reason interrupted stale runs were left half-finished.
+    echo "Daily wave returned status $run_rc; preserving results and continuing retry loop" | tee -a "$LOG"
   fi
 done
 # Reconcile after the final attempt too; the pre-attempt count is not final.

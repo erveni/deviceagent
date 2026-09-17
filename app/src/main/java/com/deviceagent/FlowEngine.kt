@@ -1,6 +1,7 @@
 package com.deviceagent
 
 class FlowEngine(private val s: AgentAccessibilityService) {
+    private var browserPackage: String = "com.android.chrome"
 
     /** Copilot runs in Edge, not Chrome, so none of the helpers below apply to it. */
     val copilot: EdgeCopilotFlow by lazy { EdgeCopilotFlow(s, this) }
@@ -375,18 +376,43 @@ class FlowEngine(private val s: AgentAccessibilityService) {
      * means we can't run a session — fail fast and let the dispatcher rotate
      * the Decodo session.
      */
-    fun navigateTo(platform: String): Boolean {
+    fun navigateTo(platform: String, browser: String = "chrome"): Boolean {
         s.log("── NAVIGATE TO $platform ──")
+        browserPackage = if (browser.lowercase() == "edge") "com.microsoft.emmx" else "com.android.chrome"
         val url = when (platform.lowercase()) {
             "gemini" -> "https://gemini.google.com"
             "chatgpt" -> "https://chatgpt.com"
             "perplexity" -> "https://www.perplexity.ai"
             else -> return false
         }
-        s.navigateToUrl(url)
+        s.navigateToUrl(url, browserPackage)
+        // Edge may remain in its tab-switcher after an explicit ACTION_VIEW
+        // (especially after a first-run/reset). Close that surface before the
+        // web composer is searched; otherwise ChatGPT/Gemini input is invisible.
+        if (browserPackage == "com.microsoft.emmx") {
+            val tabList = s.findNode(resourceId = "com.microsoft.emmx:id/tab_list_container", timeoutMs = 1200)
+            if (tabList != null) {
+                tabList.recycle()
+                s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                Thread.sleep(1200)
+            }
+        }
         // Wait for page to load — ChatGPT is slower than Gemini
         val waitMs = if (platform.lowercase() == "chatgpt") 6000L else 3000L
         Thread.sleep(waitMs)
+        if (browserPackage == "com.microsoft.emmx") {
+            val tabList = s.findNode(resourceId = "com.microsoft.emmx:id/tab_list_container", timeoutMs = 1000)
+            if (tabList != null) {
+                tabList.recycle()
+                s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                Thread.sleep(1200)
+            } else if (s.dumpTree(10).contains("tab_list_container")) {
+                // Some Edge builds expose the tab hub in a secondary window that
+                // findNode does not return as the active root.
+                s.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                Thread.sleep(1200)
+            }
+        }
         // Check for "site cannot be reached" and auto-reload up to 2 times
         for (retry in 1..2) {
             val tree = s.dumpTree(8).lowercase()
@@ -396,7 +422,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                 if (reload != null) {
                     s.clickNode(reload)
                 } else {
-                    s.navigateToUrl(url)
+                    s.navigateToUrl(url, browserPackage)
                 }
                 Thread.sleep(waitMs)
             } else {
@@ -713,6 +739,31 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         s.setClipboard(text)
         Thread.sleep(150)
 
+        // Edge's ChatGPT mobile composer is a contenteditable WebView view,
+        // not an EditText. The Edge URL bar is explicitly excluded from the
+        // generic search, so paste into the visible composer as a fallback.
+        if (inputNode == null && browserPackage == "com.microsoft.emmx") {
+            val x = s.screenWidth() * 0.50f
+            val y = s.screenHeight() * 0.48f
+            val composer = s.findNode(text = "Chat with ChatGPT", timeoutMs = 1200)
+            if (composer != null) {
+                s.clickNode(composer)
+                s.setTextOnNode(composer, text)
+                composer.recycle()
+                Thread.sleep(400)
+                if (s.findNode(text = text.take(12), timeoutMs = 500) != null) {
+                    s.log("[Edge] contenteditable ACTION_SET_TEXT OK")
+                    return true
+                }
+            }
+            s.gestureTap(x, y)
+            Thread.sleep(300)
+            if (s.pasteAt(x, y)) {
+                s.log("[Edge] composer paste OK")
+                return true
+            }
+        }
+
         if (inputNode != null && tryPasteOnNode(inputNode)) {
             s.log("[C] ACTION_PASTE OK")
             inputNode.recycle()
@@ -776,11 +827,11 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         if (root == null) return  // can't determine, assume Chrome is ok
         val pkg = root.packageName?.toString()
         root.recycle()
-        if (pkg != "com.android.chrome") {
-            s.log("Switching to Chrome...")
+        if (pkg != browserPackage) {
+            s.log("Switching to ${if (browserPackage == "com.microsoft.emmx") "Edge" else "Chrome"}...")
             val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
                 addCategory(android.content.Intent.CATEGORY_LAUNCHER)
-                setPackage("com.android.chrome")
+                setPackage(browserPackage)
                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             s.startActivity(intent)
@@ -809,9 +860,18 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         return null
     }
 
-    /** True once the prompt has been sent: the send button is gone OR generation started. */
+    /** True only after the prompt is gone from the composer or generation started. */
     private fun didSend(): Boolean {
         if (isGenerating()) return true
+        // A click can report success while React keeps the prompt in the editor.
+        // Treat that as a failed submit; otherwise the caller waits for a false
+        // generation timeout and burns the whole job duration.
+        val input = s.findInputField(hintText = null, timeoutMs = 300)
+        if (input != null) {
+            val text = input.text?.toString() ?: ""
+            input.recycle()
+            if (text.isNotBlank()) return false
+        }
         val n = findSendNode()
         if (n == null) return true
         n.recycle()
@@ -883,6 +943,18 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         // send-button center instead; verify via didSend(). ACTION_CLICK only as a
         // last resort. ──
         if (platform.lowercase() == "chatgpt") {
+            if (browserPackage == "com.microsoft.emmx") {
+                // Edge exposes ChatGPT's contenteditable composer as a generic
+                // WebView View, so there is no accessible send node or text
+                // value. The send arrow is at the right edge of the composer.
+                s.gestureTap(s.screenWidth() * 0.90f, s.screenHeight() * 0.48f)
+                Thread.sleep(1500)
+                if (isGenerating()) return true
+            }
+            if (!composerHasText()) {
+                s.log("Submit[chatgpt]: composer EMPTY before submit")
+                return false
+            }
             // The real send button sits at the BOTTOM, next to the input. Only tap
             // a send node found in the bottom half — findSendNode() can resolve to a
             // top-right element (Chrome's ⋮ overflow), and tapping that opened the
@@ -918,8 +990,22 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                 Thread.sleep(1500)
                 if (didSend()) return true
             }
-            s.log("Submit[chatgpt]: send not confirmed")
-            return true
+            // Long expanded composers expose the real Send button as a
+            // zero-bounds accessibility node.  Its DOM click remains valid even
+            // though no safe screen coordinate exists, so try the semantic click
+            // only after coordinate-based taps have failed.
+            val semanticSend = findSendNode()
+            if (semanticSend != null) {
+                val clicked = try { semanticSend.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) } catch (_: Exception) { false }
+                semanticSend.recycle()
+                if (clicked) {
+                    s.log("Submit[chatgpt]: semantic send click fallback")
+                    Thread.sleep(1500)
+                    if (didSend()) return true
+                }
+            }
+            s.log("Submit[chatgpt]: send not confirmed — composer still contains prompt")
+            return false
         }
 
         // ── Perplexity (PROVEN original path): semantic ACTION_CLICK on the

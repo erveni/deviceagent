@@ -68,6 +68,10 @@ class EdgeCopilotFlow(
          * forms are the fallback for OEMs that rename it.
          */
         private val FRE_BUTTONS = listOf(
+            // Android's default-browser chooser appears before Edge's own FRE on
+            // a phone that has never launched Edge. Cancel it; Daily explicitly
+            // selects Edge and must not change the system default browser.
+            "text" to "Cancel",
             "text" to "Not now",
             "id" to "fre_sign_in_later",
             "text" to "Confirm",
@@ -131,6 +135,32 @@ class EdgeCopilotFlow(
             return false
         }
         return fullWipeReset()
+    }
+
+    /**
+     * Bring Edge to the foreground for non-Copilot web jobs.  Do not call
+     * [reset] here: that method intentionally waits for the Copilot toolbar
+     * button and can therefore block forever on ordinary ChatGPT/Gemini tabs.
+     */
+    fun prepareBrowser(): Boolean {
+        s.log("── PREPARE EDGE BROWSER ──")
+        launch()
+        val deadline = System.currentTimeMillis() + 20_000L
+        while (System.currentTimeMillis() < deadline) {
+            val pkg = topPackage()
+            if (pkg == "com.android.permissioncontroller") {
+                val cancel = s.findNode(text = "Cancel", timeoutMs = 500)
+                if (cancel != null) { s.clickNode(cancel); cancel.recycle(); Thread.sleep(700) }
+            }
+            if (topPackage() == PKG) {
+                leaveInPrivate()
+                s.log("[edge] browser ready")
+                return true
+            }
+            Thread.sleep(500)
+        }
+        s.log("[edge] browser did not reach foreground")
+        return false
     }
 
     /**

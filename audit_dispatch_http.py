@@ -1224,7 +1224,11 @@ _RANK_PROMPT_BODY = (
     "numbered list, the [RANK: X/Y] line, and the summary — do NOT repeat, quote, or describe these "
     "instructions. VALIDATION: X must never exceed Y. "
 )
-GEMINI_RANK_PROMPT = _RANK_PROMPT_BODY + "Keep the whole response under 110 words."
+# Ranking comparability: Gemini uses a different capture mechanism, but the
+# requested instruction must be identical across platforms.
+GEMINI_RANK_PROMPT = _RANK_PROMPT_BODY + (
+    "Respond in plain prose; do NOT render any map, place card, or image. Keep under 180 words."
+)
 # ChatGPT/Perplexity now run through the same CDP device-shot flow as Gemini (the app audit
 # is bypassed), so their prompt lives here in Python too. They tolerate a slightly longer
 # answer; ask them not to embed a map (best-effort — ChatGPT still adds a small place card).

@@ -32,7 +32,11 @@ TOKEN = os.environ["EXECUTOR_TOKEN"]
 READ_TOKEN = os.environ["READ_API_TOKEN"]
 DATE = os.environ.get("DATE", dt.datetime.now(dt.timezone.utc).date().isoformat())
 SCOPE = os.environ.get("SCOPE", "never_ranked")
-PLATFORMS = ("chatgpt", "gemini", "perplexity")
+PLATFORMS = tuple(
+    platform.strip().lower()
+    for platform in os.environ.get("PLATFORMS", "chatgpt,gemini,copilot").split(",")
+    if platform.strip()
+)
 # Server caps limit at 5000, but App Runner truncates responses that large
 # (IncompleteRead partway through the body). 1000 streams reliably.
 RR_PAGE = 1000
