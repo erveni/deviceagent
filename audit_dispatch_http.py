@@ -1636,11 +1636,12 @@ def dispatch_audit_job(
         time.sleep(1)
 
     started = datetime.now(timezone.utc)
+    copilot_repair_instruction = ""
 
     def _setup_and_post() -> dict:
         """Bring socksdroid + GPS + forwarding online then POST the audit.
         Returns the parsed HTTP response. Caller decides whether to retry."""
-        nonlocal network_trace, offline_edge_consumed
+        nonlocal network_trace, offline_edge_consumed, copilot_repair_instruction
         phase("socksdroid_connect")
         socksdroid_connect(serial, phone_port)
         time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
@@ -1749,7 +1750,7 @@ def dispatch_audit_job(
                 # street/neighborhood for tighter local ranking (the proxy still
                 # carries the zip-level geo). App falls back to city/state if empty.
                 "searchAddress": _addr_no_zip(entry.get("search_address", "")),
-                "keyword": _keyword_text(entry, int(keyword_id)),
+                "keyword": _keyword_text(entry, int(keyword_id)) + copilot_repair_instruction,
                 "platform": platform.lower(),
                 "genTimeoutSec": _gen_timeout_for(platform),
             }
@@ -2222,6 +2223,13 @@ def dispatch_audit_job(
                 base_port=gost_port,
             )
             gost.start(wait_seconds=2.0)
+            if _bad_rank and platform.lower() == "copilot":
+                copilot_repair_instruction = (
+                    " IMPORTANT CORRECTION: your previous answer was invalid. "
+                    f"If you claim {entry['biz_name']} is rank 1, 2, or 3, you MUST include the exact "
+                    f"business name {entry['biz_name']} as that numbered list item. "
+                    "Otherwise set X greater than 3. Do not claim a top-three rank for a business absent from the list."
+                )
             response = _setup_and_post()
             status, rank_pos, rank_total, rank_ctx, ss_remote, ss_b64 = _classify(response, platform)
             ss_local = ""
