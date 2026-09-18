@@ -67,11 +67,22 @@ def _run_voice_session(job: dict, device_id: str, serial: str, spec: dict, wave_
                    "target": PROXY_TARGET, "rounds": 1},
         "voice": {"engine": job.get("voiceConfig", {}).get("engine", "say"),
                   "realistic": bool(job.get("voiceConfig", {}).get("realistic", False))},
-        "location": {k: job.get(k) for k in ("biz_lat", "biz_lng", "biz_timezone") if job.get(k) not in (None, "")},
+        "location": {k: job.get(src) for k, src in (("lat", "biz_lat"), ("lng", "biz_lng"), ("timezone", "biz_timezone")) if job.get(src) not in (None, "")},
         "expected_business": job.get("biz_name", ""),
         "expected_domain": (job.get("gmb_url") or "").split("//")[-1].split("/")[0],
     }
     out = Path(VOICE_OUTPUT_DIR); out.mkdir(parents=True, exist_ok=True)
+    # A completed bundle is reusable under the stable slot ID. An interrupted
+    # or failed bundle must receive an explicit retry suffix per voice-agent's
+    # idempotency contract.
+    prior = out / request_id / "result.json"
+    if prior.exists() or (out / request_id / "request.json").exists():
+        try:
+            if json.loads(prior.read_text()).get("status") != "success":
+                request_id = f"{request_id}-retry-{int(time.time())}"[:80]
+        except Exception:
+            request_id = f"{request_id}-retry-{int(time.time())}"[:80]
+    request["request_id"] = request_id
     req_file = out / f"{request_id}.request.json"; req_file.write_text(json.dumps(request))
     started = time.time()
     try:
@@ -83,7 +94,8 @@ def _run_voice_session(job: dict, device_id: str, serial: str, spec: dict, wave_
     result = bundle.get("result") or {}
     ok = bundle.get("status") == "success" and bundle.get("exact") is True and result.get("answer_state") in (None, "complete", "completed", "done") and not bundle.get("error")
     row = _err_row(job, device_id, spec, wave_index, "voice_executor" if not ok else "", bundle.get("error", "") if not ok else "")
-    row.update(status="success" if ok else "error", duration_s=round(time.time() - started, 1),
+    row.update(status="success" if ok else "error", proxy_status="CONNECTED" if ok else "FAILED",
+               duration_s=round(time.time() - started, 1),
                failure_step="" if ok else "voice_executor", voice_engine_requested=request["voice"]["engine"],
                voice_realistic_requested=request["voice"]["realistic"], recognized_prompt=bundle.get("recognized") or "",
                recognition_exact=bundle.get("exact"), voice_trace=bundle.get("voice_trace") or {})
@@ -124,6 +136,7 @@ def normalize_plan_job(j: dict) -> dict:
         "keyword_variant": j.get("keyword_variant") or j.get("keyword_text") or "",
         "variant_id": j.get("variant_id"),
         "platform": (j.get("platform") or "chatgpt").lower(),
+        "mode": (j.get("mode") or "type").lower(),
         # Optional browser routing for the mixed-browser rollout. Legacy jobs
         # remain Chrome by default; Edge is opt-in per job.
         "browser": (j.get("browser") or "chrome").lower(),
@@ -174,11 +187,17 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
     gost_proc = None
     gost_cfg = None
     row: dict | None = None
+    is_voice = job.get("mode", "type") == "voice"
     try:
-        gost_proc, gost_cfg = gost_start([spec])
-        socksdroid_connect(serial, spec["port"])
-        time.sleep(TUNNEL_SETTLE_S)
-        if not wait_tunnel(serial):
+        # Voice-search owns its own GOST/SocksDroid lifecycle. Starting the
+        # typed tunnel here as well caused the voice executor's local listener
+        # to collide and return `http fail`. Typed jobs retain the existing
+        # DeviceAgent-owned tunnel path.
+        if not is_voice:
+            gost_proc, gost_cfg = gost_start([spec])
+            socksdroid_connect(serial, spec["port"])
+            time.sleep(TUNNEL_SETTLE_S)
+        if not is_voice and not wait_tunnel(serial):
             row = _err_row(job, device_id, spec, wave_index, "tunnel_failed", "tunnel failed")
         else:
             if job.get("mode", "type") == "voice":
@@ -231,10 +250,11 @@ def dispatch_one(job: dict, csv_path: str, wave_index: int = 0) -> dict:
     finally:
         if gost_proc is not None and gost_cfg is not None:
             gost_stop(gost_proc, gost_cfg)
-        try:
-            socksdroid_disconnect(serial)
-        except Exception:
-            pass
+        if not is_voice:
+            try:
+                socksdroid_disconnect(serial)
+            except Exception:
+                pass
         POOL.release(device_idx)
     if row is not None:
         append_row(csv_path, row)
