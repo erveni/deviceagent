@@ -292,12 +292,20 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                         }
                     }
                     if (!ssPath.isNullOrBlank()) {
-                        pr.screenshotB64 = try {
+                        val encoded = try {
                             val bytes = File(ssPath).readBytes()
                             android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                         } catch (e: Exception) {
                             Log.w("DeviceAgent", "screenshot b64 encode failed for $ssPath: ${e.message}")
                             null
+                        }
+                        // Keep every accepted viewport in order.  Ranking evidence can
+                        // legitimately need two views: the immediate answer (before a
+                        // logged-out Gemini page wipes) and a DOM-targeted rank/summary
+                        // view.  The first frame remains the canonical screenshotB64.
+                        encoded?.let {
+                            if (pr.screenshotFramesB64.isEmpty()) pr.screenshotB64 = it
+                            pr.screenshotFramesB64.add(it)
                         }
                     }
                     val (pos, total) = flowEngine.extractRankingFromText(responseText)
@@ -402,9 +410,25 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                             promptBand?.let { flowEngine.copilot.stripPromptBand(path, it) }
                         }
                     } else if (platform == "gemini") {
-                        // RACE THE WINDOW: capture immediately, before the wipe. A 6-swipe
-                        // scroll (≈6-12s) would run past it and screenshot a blank welcome.
-                        capture(flowEngine.getGeminiAuditAnswer())
+                        // RACE THE WINDOW: capture immediately, before the wipe.  Do not
+                        // make the first evidence frame depend on scrolling.
+                        val geminiAnswer = flowEngine.getGeminiAuditAnswer()
+                        capture(geminiAnswer)
+
+                        // If the answer is still present, use the accessibility DOM's
+                        // numeric [RANK: X/Y] node as the scroll target.  This is bounded
+                        // and best-effort: a transient/logged-out Gemini page may wipe
+                        // between frames, in which case the already-saved first frame
+                        // remains valid evidence and no job is failed for framing.
+                        if (geminiAnswer.contains(Regex("\\[RANK:\\s*\\d+\\s*/\\s*\\d+", RegexOption.IGNORE_CASE))) {
+                            val positioned = step("scroll_evidence_dom") {
+                                flowEngine.scrollToRankLine(maxSteps = 4)
+                            }
+                            if (positioned) {
+                                Thread.sleep(500)
+                                capture(geminiAnswer)
+                            }
+                        }
                     } else {
                         // ChatGPT / Perplexity persist — position the [RANK] line for the
                         // screenshot. ChatGPT appends a Google Maps embed for local-business
