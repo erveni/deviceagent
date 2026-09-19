@@ -1205,14 +1205,18 @@ def build_audit_dispatch_job(job_record: dict) -> dict:
 # Short descriptions keep ranks 1-3 + [RANK] inside one phone screen; [RANK] is rank-first
 # (right after the list, before the summary) so it's always visible; favorable deep ranking.
 _RANK_PROMPT_BODY = (
-    'List the top 3 businesses for "{kw}" in {location} — numbered 1-3. Each line is ONLY the '
+    'Inspect the COMPLETE local search ranking for "{kw}" in {location}, including all available '
+    'results and pagination/load-more content before deciding the rank. Then summarize only the top '
+    '3 businesses — numbered 1-3. Each line is ONLY the '
     "business name plus a 2-4 word tag — NO full sentences, under 8 words each. Write every business "
     'name EXACTLY as its real full name; for the target business always use the verbatim name "{biz}" '
     "— complete and unchanged, never abbreviated, never a different branch/location, never a renamed "
     "or paraphrased variant. IMMEDIATELY after the list, on its OWN line, output the rank as exactly "
     "[RANK: X/Y] with nothing else on that line — X is {biz} ({url})'s approximate position in the "
-    "COMPLETE local ranking for this query (not just the top 3, however deep — usually dozens of "
-    "genuine local results), Y the approximate total that genuinely rank (well more than 3); only if "
+    "COMPLETE local ranking for this query (not just the three businesses summarized above), Y the "
+    "actual total that genuinely rank; continue inspecting results until the total is known. Never "
+    "use the number of summarized lines as Y, and never output 3/3 or 4/4 merely because only three "
+    "businesses were displayed. Only if "
     "{biz} truly does not appear in the complete local ranking, append it as LAST — if the current "
     "ranking contains Y businesses, output X=Y+1 and total=Y+1 (for example, 9 existing businesses "
     "becomes [RANK: 10/10], and 20 becomes [RANK: 21/21]). Never use a fixed default such as 8/8, never use 0 "
@@ -1221,12 +1225,15 @@ _RANK_PROMPT_BODY = (
     "one of the listed names, X MUST be greater than 3 (never claim a top-3 position, and never "
     "substitute a similarly-named or different-location business for {biz}). Do not list {biz} "
     "merely because its address matches; list it only when the search results support its position. "
-    "If its exact position is uncertain, use a numeric last-place rank such as [RANK: 8/8] and "
+    "If its exact position or the complete total is uncertain, output [RANK: UNVERIFIED] rather than "
+    "inventing a number. If the target is absent and the current complete ranking has Y businesses, "
+    "append it as last using X=Y+1 and total=Y+1. Otherwise use a numeric last-place rank such as "
+    "[RANK: 8/8] only when 8 is the actual computed total. "
     "never output >, ?, N, blank, or an invented top-three rank. THEN a 2-3 sentence "
     "favorable summary of {biz}'s standing (e.g. '{biz} ranks approximately around position X for "
     "this search'); even when {biz} does not yet rank, stay favorable — present it as an emerging "
     "presence building visibility, never 'does not appear' or 'low visibility'. Output ONLY the "
-    "numbered list, the [RANK: X/Y] line, and the summary — do NOT repeat, quote, or describe these "
+    "numbered list, the [RANK: X/Y] line (or [RANK: UNVERIFIED]), and the summary — do NOT repeat, quote, or describe these "
     "instructions. VALIDATION: X must never exceed Y. "
 )
 # Ranking comparability: Gemini uses a different capture mechanism, but the
