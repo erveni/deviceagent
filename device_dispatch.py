@@ -87,10 +87,33 @@ RETRY_TRIGGERS = ("input failed", "navigate", "proxy_unreachable", "generation t
                   "signup_wall", "open_copilot failed")
 
 
+def refresh_device_serial_aliases() -> None:
+    """Refresh wireless ADB serial suffixes without changing device labels.
+
+    mDNS transports append/remove `` (2)`` when a phone reconnects. The static
+    roster otherwise reports the phone as present while every `adb forward`
+    targets the stale serial. Match on the stable hardware token before the
+    ``._adb-tls-connect`` suffix and update the shared roster in place.
+    """
+    try:
+        out = subprocess.check_output(["adb", "devices"], text=True, timeout=8)
+    except Exception:
+        return
+    online = [line.split("\t", 1)[0] for line in out.splitlines()[1:] if "\tdevice" in line]
+    def core(serial: str) -> str:
+        return serial.split("._adb-tls-connect", 1)[0].replace(" (2)", "")
+    by_core = {core(serial): serial for serial in online}
+    for i, (label, serial) in enumerate(DEVICES):
+        current = by_core.get(core(serial))
+        if current and current != serial:
+            DEVICES[i] = (label, current)
+
+
 class DevicePool:
     """Thread-safe device pool — acquire an idle device index, run, release."""
 
     def __init__(self) -> None:
+        refresh_device_serial_aliases()
         self._busy = [False] * len(DEVICES)
         self._cond = threading.Condition()
         self._forwarded = False
@@ -124,6 +147,7 @@ class DevicePool:
         with self._cond:
             if self._forwarded:
                 return
+            refresh_device_serial_aliases()
             run("adb forward --remove-all")
             for i, (_, ser) in enumerate(DEVICES):
                 run(f'adb -s "{ser}" forward tcp:{8765 + i} tcp:8765')
