@@ -46,21 +46,15 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
         // 1,000-character template was accepted into the editor but left the send
         // control unusable on long prompts, producing a false generation timeout.
         private const val AUDIT_PROMPT_TEMPLATE = (
-            "Inspect the complete local search ranking for \"{keyword}\" in {location}, including " +
-            "all available results before deciding the rank. Then summarize exactly 3 genuine " +
-            "businesses that actually appear, numbered 1-3, one short line each. Do not list " +
-            "{biz_name} merely because its address matches. On the next line write exactly " +
-            "[RANK: X/Y] for {biz_name} ({biz_url}) in the complete ranking, not just the three " +
-            "summarized. If {biz_name} is listed, X must equal its listed position. If absent, " +
-            "append it as last: if the current ranking has Y businesses, use X=Y+1 and total=Y+1. " +
-            "Never use a fixed total such as 8/8, >, ?, N, blank, or an invented top-three rank. " +
-            "The list and rank must agree. If the complete total cannot be fully enumerated, provide " +
-            "the best-supported approximate complete-market total (normally more than 3 and often " +
-            "dozens) from visible results and label it approximate; never use the displayed summary " +
-            "row count as the total; " +
-            "never output UNVERIFIED. If the target is absent, append it as last using the current " +
-            "estimated total plus one. After the rank, give a brief factual summary. " +
-            "Plain text only; no map or widgets; under 180 words."
+            "For \"{keyword}\" in {location}, list 3 genuine local businesses, numbered 1-3, " +
+            "one short line each. Then on the next line write exactly [RANK: X/Y] for " +
+            "{biz_name} ({biz_url}) in the complete local ranking (not only the three shown). " +
+            "If it is absent, put it last: X=Y; otherwise X is its approximate position and " +
+            "Y the approximate total. Include {biz_name} in the numbered top three only when " +
+            "the answer explicitly places it at position 1, 2, or 3; a summary mention alone " +
+            "must never add it to that list. If {biz_name} is not listed, X must be greater than 3; " +
+            "never use placeholders or X>Y. After the rank, give a brief positive factual summary " +
+            "with its approximate position. Plain text only; no map or widgets; under 180 words."
         )
 
         // Gemini's logged-out chat WIPES the answer ~3s after it renders, so a long
