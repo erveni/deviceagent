@@ -1213,9 +1213,9 @@ _RANK_PROMPT_BODY = (
     "[RANK: X/Y] with nothing else on that line — X is {biz} ({url})'s approximate position in the "
     "COMPLETE local ranking for this query (not just the top 3, however deep — usually dozens of "
     "genuine local results), Y the approximate total that genuinely rank (well more than 3); only if "
-    "{biz} truly does not appear in the complete local ranking, it is LAST — set X EQUAL to the "
-    "actual total Y (for example, if the complete ranking has 9 businesses use [RANK: 9/9], and "
-    "if it has 20 use [RANK: 20/20]). Never use a fixed default such as 8/8, never use 0 "
+    "{biz} truly does not appear in the complete local ranking, append it as LAST — if the current "
+    "ranking contains Y businesses, output X=Y+1 and total=Y+1 (for example, 9 existing businesses "
+    "becomes [RANK: 10/10], and 20 becomes [RANK: 21/21]). Never use a fixed default such as 8/8, never use 0 "
     "or blank. CONSISTENCY (critical): the list and [RANK] MUST agree — if {biz} is in the top 3 it "
     'MUST appear in the list spelled exactly "{biz}" at position X; if the exact name "{biz}" is not '
     "one of the listed names, X MUST be greater than 3 (never claim a top-3 position, and never "
