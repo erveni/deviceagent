@@ -436,6 +436,11 @@ class EdgeCopilotFlow(
 
     private fun copilotButton(): AccessibilityNodeInfo? =
         s.findNode(resourceId = COPILOT_BUTTON_ID, timeoutMs = 800)
+            // New-tab Edge builds expose the Copilot entry as the integrated
+            // "Search or ask anything" surface instead of the toolbar button.
+            // It is still Copilot's entry point, not the address bar.
+            ?: s.findNode(text = "Search or ask anything", timeoutMs = 800)
+            ?: s.findNode(contentDesc = "Search or ask anything", timeoutMs = 500)
 
     /** The composer is the only EditText on the Copilot half-screen; Edge's address bar
      *  belongs to a different activity, and [AgentAccessibilityService.findInputField]
