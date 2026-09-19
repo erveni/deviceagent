@@ -54,8 +54,10 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
             "summarized. If {biz_name} is listed, X must equal its listed position. If absent, " +
             "append it as last: if the current ranking has Y businesses, use X=Y+1 and total=Y+1. " +
             "Never use a fixed total such as 8/8, >, ?, N, blank, or an invented top-three rank. " +
-            "The list and rank must agree. If the complete total cannot be verified, output " +
-            "[RANK: UNVERIFIED] rather than guessing. After the rank, give a brief factual summary. " +
+            "The list and rank must agree. If the complete total cannot be fully enumerated, provide " +
+            "the best-supported approximate numeric total from visible results and label it approximate; " +
+            "never output UNVERIFIED. If the target is absent, append it as last using the current " +
+            "estimated total plus one. After the rank, give a brief factual summary. " +
             "Plain text only; no map or widgets; under 180 words."
         )
 
