@@ -381,7 +381,7 @@ def prepare_gemini_cache(serial: str, *, authorized_production: bool = False) ->
     """
     production=(authorized_production and os.environ.get('RANK_CACHE_LOW_COST_ROLLOUT')=='1'
                 and os.environ.get('RANK_GEMINI_LOW_COST_RELEASED')=='1')
-    if (os.environ.get('RANK_SINGLE_ATTEMPT') != '1'
+    if ((not production and os.environ.get('RANK_SINGLE_ATTEMPT') != '1')
             or (not production and ('149145555W002883' not in serial
                                     or os.environ.get('RANK_GEMINI_CACHE_TRIAL') != '1'))):
         return {'ok': False, 'reason': 'trial_scope_not_enabled'}
@@ -402,7 +402,7 @@ def prepare_chatgpt_cache(serial: str, *, authorized_production: bool = False) -
     """
     production=(authorized_production and os.environ.get('RANK_CACHE_LOW_COST_ROLLOUT')=='1'
                 and os.environ.get('RANK_CHATGPT_LOW_COST_RELEASED')=='1')
-    if (os.environ.get('RANK_SINGLE_ATTEMPT') != '1'
+    if ((not production and os.environ.get('RANK_SINGLE_ATTEMPT') != '1')
             or (not production and ('149145555W002883' not in serial
                                     or os.environ.get('RANK_CHATGPT_CACHE_TRIAL') != '1'))):
         return {'ok': False, 'reason': 'trial_scope_not_enabled'}
