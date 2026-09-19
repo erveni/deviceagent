@@ -458,8 +458,17 @@ class EdgeCopilotFlow(
     /** Open Copilot from the Edge toolbar and wait for its composer. */
     fun open(): Boolean {
         s.log("── OPEN COPILOT ──")
-        val btn = copilotButton() ?: run { s.log("[edge] Copilot button not found"); return false }
-        s.clickNode(btn); btn.recycle()
+        val btn = copilotButton()
+        if (btn != null) {
+            s.clickNode(btn); btn.recycle()
+        } else {
+            // Some Edge new-tab WebViews expose neither the toolbar resource-id nor
+            // the visible label to accessibility. The only Copilot entry then is the
+            // large bottom "Search or ask anything" surface; the address bar is at
+            // the top, so this bounded tap cannot target it.
+            s.log("[edge] Copilot accessibility entry missing; tapping bottom Copilot surface")
+            s.gestureTap(screenWidth() * 0.50f, screenHeight() * 0.90f)
+        }
         Thread.sleep(7000)
         // Swiping the sign-in sheet away also closes the Copilot panel underneath, so
         // Copilot has to be opened a second time once the sheet is gone.
