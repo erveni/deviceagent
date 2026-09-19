@@ -1217,7 +1217,10 @@ _RANK_PROMPT_BODY = (
     "or blank. CONSISTENCY (critical): the list and [RANK] MUST agree — if {biz} is in the top 3 it "
     'MUST appear in the list spelled exactly "{biz}" at position X; if the exact name "{biz}" is not '
     "one of the listed names, X MUST be greater than 3 (never claim a top-3 position, and never "
-    "substitute a similarly-named or different-location business for {biz}). THEN a 2-3 sentence "
+    "substitute a similarly-named or different-location business for {biz}). Do not list {biz} "
+    "merely because its address matches; list it only when the search results support its position. "
+    "If its exact position is uncertain, use a numeric last-place rank such as [RANK: 8/8] and "
+    "never output >, ?, N, blank, or an invented top-three rank. THEN a 2-3 sentence "
     "favorable summary of {biz}'s standing (e.g. '{biz} ranks approximately around position X for "
     "this search'); even when {biz} does not yet rank, stay favorable — present it as an emerging "
     "presence building visibility, never 'does not appear' or 'low visibility'. Output ONLY the "
