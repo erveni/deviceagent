@@ -429,6 +429,29 @@ class FlowEngine(private val s: AgentAccessibilityService) {
                 break
             }
         }
+        // ChatGPT can leave Chrome visually loaded while its WebView composer is
+        // still absent (the only EditText then is the URL bar, which inputText
+        // correctly refuses). Give the page a few hydration/reload chances here so
+        // the caller gets a precise navigation failure instead of a late opaque
+        // input_failed result.
+        if (platform.lowercase() == "chatgpt" && browserPackage == "com.android.chrome") {
+            var composerReady = false
+            repeat(3) { attempt ->
+                val node = s.findInputField(hintText = null, timeoutMs = 2500)
+                if (node != null) {
+                    node.recycle(); composerReady = true
+                    s.log("ChatGPT composer hydrated on attempt ${attempt + 1}")
+                    return@repeat
+                }
+                s.log("ChatGPT composer absent on hydration attempt ${attempt + 1}; reloading")
+                s.navigateToUrl(url, browserPackage)
+                Thread.sleep(3500)
+            }
+            if (!composerReady) {
+                s.log("ChatGPT composer hydration FAILED; URL bar may be the only editable node")
+                return false
+            }
+        }
         return true
     }
 
