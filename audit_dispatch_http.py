@@ -1522,7 +1522,7 @@ def dispatch_audit_job(
     offline_cache_proof = None
     if _cache_low_cost_enabled(platform):
         from tools.cache_rollout_scope import device_allowed as cache_device_allowed
-        if not cache_device_allowed(device_label) or not _RANK_SINGLE_ATTEMPT or capture_prompt is not None:
+        if not cache_device_allowed(device_label) or capture_prompt is not None:
             POOL.release(device_idx)
             raise RuntimeError('Cache-preserving preparation outside explicit production scope')
         cache_min_version = int(os.environ.get('RANK_CACHE_MIN_VERSION', '92'))
