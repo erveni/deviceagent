@@ -849,6 +849,9 @@ class AgentHttpServer(private val flowEngine: FlowEngine) {
                 put("screenshot_path", pr.screenshotPath ?: "")
                 // Base64 PNG bytes — Mac decodes + writes locally; saves an adb pull.
                 put("screenshot_b64", pr.screenshotB64 ?: "")
+                // Ordered evidence viewports.  Gemini ranking may have an immediate
+                // pre-wipe frame plus a DOM-targeted rank/summary frame.
+                put("screenshot_frames", org.json.JSONArray(pr.screenshotFramesB64))
                 put("response_text", pr.responseText ?: "")
                 put("error", pr.error ?: "")
             })
