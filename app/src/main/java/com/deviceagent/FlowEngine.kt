@@ -712,7 +712,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             inputBounds = android.graphics.Rect(b)
             s.log("[A] Input at $inputBounds")
         } else {
-            s.log("[A] Input NOT FOUND!")
+            s.log("[A] Input NOT FOUND! ${inputDiagnostics()}")
         }
 
         // Step B: Try ACTION_SET_TEXT (Chrome lies — returns true but doesn't set)
@@ -726,11 +726,11 @@ class FlowEngine(private val s: AgentAccessibilityService) {
             val actual = v?.text?.toString() ?: ""
             v?.recycle()
             if (actual.contains(text.take(10))) {
-                s.log("[B] Text set OK")
+                s.log("[B] Text set OK actualLen=${actual.length}")
                 inputNode.recycle()
                 return true
             }
-            s.log("[B] Text NOT set, going to paste...")
+            s.log("[B] Text NOT set actualLen=${actual.length} expectedLen=${text.length}, going to paste")
         }
 
         // Step C: Set clipboard & paste. Clear the field first so a partial Step-B
@@ -765,7 +765,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
 
         if (inputNode != null && tryPasteOnNode(inputNode)) {
-            s.log("[C] ACTION_PASTE OK")
+            s.log("[C] ACTION_PASTE OK field=$inputBounds")
             inputNode.recycle()
             return true
         }
@@ -776,7 +776,7 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         s.gestureTap(pasteX, pasteY)
         Thread.sleep(200)
         if (s.pasteAt(pasteX, pasteY)) {
-            s.log("[D] Paste menu OK")
+            s.log("[D] Paste menu OK at=${pasteX.toInt()},${pasteY.toInt()} field=$inputBounds")
             inputNode?.recycle()
             return true
         }
@@ -793,8 +793,38 @@ class FlowEngine(private val s: AgentAccessibilityService) {
         }
         focused?.recycle()
         inputNode?.recycle()
-        s.log("── ALL INPUT STRATEGIES FAILED ──")
+        s.log("── ALL INPUT STRATEGIES FAILED ── ${inputDiagnostics()} field=$inputBounds")
         return false
+    }
+
+    /** Small bounded snapshot for diagnosing hydration/composer failures. */
+    private fun inputDiagnostics(): String {
+        val root = s.rootInActiveWindow ?: return "root=null"
+        var edits = 0
+        var visible = 0
+        var samples = 0
+        val packages = mutableSetOf<String>()
+        fun walk(n: android.view.accessibility.AccessibilityNodeInfo) {
+            if (samples >= 6) return
+            n.packageName?.toString()?.let { packages.add(it) }
+            val cls = n.className?.toString() ?: ""
+            if (cls.contains("EditText")) {
+                edits++
+                val b = android.graphics.Rect(); n.getBoundsInScreen(b)
+                if (b.width() > 0 && b.height() > 0) visible++
+                if (samples < 6) {
+                    s.log("[diag] edit#$edits cls=$cls textLen=${n.text?.length ?: 0} bounds=$b")
+                    samples++
+                }
+            }
+            for (i in 0 until n.childCount) {
+                val c = n.getChild(i) ?: continue
+                try { walk(c) } finally { c.recycle() }
+                if (samples >= 6) break
+            }
+        }
+        try { walk(root) } finally { root.recycle() }
+        return "pkg=${packages.joinToString(",")} edits=$edits visibleEdits=$visible"
     }
 
     /** Try ACTION_PASTE (API 29+) on a node. Sets clipboard first. */

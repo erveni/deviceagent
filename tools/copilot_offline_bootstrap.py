@@ -17,6 +17,12 @@ def settle_wifi(serial,adb,*,minimum_s=150,quiet_s=30,deadline_s=300,
     Observes all wlan0 RX/TX, not just Edge. Busy phones fail closed instead of
     opening the paid tunnel. No AI page is opened and no prompt is submitted.
     """
+    # Production keeps the conservative defaults; controlled rollouts can shorten
+    # the bounded wait when a fresh Edge profile has already settled on the phone.
+    minimum_s = float(os.environ.get('RANK_COPILOT_WIFI_MIN_S', minimum_s))
+    quiet_s = float(os.environ.get('RANK_COPILOT_WIFI_QUIET_S', quiet_s))
+    deadline_s = float(os.environ.get('RANK_COPILOT_WIFI_DEADLINE_S', deadline_s))
+
     def count():
         for attempt in range(3):
             reply=adb(serial,'shell','cat','/proc/net/dev',timeout=10)
