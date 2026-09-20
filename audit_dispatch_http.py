@@ -1763,6 +1763,15 @@ def dispatch_audit_job(
                 body["lat"] = float(job["mock_lat"])
                 body["lng"] = float(job["mock_lng"])
         else:
+            _copilot_consistency = ""
+            if platform.lower() == "copilot":
+                _copilot_consistency = (
+                    " FINAL COPILOT CHECK: before sending, compare your summary to numbered items 1-3 "
+                    "and [RANK]. If the summary says the target is top 3, the exact target name MUST "
+                    "appear as item 1, 2, or 3. If the exact target name is absent from items 1-3, "
+                    "the summary MUST NOT say top 3 and X MUST be greater than 3. Do not output "
+                    "contradictory prose."
+                )
             body = {
                 "type": "audit",
                 "bizName": entry["biz_name"],
@@ -1773,7 +1782,7 @@ def dispatch_audit_job(
                 # street/neighborhood for tighter local ranking (the proxy still
                 # carries the zip-level geo). App falls back to city/state if empty.
                 "searchAddress": _addr_no_zip(entry.get("search_address", "")),
-                "keyword": _keyword_text(entry, int(keyword_id)) + copilot_repair_instruction,
+                "keyword": _keyword_text(entry, int(keyword_id)) + copilot_repair_instruction + _copilot_consistency,
                 "platform": platform.lower(),
                 "genTimeoutSec": _gen_timeout_for(platform),
             }
