@@ -1555,10 +1555,12 @@ def dispatch_audit_job(
         finally:
             _CACHE_PREP_SLOTS.release()
 
-    # Start gost
+    # Optional direct-WiFi mode for controlled diagnostics. It deliberately skips
+    # both GOST and SocksDroid; production ranking keeps the residential path.
+    no_proxy = os.environ.get("NO_PROXY") == "1"
     seq = next(_gost_seq)
     gost_key = f"audit-{seq}"
-    gost_port = _acquire_gost_port()
+    gost_port = 0 if no_proxy else _acquire_gost_port()
     # Empty zip must stay empty so _resolve_zip maps it to the STATE's known-good
     # zip (city/state-only campaigns have no zip of their own). Defaulting to
     # "10001" here made _resolve_zip treat it as a valid NYC zip and skip the
@@ -1604,17 +1606,20 @@ def dispatch_audit_job(
                 f" ({zip_note})",
                 flush=True,
             )
-    gost = GostManager(
-        [{
-            "device_id": gost_key, "zip": biz_zip, "state": state_code,
-            # City drives Rayobyte's CA city-tier (a country-only CA exit lands a
-            # random Canadian IP — a Toronto exit ranks a Burnaby business wrong).
-            # US zip-tier and Decodo/DataImpulse ignore this key.
-            "city": entry.get("city", ""),
-            "country": country, "session_duration": 30,
-        }],
-        base_port=gost_port,
-    )
+    if no_proxy:
+        class _Direct:
+            def start(self, **kwargs): return None
+            def stop(self): return None
+        gost = _Direct()
+    else:
+        gost = GostManager(
+            [{
+                "device_id": gost_key, "zip": biz_zip, "state": state_code,
+                "city": entry.get("city", ""),
+                "country": country, "session_duration": 30,
+            }],
+            base_port=gost_port,
+        )
     phase("gost_start")
     gost.start(wait_seconds=2.0)
     phase("gost_ready")
@@ -1626,7 +1631,7 @@ def dispatch_audit_job(
     # relay forwards to the stable gost_port, so the retry's gost restart is
     # transparent — start once here, stop once in finally.
     relay_proc = None
-    phone_port = gost_port
+    phone_port = 0 if no_proxy else gost_port
     if os.environ.get('RANK_COPILOT_TRAFFIC_OBSERVER') == '1':
         if not bootstrap_device_allowed(device_label) or platform.lower() != 'copilot' or not _RANK_SINGLE_ATTEMPT or USE_SNI_RELAY:
             gost.stop()
@@ -1656,10 +1661,13 @@ def dispatch_audit_job(
         Returns the parsed HTTP response. Caller decides whether to retry."""
         nonlocal network_trace, offline_edge_consumed, copilot_repair_instruction
         phase("socksdroid_connect")
-        socksdroid_connect(serial, phone_port)
-        time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
+        if no_proxy:
+            phase("direct_wifi")
+        else:
+            socksdroid_connect(serial, phone_port)
+            time.sleep(3)  # let VPN stabilise — matches rolling pre-tunnel pause
         phase("tunnel_probe")
-        if not _wait_tunnel(serial):
+        if not no_proxy and not _wait_tunnel(serial):
             # Dead tunnel (tun0 up but no DNS/internet). Return a proxy_unreachable
             # response instead of raising, so the existing rotate-Decodo-session +
             # retry path below kicks in (a fresh session usually has working DNS).
@@ -1674,7 +1682,9 @@ def dispatch_audit_job(
         # The original code omitted credentials, so every preflight silently
         # returned rc=97 "User was rejected by the SOCKS5 server" — that's why
         # proxy_ip was "none" on every row.
-        if _SKIP_PREFLIGHT:
+        if no_proxy:
+            _resolved_proxy_ip[serial] = "direct"
+        elif _SKIP_PREFLIGHT:
             _resolved_proxy_ip[serial] = "skipped"
         else:
             try:
@@ -2007,30 +2017,34 @@ def dispatch_audit_job(
                 flush=True,
             )
             # Tear down current proxy
-            try:
-                socksdroid_disconnect(serial)
-            except Exception:
-                pass
-            try:
-                gost.stop()
-            except Exception:
-                pass
+            if not no_proxy:
+                try:
+                    socksdroid_disconnect(serial)
+                except Exception:
+                    pass
+                try:
+                    gost.stop()
+                except Exception:
+                    pass
             # Fresh session_id; country/city mirror the initial spec so a CA retry
             # stays country-ca city-tier instead of collapsing to a US exit.
-            gost = GostManager(
-                [{
-                    "device_id": gost_key, "zip": retry_zip, "state": state_code,
-                    "city": _retry_city,
-                    "country": retry_country, "session_duration": 30,
-                }],
-                base_port=gost_port,
-            )
-            gost.start(wait_seconds=2.0)
-            # Update biz_zip BEFORE re-setup so _setup_and_post mocks GPS from the
-            # retry zip (keeps GPS/proxy in the same place); also reflects reality
-            # in the CSV row.
-            biz_zip = retry_zip
-            response = _setup_and_post()
+            if no_proxy:
+                # Direct mode keeps the same phone/session; no tunnel rotation.
+                response = _setup_and_post()
+            else:
+                gost = GostManager(
+                    [{
+                        "device_id": gost_key, "zip": retry_zip, "state": state_code,
+                        "city": _retry_city,
+                        "country": retry_country, "session_duration": 30,
+                    }],
+                    base_port=gost_port,
+                )
+                gost.start(wait_seconds=2.0)
+                # Update biz_zip BEFORE re-setup so _setup_and_post mocks GPS from
+                # the retry zip (keeps GPS/proxy in the same place).
+                biz_zip = retry_zip
+                response = _setup_and_post()
 
         # 4. Classify + build row
         duration_s = round((datetime.now(timezone.utc) - started).total_seconds(), 1)
@@ -2363,10 +2377,11 @@ def dispatch_audit_job(
                 network_trace.stop()
             except Exception:
                 pass
-        try:
-            socksdroid_disconnect(serial)
-        except Exception:
-            pass
+        if not no_proxy:
+            try:
+                socksdroid_disconnect(serial)
+            except Exception:
+                pass
         if traffic_observer is not None:
             try:
                 traffic_observer.stop()
@@ -2381,7 +2396,8 @@ def dispatch_audit_job(
                 relay_proc.terminate(); relay_proc.wait(timeout=5)
             except Exception:
                 pass
-        _release_gost_port(gost_port)
+        if not no_proxy:
+            _release_gost_port(gost_port)
         POOL.release(device_idx)
 
 
