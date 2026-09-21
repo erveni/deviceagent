@@ -2236,14 +2236,15 @@ def dispatch_audit_job(
                 and (not _answer_ok(ss_local) or _bad_rank)):
             _why = "fabricated rank (list vs [RANK])" if _bad_rank else "no answer in screenshot"
             print(f"  [ocr] {_why} kw{keyword_id} {platform} — rotating session, re-capturing", flush=True)
-            try:
-                socksdroid_disconnect(serial)
-            except Exception:
-                pass
-            try:
-                gost.stop()
-            except Exception:
-                pass
+            if not no_proxy:
+                try:
+                    socksdroid_disconnect(serial)
+                except Exception:
+                    pass
+                try:
+                    gost.stop()
+                except Exception:
+                    pass
             # Canadian jobs keep country-ca city-tier here too — a US state-good zip
             # would re-capture a BC business from a US exit (Gemini OCR re-capture is
             # its most common path, so this bit hard). See the initial/retry branches.
@@ -2252,13 +2253,14 @@ def dispatch_audit_job(
             else:
                 ocr_country = "us"
                 ocr_zip = _STATE_GOOD_ZIP.get(_norm_state(state_code)) or biz_zip or _FALLBACK_GOOD_ZIP
-            gost = GostManager(
-                [{"device_id": gost_key, "zip": ocr_zip, "state": state_code,
-                  "city": entry.get("city", ""),
-                  "country": ocr_country, "session_duration": 30}],
-                base_port=gost_port,
-            )
-            gost.start(wait_seconds=2.0)
+            if not no_proxy:
+                gost = GostManager(
+                    [{"device_id": gost_key, "zip": ocr_zip, "state": state_code,
+                      "city": entry.get("city", ""),
+                      "country": ocr_country, "session_duration": 30}],
+                    base_port=gost_port,
+                )
+                gost.start(wait_seconds=2.0)
             if _bad_rank and platform.lower() == "copilot":
                 copilot_repair_instruction = (
                     " IMPORTANT CORRECTION: your previous answer was invalid. "
