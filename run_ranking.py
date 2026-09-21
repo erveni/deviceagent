@@ -415,6 +415,17 @@ def make_job_record(kw: dict, biz: dict, platform: str, job_type: str, job_id: i
 # EXCLUDE_SUCCESS skips success only; set RETRY_KEEP_NORANK=1 to ALSO treat
 # no_rank as terminal (don't retry it) — correct for initial ranking where
 # no_rank is a valid result for brand-new businesses, so only errors re-run.
+# An explicit campaign/platform manifest prevents keyword-id collisions across
+# campaigns from expanding a stale run into the wrong identities.
+if os.environ.get("CAMPAIGN_PLATFORM_FILE"):
+    with open(os.environ["CAMPAIGN_PLATFORM_FILE"]) as _fh:
+        _allowed_pairs = {(str(x["campaign_id"]), str(x["platform"]).lower())
+                          for x in json.load(_fh)}
+    _before = len(job_specs)
+    job_specs = [(k, b, p, t) for (k, b, p, t) in job_specs
+                 if (str(b["id"] * 10000 + k["id"]), p) in _allowed_pairs]
+    print(f"[campaign-manifest] {_before} -> {len(job_specs)} exact campaign/platform pairs")
+
 if os.environ.get("EXCLUDE_SUCCESS"):
     import csv as _csv, glob as _glob
     _terminal = {"success"}
